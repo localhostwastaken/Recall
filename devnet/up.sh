@@ -8,7 +8,8 @@ cd "$(dirname "$0")/.."
 # 2.8.1 was also tried on two nodes; 2.8.0 is bee-compose's tested default.
 BEE_VERSION=2.8.0
 npx -y @snaha/bee-compose@0.3.0 start --full 3 --bee-version "$BEE_VERSION"
-docker compose -f devnet/docker-compose.yml up -d --wait
+[ -f fixtures/notice/.certs/server.pem ] || bash fixtures/notice/gen-certs.sh
+docker compose -f devnet/docker-compose.yml up -d --build --wait
 echo "waiting for the Bee nodes to see each other as healthy peers (up to 8 minutes)"
 for port in 1633 16331 16332; do
   for _ in $(seq 1 96); do
