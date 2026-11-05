@@ -6,7 +6,13 @@
     "noFallthroughCasesInSwitch": true,
     "noEmit": false,
     "jsx": "react-jsx",
-    "types": ["chrome", "node"]
+    "types": ["chrome", "node"],
+    "paths": {
+      "@recall/evidence": ["../../../packages/evidence/src"],
+      "@recall/evidence/*": ["../../../packages/evidence/src/*"],
+      "@recall/net": ["../../../packages/net/src"],
+      "@recall/net/*": ["../../../packages/net/src/*"]
+    }
   },
   "include": ["src"],
   "exclude": ["build", "node_modules"]

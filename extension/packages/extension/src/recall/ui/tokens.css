@@ -1,0 +1,68 @@
+/* Recall design tokens (docs/ui/design-brief.md section 2). Light is the default;
+   [data-theme=dark] or the system dark preference switches the theme. */
+:root {
+  --bg: #f6f5f1; --surface: #ffffff; --surface-sunken: #edece7; --surface-raised: #ffffff;
+  --text: #16181c; --text-muted: #4a4f57; --border: #d6d3cb; --border-strong: #8c8a83;
+  --accent: #1f3a80; --accent-hover: #172d63; --on-accent: #ffffff; --focus: #1d4ed8;
+  --pass: #17673a; --pass-bg: #e6f2ea; --fail: #b3261e; --fail-bg: #fcebe9;
+  --warn: #8a4b00; --warn-bg: #fcf1de; --na: #575c64; --na-bg: #ecebe6;
+  --info: #1f4fa8; --info-bg: #e7eefa; --diff-add-bg: #ddf0e3; --diff-rem-bg: #fae1de;
+  --danger: #b3261e; --on-danger: #ffffff; --scrim: rgb(0 0 0 / 0.5);
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.06); --shadow-2: 0 8px 24px rgb(0 0 0 / 0.16);
+
+  --font-sans: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
+  --font-serif: ui-serif, 'Iowan Old Style', Charter, 'Palatino Linotype', Georgia, serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+
+  --text-xs: 12px; --lh-xs: 16px;
+  --text-sm: 14px; --lh-sm: 20px;
+  --text-md: 16px; --lh-md: 24px;
+  --text-lg: 18px; --lh-lg: 26px;
+  --text-xl: 20px; --lh-xl: 28px;
+  --text-2xl: 24px; --lh-2xl: 32px;
+  --text-3xl: 32px; --lh-3xl: 40px;
+
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+  --space-5: 24px; --space-6: 32px; --space-7: 48px; --space-8: 64px;
+
+  --radius-1: 4px; --radius-2: 8px;
+  --dur-fast: 120ms; --dur-base: 200ms; --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  --measure: 68ch; --page-max: 64rem;
+  --control-h: 44px;
+  --z-header: 10; --z-dialog: 100; --z-toast: 200;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #111316; --surface: #191c20; --surface-sunken: #0c0e10; --surface-raised: #20242a;
+    --text: #eceae4; --text-muted: #a9aeb6; --border: #33373e; --border-strong: #6b7079;
+    --accent: #a8bdf2; --accent-hover: #c2d1f7; --on-accent: #0e1a3a; --focus: #8fb0ff;
+    --pass: #6fcf8f; --pass-bg: #11291b; --fail: #ff8f85; --fail-bg: #341614;
+    --warn: #f0b65a; --warn-bg: #2e2210; --na: #a9aeb6; --na-bg: #23262b;
+    --info: #93b2ff; --info-bg: #15213a; --diff-add-bg: #123020; --diff-rem-bg: #3a1714;
+    --danger: #ff8f85; --on-danger: #2a0a07; --scrim: rgb(0 0 0 / 0.6);
+    --shadow-1: none; --shadow-2: 0 8px 24px rgb(0 0 0 / 0.5);
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme='dark'] {
+  --bg: #111316; --surface: #191c20; --surface-sunken: #0c0e10; --surface-raised: #20242a;
+  --text: #eceae4; --text-muted: #a9aeb6; --border: #33373e; --border-strong: #6b7079;
+  --accent: #a8bdf2; --accent-hover: #c2d1f7; --on-accent: #0e1a3a; --focus: #8fb0ff;
+  --pass: #6fcf8f; --pass-bg: #11291b; --fail: #ff8f85; --fail-bg: #341614;
+  --warn: #f0b65a; --warn-bg: #2e2210; --na: #a9aeb6; --na-bg: #23262b;
+  --info: #93b2ff; --info-bg: #15213a; --diff-add-bg: #123020; --diff-rem-bg: #3a1714;
+  --danger: #ff8f85; --on-danger: #2a0a07; --scrim: rgb(0 0 0 / 0.6);
+  --shadow-1: none; --shadow-2: 0 8px 24px rgb(0 0 0 / 0.5);
+  color-scheme: dark;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0ms;
+    --dur-base: 0ms;
+  }
+}

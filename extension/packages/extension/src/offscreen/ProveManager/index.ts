@@ -10,6 +10,9 @@ import type {
 } from 'tlsn-wasm';
 import { logger } from '@tlsn/common';
 import type { Handler } from '@tlsn/plugin-sdk';
+import type { Address, Hex } from 'viem';
+import type { StatementJson } from '@recall/evidence';
+import { DEV_ROOT_CERTS } from '../../recall/build';
 
 /** A byte range used for reveal operations */
 interface RevealRange {
@@ -75,15 +78,24 @@ type ClientMessage =
       recv: Array<{ start: number; end: number; handler: Handler }>;
     };
 
+/** Recall: the witness's EIP-712 signature over the capture statement. */
+export interface RecallAttestation {
+  message: StatementJson;
+  signature: Hex;
+  signer: Address;
+}
+
 /** Server message types (received from server) */
 type ServerMessage =
   | { type: 'session_registered'; sessionId: string }
-  | { type: 'session_completed'; results: unknown[] }
+  | { type: 'session_completed'; results: unknown[]; attestation?: RecallAttestation }
   | { type: 'error'; message: string };
 
 /** Verification response from the server */
-interface VerificationResponse {
+export interface VerificationResponse {
   results: unknown[];
+  /** Recall: present when the witness signed the session. */
+  attestation?: RecallAttestation;
 }
 
 /** Session state tracked per prover */
@@ -232,7 +244,8 @@ export class ProveManager {
               // Store response in the session state
               const session = this.sessions.get(proverId);
               if (session) {
-                session.response = { results: data.results };
+                // Recall: keep the witness's signed attestation next to the results.
+                session.response = { results: data.results, attestation: data.attestation };
                 session.responseReceived = true;
               }
               break;
@@ -324,7 +337,8 @@ export class ProveManager {
       defer_decryption_from_start: undefined,
       network: 'Bandwidth',
       client_auth: undefined,
-      root_certs: undefined,
+      // Recall: the dev-CA build flag (undefined in release builds = Mozilla roots).
+      root_certs: DEV_ROOT_CERTS,
     });
 
     try {
@@ -373,7 +387,8 @@ export class ProveManager {
       defer_decryption_from_start: undefined,
       network: 'Bandwidth',
       client_auth: undefined,
-      root_certs: undefined,
+      // Recall: the dev-CA build flag (undefined in release builds = Mozilla roots).
+      root_certs: DEV_ROOT_CERTS,
     });
 
     try {

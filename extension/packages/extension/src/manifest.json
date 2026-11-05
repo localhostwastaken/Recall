@@ -1,9 +1,17 @@
 {
   "manifest_version": 3,
   "version": "0.1.0.1501",
-  "name": "TLSNotary",
-  "description": "A Chrome extension for TLSNotary",
+  "name": "Recall",
+  "description": "Capture a public web page with a witness signature. Evidence goes to Swarm; the index goes to Arkiv.",
   "options_page": "options.html",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Recall",
+    "default_icon": {
+      "34": "icon-34.png",
+      "128": "icon-128.png"
+    }
+  },
   "background": {
     "service_worker": "background.bundle.js"
   },
@@ -13,25 +21,14 @@
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
   },
-  "content_scripts": [
-    {
-      "matches": ["http://*/*", "https://*/*", "<all_urls>"],
-      "js": ["contentScript.bundle.js"],
-      "css": ["content.styles.css"]
-    }
-  ],
-  "web_accessible_resources": [
-    {
-      "resources": [
-        "content.styles.css",
-        "icon-128.png",
-        "icon-34.png",
-        "content.bundle.js",
-        "*.wasm"
-      ],
-      "matches": ["http://*/*", "https://*/*", "<all_urls>"]
-    }
-  ],
+  "externally_connectable": {
+    "matches": [
+      "http://localhost:5173/*",
+      "https://localhostwastaken.github.io/*",
+      "https://*.bzz.link/*",
+      "http://localhost:1633/*"
+    ]
+  },
   "host_permissions": ["<all_urls>"],
-  "permissions": ["offscreen", "webRequest", "activeTab", "tabs", "windows"]
+  "permissions": ["offscreen", "storage", "tabs", "activeTab"]
 }

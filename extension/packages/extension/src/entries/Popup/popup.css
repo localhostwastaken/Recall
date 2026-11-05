@@ -1,0 +1,81 @@
+/* Extension popup, 360x560: header 48px, scrolling body, sticky footer 72px. */
+:root {
+  --control-h: 40px;
+}
+
+body {
+  width: 360px;
+  height: 560px;
+  overflow: hidden;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+}
+
+#root {
+  height: 100%;
+}
+
+.popup {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.popup-header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  height: 48px;
+  padding: 0 var(--space-4);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  box-shadow: var(--shadow-1);
+  z-index: var(--z-header);
+}
+
+.popup-title {
+  font-family: var(--font-serif);
+  font-size: var(--text-md);
+  line-height: var(--lh-md);
+  font-weight: 600;
+}
+
+.popup-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: var(--space-4);
+}
+
+.page-host {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.page-url {
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+.popup-footer {
+  flex: none;
+  min-height: 72px;
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+.popup-helper {
+  margin-top: var(--space-1);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+}

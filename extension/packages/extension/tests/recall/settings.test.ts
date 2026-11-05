@@ -1,0 +1,63 @@
+import { beforeEach, describe, expect, it } from 'vitest';
+import { defaultSettings, loadSettings, mergeSettings, saveSettings, SETTINGS_KEY } from '../../src/recall/settings';
+
+function memoryArea() {
+  const data: Record<string, unknown> = {};
+  return {
+    data,
+    async get(key: string) {
+      return key in data ? { [key]: data[key] } : {};
+    },
+    async set(items: Record<string, unknown>) {
+      Object.assign(data, items);
+    },
+  };
+}
+
+describe('settings', () => {
+  let area: ReturnType<typeof memoryArea>;
+  beforeEach(() => {
+    area = memoryArea();
+  });
+
+  it('local defaults point at the devnet witness and the local app', () => {
+    expect(defaultSettings('local')).toEqual({
+      net: 'local',
+      witnessUrl: 'http://localhost:7047',
+      pinnedWitnesses: [],
+      appUrl: 'http://localhost:5173',
+    });
+  });
+
+  it('live defaults use the published app and no witness URL yet', () => {
+    const s = defaultSettings('live');
+    expect(s.net).toBe('live');
+    expect(s.appUrl).toBe('https://localhostwastaken.github.io/Recall/app/');
+    expect(s.witnessUrl).toBeUndefined();
+  });
+
+  it('loads defaults when nothing is stored', async () => {
+    expect(await loadSettings(area)).toEqual(defaultSettings());
+  });
+
+  it('saves a patch and reads it back', async () => {
+    const pinned = '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC';
+    await saveSettings({ net: 'local', pinnedWitnesses: [pinned], witnessUrl: 'http://127.0.0.1:7047' }, area);
+    const s = await loadSettings(area);
+    expect(s).toMatchObject({ net: 'local', pinnedWitnesses: [pinned], witnessUrl: 'http://127.0.0.1:7047' });
+    expect(area.data[SETTINGS_KEY]).toEqual(s);
+  });
+
+  it('drops malformed stored values instead of trusting them', () => {
+    const s = mergeSettings({
+      net: 'mainnet',
+      appUrl: 42,
+      witnessUrl: ['x'],
+      pinnedWitnesses: ['0x1234', '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC'],
+    });
+    expect(s.net).toBe(defaultSettings().net);
+    expect(s.appUrl).toBe(defaultSettings(s.net).appUrl);
+    expect(s.witnessUrl).toBe(defaultSettings(s.net).witnessUrl);
+    expect(s.pinnedWitnesses).toEqual(['0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC']);
+  });
+});

@@ -9,29 +9,19 @@
     "url": "https://github.com/tlsnotary/tlsn-extension.git"
   },
   "workspaces": [
-    "packages/*",
-    "app/*"
+    "packages/common",
+    "packages/plugin-sdk",
+    "packages/extension"
   ],
   "scripts": {
     "build": "npm run build:deps && npm run build --workspace=extension",
-    "build:deps": "npm run build --workspace=@tlsn/common && npm run build --workspace=@tlsn/plugin-sdk && npm run build --workspace=@tlsn/plugins",
-    "build:plugins": "npm run build --workspace=@tlsn/plugins",
+    "build:deps": "npm run build --workspace=@tlsn/common && npm run build --workspace=@tlsn/plugin-sdk",
     "build:extension": "npm run build --workspace=extension",
-    "build:all": "npm run build --workspaces --if-present",
     "dev": "npm run dev --workspace=extension",
     "lint": "npm run build:deps && npm run lint --workspaces --if-present",
     "lint:fix": "npm run build:deps && npm run lint:fix --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
-    "test:browser": "npm run test:browser --workspaces --if-present",
-    "clean": "rm -rf packages/*/node_modules app/*/node_modules packages/*/dist packages/*/build node_modules",
-    "build:wasm": "sh packages/tlsn-wasm/build.sh v0.1.0-alpha.15 --no-logging",
-    "demo": "npm run dev --workspace=@tlsnotary/demo",
-    "tutorial": "npm run dev --workspace=@tlsn/tutorial",
-    "docker:up": "cd packages/demo && docker compose up --build -d",
-    "docker:down": "cd packages/demo && docker compose down",
-    "mobile": "npm run start --workspace=@tlsn/mobile",
-    "mobile:ios": "cd app/mobile && ./build.sh ios",
-    "mobile:android": "cd app/mobile && ./build.sh android"
+    "clean": "rm -rf packages/*/node_modules packages/*/dist packages/*/build node_modules"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
@@ -50,10 +40,5 @@
   "overrides": {
     "typescript": "^6.0.2",
     "lodash": "^4.18.0"
-  },
-  "dependencies": {
-    "expo": "~54.0.33",
-    "react": "19.1.0",
-    "react-native": "0.81.5"
   }
 }

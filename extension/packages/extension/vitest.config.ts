@@ -35,6 +35,9 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
+      // Recall's TS source packages (same aliases as webpack.config.js).
+      '@recall/evidence': path.resolve(__dirname, '../../../packages/evidence/src'),
+      '@recall/net': path.resolve(__dirname, '../../../packages/net/src'),
     },
   },
 });

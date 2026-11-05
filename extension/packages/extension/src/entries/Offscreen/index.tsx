@@ -4,8 +4,6 @@ import browser from 'webextension-polyfill';
 import { SessionManager } from '../../offscreen/SessionManager';
 import { logger } from '@tlsn/common';
 import { getStoredLogLevel } from '../../utils/logLevelStorage';
-import { sha256 } from '../../utils/cryptoHash';
-import { getPluginCount, incrementPluginCount } from '../../utils/pluginExecutionCounts';
 import type { OffscreenMessage } from '../../types/messages';
 
 const OffscreenApp: React.FC = () => {
@@ -16,9 +14,10 @@ const OffscreenApp: React.FC = () => {
       logger.info('Offscreen document loaded');
     });
 
-    // Initialize SessionManager
+    // Initialize SessionManager (owns the ProveManager and the tlsn-wasm worker)
     const sessionManager = new SessionManager();
     logger.debug('SessionManager initialized in Offscreen');
+    void sessionManager;
 
     // Listen for messages from background script
     browser.runtime.onMessage.addListener((msg: unknown) => {
@@ -31,71 +30,8 @@ const OffscreenApp: React.FC = () => {
         });
       }
 
-      if (request.type === 'GET_PLUGIN_STATS_OFFSCREEN') {
-        return sessionManager.awaitInit().then(async (sm) => {
-          const config = await sm.extractConfig(request.code as string);
-          const hash = await sha256((request.code as string) + (request.pageOrigin as string));
-          const count = await getPluginCount(hash);
-          return { success: true, config, hash, count };
-        });
-      }
-
-      // Relay: inbound MPC bytes from the verifier (forwarded by the
-      // background under a distinct type so each chunk is delivered exactly once
-      // — the content script's runtime.sendMessage is ALSO broadcast directly to
-      // this offscreen, so we must NOT also handle the raw RELAY_IN here).
-      if (request.type === 'RELAY_DELIVER') {
-        sessionManager.handleRelayIn(request.data as string);
-        return;
-      }
-      if (request.type === 'RELAY_DELIVER_CLOSED') {
-        sessionManager.handleRelayClosed();
-        return;
-      }
-
-      // Handle code execution requests
-      if (request.type === 'EXEC_CODE_OFFSCREEN') {
-        logger.debug('Offscreen executing code:', request.code);
-
-        if (!sessionManager) {
-          return Promise.resolve({
-            success: false,
-            error: 'SessionManager not initialized',
-            requestId: request.requestId,
-          });
-        }
-
-        return sessionManager
-          .awaitInit()
-          .then((sm) =>
-            sm.executePlugin(
-              request.code as string,
-              request.requestId as string | undefined,
-              request.sessionData as Record<string, string> | undefined,
-            ),
-          )
-          .then(async (result) => {
-            logger.debug('Plugin execution result:', result);
-            const pluginHash = (request.sessionData as Record<string, string> | undefined)
-              ?._pluginHash;
-            if (pluginHash) {
-              await incrementPluginCount(pluginHash);
-            }
-            return {
-              success: true,
-              result,
-              requestId: request.requestId,
-            };
-          })
-          .catch((error) => {
-            logger.error('Plugin execution error:', error);
-            return {
-              success: false,
-              error: error.message,
-              requestId: request.requestId,
-            };
-          });
-      }
+      // Recall fork: the upstream plugin handlers (EXEC_CODE_OFFSCREEN,
+      // GET_PLUGIN_STATS_OFFSCREEN, RELAY_DELIVER*) were removed with the page API.
     });
   }, []);
 

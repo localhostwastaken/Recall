@@ -14,6 +14,21 @@ var fileExtensions = ['jpg', 'jpeg', 'png', 'gif', 'eot', 'otf', 'svg', 'ttf', '
 
 const isDevelopment = process.env.NODE_ENV !== 'production';
 
+// Recall: TS source packages from the surrounding repo (packages/evidence, packages/net).
+const RECALL_PACKAGES = path.resolve(__dirname, '../../../packages');
+const RECALL_SOURCES = ['evidence', 'net'].map((p) => path.join(RECALL_PACKAGES, p, 'src'));
+
+// Recall dev-CA build flag: base64 of ONE DER certificate (`base64 -i ca.der`). When set,
+// the prover trusts only this CA (see src/recall/build.ts) and the build is a dev build.
+const RECALL_DEV_CA_DER_B64 = (process.env.RECALL_DEV_CA_DER_B64 || '').replace(/\s+/g, '');
+if (RECALL_DEV_CA_DER_B64) {
+  const der = Buffer.from(RECALL_DEV_CA_DER_B64, 'base64');
+  if (der.toString('base64') !== RECALL_DEV_CA_DER_B64 || der.length < 64 || der[0] !== 0x30) {
+    throw new Error('RECALL_DEV_CA_DER_B64 must be the base64 of one DER certificate (not PEM)');
+  }
+}
+const RECALL_DEV = Boolean(RECALL_DEV_CA_DER_B64) || process.env.RECALL_DEV === '1';
+
 var options = {
   mode: process.env.NODE_ENV || 'development',
   ignoreWarnings: [
@@ -27,12 +42,10 @@ var options = {
     /Critical dependency: the request of a dependency is an expression/,
   ],
   entry: {
-    confirmPopup: path.join(__dirname, 'src', 'entries', 'ConfirmPopup', 'index.tsx'),
     options: path.join(__dirname, 'src', 'entries', 'Options', 'index.tsx'),
     background: path.join(__dirname, 'src', 'entries', 'Background', 'index.ts'),
-    contentScript: path.join(__dirname, 'src', 'entries', 'Content', 'index.ts'),
-    content: path.join(__dirname, 'src', 'entries', 'Content', 'content.ts'),
     offscreen: path.join(__dirname, 'src', 'entries', 'Offscreen', 'index.tsx'),
+    popup: path.join(__dirname, 'src', 'entries', 'Popup', 'index.tsx'),
   },
   output: {
     filename: '[name].bundle.js',
@@ -47,6 +60,14 @@ var options = {
   },
   module: {
     rules: [
+      {
+        // Recall: bare imports inside packages/*/src (viem, @arkiv-network/sdk,
+        // @ethersphere/bee-js) resolve from this fork's node_modules first, not pnpm's.
+        include: RECALL_SOURCES,
+        resolve: {
+          modules: [path.resolve(__dirname, '../../node_modules'), path.resolve(__dirname, 'node_modules'), 'node_modules'],
+        },
+      },
       {
         // Ignore .d.ts files from node_modules to prevent webpack parse errors
         test: /\.d\.ts$/,
@@ -103,6 +124,10 @@ var options = {
             options: {
               transpileOnly: isDevelopment,
               compiler: require.resolve('typescript'),
+              // Recall: type errors are reported for this extension's own sources only.
+              // packages/* are type-checked by the repo's TypeScript (5.7); this fork's
+              // TS 6 is stricter about Uint8Array bodies in packages/net/src/swarm.ts.
+              reportFiles: ['src/**/*.{ts,tsx}'],
               ...(isDevelopment && {
                 getCustomTransformers: () => ({
                   before: [ReactRefreshTypeScript()],
@@ -130,6 +155,13 @@ var options = {
       crypto: path.resolve(__dirname, './src/node-crypto-mock.js'),
       cluster: path.resolve(__dirname, './src/empty-module.js'),
       url: path.resolve(__dirname, './src/empty-module.js'),
+      // Recall: one React for every bundle. The workspace root also holds an older
+      // react (from upstream's lockfile) that hoisted packages such as lucide-react
+      // would otherwise pick up, giving two Reacts and broken hooks.
+      react: path.dirname(require.resolve('react/package.json')),
+      'react-dom': path.dirname(require.resolve('react-dom/package.json')),
+      '@recall/evidence': path.join(RECALL_PACKAGES, 'evidence', 'src'),
+      '@recall/net': path.join(RECALL_PACKAGES, 'net', 'src'),
     },
     extensions: fileExtensions
       .map((extension) => '.' + extension)
@@ -170,6 +202,8 @@ var options = {
       'process.env': '{}',
       global: 'globalThis',
       __EXTENSION_VERSION__: JSON.stringify(require('./package.json').version),
+      __RECALL_DEV__: JSON.stringify(RECALL_DEV),
+      __RECALL_DEV_CA_DER_B64__: JSON.stringify(RECALL_DEV_CA_DER_B64),
     }),
     new CopyWebpackPlugin({
       patterns: [
@@ -187,15 +221,6 @@ var options = {
               }),
             );
           },
-        },
-      ],
-    }),
-    new CopyWebpackPlugin({
-      patterns: [
-        {
-          from: 'src/entries/Content/content.styles.css',
-          to: path.join(__dirname, 'build'),
-          force: true,
         },
       ],
     }),
@@ -230,15 +255,15 @@ var options = {
       ],
     }),
     new HtmlWebpackPlugin({
-      template: path.join(__dirname, 'src', 'entries', 'ConfirmPopup', 'index.html'),
-      filename: 'confirmPopup.html',
-      chunks: ['confirmPopup'],
-      cache: false,
-    }),
-    new HtmlWebpackPlugin({
       template: path.join(__dirname, 'src', 'entries', 'Offscreen', 'index.html'),
       filename: 'offscreen.html',
       chunks: ['offscreen'],
+      cache: false,
+    }),
+    new HtmlWebpackPlugin({
+      template: path.join(__dirname, 'src', 'entries', 'Popup', 'index.html'),
+      filename: 'popup.html',
+      chunks: ['popup'],
       cache: false,
     }),
     new HtmlWebpackPlugin({
