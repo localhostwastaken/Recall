@@ -114,16 +114,10 @@ Formats used in all copy:
 - Layout: h1 "Publish this capture" (or "Publish this confirmation"), the ExhibitCard, a "What this proves" box, Steps (Connect → Network → Publish) and a sticky action bar.
 - What this proves: "The witness saw these exact bytes from <host> at <date>. It does not show that the content is true."
 - Witness row: "Recall Witness · 0x12ab…9f3c · In your trusted list" (pass), or "Unknown witness" (warn).
-- Connect:
-  - [Connect MetaMask]
-  - If MetaMask is missing: "MetaMask not found. Install it, then reload this page."
+- Connect: [Connect MetaMask]; missing: "MetaMask not found. Install it, then reload this page."
 - Wrong network: "MetaMask is on <network>. Records are published on Arkiv (Rabdi)." / [Switch to Arkiv Rabdi]
-- Ready:
-  - [Publish record]
-  - Helper text: "MetaMask will show the network fee. The record lasts 30 days; anyone can extend it."
-- Signing:
-  - The button reads "Confirm in MetaMask…" and is disabled.
-  - Then "Publishing… waiting for the network". This never shows a pass state before the receipt.
+- Ready: [Publish record]; helper "MetaMask will show the network fee. The record lasts 30 days; anyone can extend it."
+- Signing: button "Confirm in MetaMask…" (disabled), then "Publishing… waiting for the network". No pass state before the receipt.
 - Rejected (warn): "Not published" / "You rejected the request in MetaMask. Your capture is kept as pending in the extension, so you can retry any time." / [Try again] [Discard capture]. Discard is the danger button and asks to confirm: "Discard this capture? The uploaded evidence stays on Swarm but won't be listed."
 - Failed: "Publishing failed" / "<reason>. Your capture is still pending." / [Try again]
 - Success (pass): "Published" / "Record on Arkiv until <date>." / [View timeline] [View this capture]
@@ -131,25 +125,16 @@ Formats used in all copy:
 
 **4.3 Home (`#/`).**
 - Header: h1 "Recall"; lede "Prove what a web page said, even after it changes."
-- Search:
-  - Label "Page address"; placeholder `https://example.org/notice`; [Show captures].
-  - Invalid: "Enter a full address starting with https://"
-- DropZone: "Drop an evidence file to verify" / "Works offline. The file never leaves your browser." / [Choose file]
-  - Wrong file: "This isn't a Recall evidence file. Choose the .json file you downloaded from Recall."
+- Search: label "Page address", placeholder `https://example.org/notice`, [Show captures]; invalid "Enter a full address starting with https://"
+- DropZone: "Drop an evidence file to verify" / "Works offline. The file never leaves your browser." / [Choose file]; wrong file "This isn't a Recall evidence file. Choose the .json file you downloaded from Recall."
 - Footer: "No trackers. Verification runs in your browser. TLSNotary alpha (unaudited) · testnet."
 
 **4.4 Timeline (`#/url/:urlHash`).**
-- Header:
-  - h1 = host; subtitle = full URL (mono).
-  - Summary: "<n> versions · <m> confirmations · first captured <date>"
-  - Actions: [Copy link] and "Capture it again with the Recall extension".
+- Header: h1 = host; subtitle = full URL (mono); summary "<n> versions · <m> confirmations · first captured <date>"; [Copy link].
 - Items load metadata from Arkiv, then each item is checked (A–C) in the browser. Until then it shows pending "Checking…". Default view shows only items whose A–C passed. Displayed text and dates come from the verified evidence, never from Arkiv index fields.
 - Version item: "Version 3 · <date>" / "18.2 KB · HTTP 200 · Recall Witness" / badge "Passed".
 - Confirmation item: indented under its version: "Still unchanged on <date>" (pass icon). It never says "never changed".
-- Diff block between consecutive versions:
-  - Heading: "What changed: Version 2 (1 Nov) → Version 3 (4 Nov)". Controls: "Compare [Version ▾] with [Version ▾]" · Inline / Side by side.
-  - Caption: "Text only. HTML tags and whitespace-only changes are ignored."
-  - Example: `Deadline: ~~15 December~~ 12 December`
+- Diff block between consecutive versions: heading "What changed: Version 2 (1 Nov) → Version 3 (4 Nov)"; controls "Compare [Version ▾] with [Version ▾]" · Inline / Side by side; caption "Text only. HTML tags and whitespace-only changes are ignored." Example: `Deadline: ~~15 December~~ 12 December`.
 - Spam notice (warn, shown when the query hits its limit): "Results may be incomplete" / "Showing the newest <n> records. Anyone can publish records for any address, so spam can push real captures out of this list. To check one capture directly, open its link or drop its evidence file."
 - Switch: "Show unverified (<n>)". Unverified items show their failing badge and reason: "Unknown witness", "Signature invalid", "Bytes don't match", "Evidence couldn't be downloaded".
 - Empty: "No captures of this page yet." / "Capture it with the Recall extension."
@@ -171,67 +156,37 @@ Formats used in all copy:
 | D | Your file matches | "Your file matches this capture (sha256 3f9a…)." | F: "Your file is different from this capture." N: "No file given. Drop a file to compare." |
 | E | Storage | "Evidence paid on Swarm until <date> · record on Arkiv until <date>." | W: "Expires in <n> days. Keep it alive or download the evidence file." N: "Storage status not checked (offline or RPC unreachable)." |
 
-- Preview heading: "Preview of the captured bytes".
-  - Caption: "Sandboxed: scripts and outside resources are blocked, so it may look plain."
-  - HTML renders in `<iframe sandbox="">`; PDF in a sandboxed blob.
-  - Fallback: "No preview for this file type." / [Download evidence file]
+- Preview heading "Preview of the captured bytes"; caption "Sandboxed: scripts and outside resources are blocked, so it may look plain." HTML in `<iframe sandbox="">`, PDF in a sandboxed blob; fallback "No preview for this file type." / [Download evidence file].
 - Offline (dropped file): an info notice "Checked offline. A–C ran in your browser; storage (E) was not checked."
 
 **4.6 Keep-alive dialog.**
-- Title: "Keep this capture available"
-- Body: "Anyone can pay to keep evidence online. This extends the Swarm storage and the Arkiv record."
-- Segmented: "7 days" / "30 days".
+- Title "Keep this capture available"; body "Anyone can pay to keep evidence online. This extends the Swarm storage and the Arkiv record."; Segmented "7 days" / "30 days".
 - Cost preview: "Storage: <x> xBZZ on Gnosis · network fees ~<y> xDAI · Arkiv fee shown in MetaMask" / "New end dates: Swarm <date> · Arkiv <date>".
-- Steps:
-  1. "Top up storage (Gnosis)". Note: "MetaMask may ask twice: approve xBZZ, then top up."
-  2. "Extend record (Arkiv Rabdi)"
-- Buttons: [Start: step 1 of 2] [Cancel]; then [Continue: step 2 of 2].
-- Errors:
-  - "Not enough xBZZ. You need <x> xBZZ on Gnosis."
-  - Rejection: "Step <k> cancelled in MetaMask. Nothing more was charged." [Try again]
-  - Partial: "Storage extended to <date>. The record wasn't extended yet." [Retry step 2]
+- Steps: 1 "Top up storage (Gnosis)" (note "MetaMask may ask twice: approve xBZZ, then top up.") → 2 "Extend record (Arkiv Rabdi)". Buttons [Start: step 1 of 2] [Cancel], then [Continue: step 2 of 2].
+- Errors: "Not enough xBZZ. You need <x> xBZZ on Gnosis." · rejected "Step <k> cancelled in MetaMask. Nothing more was charged." [Try again] · partial "Storage extended to <date>. The record wasn't extended yet." [Retry step 2]
 - Success: "Kept alive until <date>." [Done]
 
 **4.7 Buy storage (`#/storage`).**
 - Lede: "Each capture uses one prepaid storage batch, owned by your extension's stamp key."
 - Owner row: "Owner (extension): 0xab…12". If no extension is found: "Recall extension not found. Install it, or set its ID in Settings."
-- Field: "Number of batches" (1–20, default 5). Helper text: "One batch = one capture."
-- Preview: "<n> × <x> xBZZ = <total> xBZZ + network fees ~<y> xDAI".
-- Button: [Buy <n> batches]
+- Field "Number of batches" (1–20, default 5), helper "One batch = one capture."; preview "<n> × <x> xBZZ = <total> xBZZ + network fees ~<y> xDAI"; [Buy <n> batches].
 - Progress: "Buying batch 2 of 5…", then "Waiting for batches to become usable (about 1–2 min)", with a per-batch list.
-- Success: "<n> batches ready. You can make <n> more captures."
-- Partial: "3 of 5 bought." [Buy remaining 2]
+- Success "<n> batches ready. You can make <n> more captures." · partial "3 of 5 bought." [Buy remaining 2]
 
 **4.8 Settings (`#/settings`).**
 - Note: "Saved in this browser only."
-- **Trusted witnesses:**
-  - A list of label + MonoValue + [Remove]. The default is labelled "Recall Witness (default)".
-  - Add form: "Witness address (0x…)", "Label", [Add witness].
+- **Trusted witnesses:** list of label + MonoValue + [Remove] (default "Recall Witness (default)"); add form "Witness address (0x…)", "Label", [Add witness]; invalid "Enter a 0x address (42 characters)."
   - Warning: "Check C passes only for witnesses in this list. Add a witness only if you trust whoever runs it."
-  - Invalid: "Enter a 0x address (42 characters)."
-- **Endpoints:** "Arkiv RPC URL", "Arkiv access key" (secret, Show toggle), "Swarm upload gateway", "Swarm download gateway", "Gnosis RPC URL". Each has [Reset to default].
-  - Download gateway helper: "Use a different gateway from upload, so checks don't rely on one node."
-- **Extension:**
-  - Field: "Extension ID".
-  - Status: "Connected · v<x>", or "Not connected. Check the ID matches chrome://extensions."
+- **Endpoints:** "Arkiv RPC URL", "Arkiv access key" (secret, Show toggle), "Swarm upload gateway", "Swarm download gateway", "Gnosis RPC URL", each with [Reset to default]. Download gateway helper: "Use a different gateway from upload, so checks don't rely on one node."
+- **Extension:** field "Extension ID"; status "Connected · v<x>" or "Not connected. Check the ID matches chrome://extensions."
 - **Appearance:** "Theme": System / Light / Dark.
 - Actions: [Save settings] → toast "Settings saved". [Reset all] asks to confirm first.
 
 ## 5. Trust-language rules
-- **May say:**
-  - "The witness saw these exact bytes from <host> at <date>"
-  - "Passed" (per check)
-  - "Signed by a trusted witness" (only if the address is pinned)
-  - "Unchanged since <date>" / "Still unchanged on <date>" (only between two verified captures)
-  - "Checks passed" (only if A–C, plus D when given, all passed)
-- **May not say:**
-  - "true", "authentic", "official", "proven fact"
-  - "verified page" or a bare "Verified" with no check named
-  - "tamper-proof", "permanent", "forever", "trustless", "on-chain proof of content"
-  - "deleted" or "removed by the site" (say "not captured since <date>")
-  - "Recall verified"
+- **May say:** "The witness saw these exact bytes from <host> at <date>" · "Passed" (per check) · "Signed by a trusted witness" (only if the address is pinned) · "Unchanged since <date>" / "Still unchanged on <date>" (only between two verified captures) · "Checks passed" (only if A–C, plus D when given, all passed).
+- **May not say:** "true", "authentic", "official", "proven fact" · "verified page" or a bare "Verified" with no check named · "tamper-proof", "permanent", "forever", "trustless", "on-chain proof of content" · "deleted" or "removed by the site" (say "not captured since <date>") · "Recall verified". The one allowed use of "true" is the disclaimer "It does not show that the content is true."
 - Always say "the witness", never "we", for who observed. Name the witness and its address; once per surface, link "Why trust one witness?". The explainer: "Recall uses one witness. If it was compromised or worked with the site, it could sign false bytes."
-- No green before the facts: no pass state before an on-chain receipt, and no pass state for E or "Published" before a confirmed read-back.
+- No green before the facts: "Published" turns pass only after the transaction receipt, and E only after a live read of the batch TTL and Arkiv expiry.
 - "Unknown witness" is always warn, never pass. Offline or unreachable is "Not checked", never pass and never fail.
 - Never show the counts of hidden unverified items as successes. Totals exclude them.
 - Times shown are the witness's signed time in UTC. Arkiv block time, if shown, is labelled "Published at".
