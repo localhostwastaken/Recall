@@ -258,6 +258,7 @@ async fn proxy_has_no_cors_but_info_does() {
 struct Overrides {
     proxy_mode: bool,
     cookie: bool,
+    extra_header: Option<(&'static str, &'static str)>,
     host_header: Option<&'static str>,
     recv_reveal_end: Option<usize>,
     commit: bool,
@@ -386,6 +387,9 @@ async fn prove(
             .header("Connection", "close");
         if o.cookie {
             req = req.header("Cookie", "a=1");
+        }
+        if let Some((name, value)) = o.extra_header {
+            req = req.header(name, value);
         }
         let response = sender
             .send_request(req.body(Empty::<Bytes>::new())?)
@@ -526,6 +530,19 @@ async fn e2e_cookie_rejected() {
         ..Default::default()
     };
     assert_rejected(&run_capture("/notice", o).await, gates::COOKIES_AUTH);
+}
+
+#[tokio::test]
+#[ignore = "needs the devnet notice fixture on localhost:443 (pnpm devnet:up)"]
+async fn e2e_non_allowlisted_header_rejected() {
+    let o = Overrides {
+        extra_header: Some(("X-Original-URL", "/admin")),
+        ..Default::default()
+    };
+    assert_rejected(
+        &run_capture("/notice", o).await,
+        "recall: header not allowed: x-original-url",
+    );
 }
 
 #[tokio::test]

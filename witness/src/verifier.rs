@@ -217,6 +217,7 @@ pub async fn verifier<T: AsyncWrite + AsyncRead + Send + Unpin + 'static>(
     info!("Server name verified: {:?}", dns_name);
 
     gates::check_request(transcript.sent_unsafe(), dns_name.as_str()).map_err(Rejection)?;
+    gates::check_response(transcript.received_unsafe()).map_err(Rejection)?;
 
     info!("============================================");
     info!("Verification successful!");

@@ -19,9 +19,12 @@ extension as `{"type":"error","message":"recall: …"}`.
 | before `accept()` | no transcript commitments | `recall: commitments not allowed` |
 | after verify | every sent and received byte revealed | `recall: partial reveal not allowed` |
 | after verify | request line exactly `GET /origin-form HTTP/1.1` | `recall: only GET requests allowed` / `recall: malformed request` |
-| after verify | one well-formed HTTP request (CRLF lines, token header names, no obs-fold, no `Transfer-Encoding`, body = `Content-Length`) | `recall: malformed request` |
-| after verify | exactly one `Host`, equal to the server name (case-insensitive, optional `:443`) | `recall: host mismatch` |
+| after verify | one well-formed HTTP request: CRLF lines, token header names, no control bytes in values, no obs-fold, nothing after the head | `recall: malformed request` |
 | after verify | no `Cookie` or `Authorization` header | `recall: cookies/auth not allowed` |
+| after verify | only `Host`, `Accept`, `Accept-Encoding` (exactly `identity`), `Accept-Language`, `User-Agent`, `Connection` | `recall: header not allowed: <name>` |
+| after verify | exactly one `Host`, equal to the server name (case-insensitive, optional `:443`) | `recall: host mismatch` |
+| after verify | response has a `HTTP/1.x NNN` status line | `recall: malformed response` |
+| after verify | response is not partial: no status 206, no `Content-Range` | `recall: partial content not allowed` |
 
 On success, `session_completed` gains `attestation: {message, signature, signer}`
 and a `{"type":"RECALL_ATTESTATION","value":"<attestation JSON>"}` entry in

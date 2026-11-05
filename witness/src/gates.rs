@@ -18,6 +18,8 @@ pub const PROXY_TARGET: &str = "recall: proxy target not allowed";
 pub const PROXY_SESSION: &str = "recall: proxy requires an active session";
 pub const MALFORMED_REQUEST: &str = "recall: malformed request";
 pub const METHOD_NOT_ALLOWED: &str = "recall: only GET requests allowed";
+pub const PARTIAL_CONTENT: &str = "recall: partial content not allowed";
+pub const MALFORMED_RESPONSE: &str = "recall: malformed response";
 pub const NONCE: &str = "recall: nonce missing or malformed";
 
 /// Server-side caps on the transcript sizes a client may register.
@@ -27,16 +29,45 @@ pub struct Limits {
     pub max_recv: usize,
 }
 
-/// Checks the (fully revealed) HTTP request the prover sent:
+/// Request headers a capture may carry (names compared ASCII
+/// case-insensitively). Anything else is refused, so the signed request is a
+/// plain anonymous page load: no cookies or credentials, no `Range`, no
+/// `X-Original-URL`-style routing overrides, no compressed body.
+pub const ALLOWED_REQUEST_HEADERS: [&str; 6] = [
+    "host",
+    "accept",
+    "accept-encoding",
+    "accept-language",
+    "user-agent",
+    "connection",
+];
+
+/// Message for a request header outside [`ALLOWED_REQUEST_HEADERS`] (or an
+/// `Accept-Encoding` other than `identity`). `name` is echoed in lowercase;
+/// it has already been checked to be an RFC 9110 token.
+pub fn header_not_allowed(name: &str) -> String {
+    format!("recall: header not allowed: {}", name.to_ascii_lowercase())
+}
+
+/// Checks the (fully revealed) HTTP request the prover sent. Structure is
+/// checked first (any failure is `recall: malformed request`):
 ///
-/// - request line exactly `GET SP origin-form SP HTTP/1.1`;
-/// - exactly one request: the head plus a body of `Content-Length` bytes (no
-///   pipelined second request, no `Transfer-Encoding`);
-/// - CRLF-only header lines, every one with a `:`, no obs-fold, no whitespace
-///   before the colon;
-/// - no `Cookie` or `Authorization` header (case-insensitive);
-/// - exactly one `Host` header, equal to `server_name` (ASCII
-///   case-insensitive, optional `:443` suffix).
+/// - the head ends with the first CRLFCRLF and is UTF-8; nothing follows it
+///   (no body, no pipelined second request);
+/// - request line exactly `GET SP origin-form SP HTTP/1.1` (a method other
+///   than `GET` is `recall: only GET requests allowed`);
+/// - every header line is CRLF-terminated, has a `:`, a token name (so no
+///   whitespace before the colon), a value without control bytes other than
+///   HTAB, and is not an obs-fold continuation.
+///
+/// Then the headers, in order:
+///
+/// - `Cookie` / `Authorization` -> `recall: cookies/auth not allowed`;
+/// - a name outside [`ALLOWED_REQUEST_HEADERS`], or `Accept-Encoding` whose
+///   value is not exactly `identity` -> `recall: header not allowed: <name>`;
+///
+/// and finally exactly one `Host`, equal to `server_name` (ASCII
+/// case-insensitive, optional `:443` suffix), else `recall: host mismatch`.
 pub fn check_request(sent: &[u8], server_name: &str) -> Result<(), String> {
     let malformed = || MALFORMED_REQUEST.to_string();
     let head_end = sent
@@ -44,14 +75,15 @@ pub fn check_request(sent: &[u8], server_name: &str) -> Result<(), String> {
         .position(|w| w == b"\r\n\r\n")
         .ok_or_else(malformed)?;
     let head = std::str::from_utf8(&sent[..head_end]).map_err(|_| malformed())?;
-    let body_len = sent.len() - (head_end + 4);
+    if sent.len() != head_end + 4 {
+        return Err(malformed());
+    }
 
     let mut lines = head.split("\r\n");
     let request_line = lines.next().unwrap_or_default();
     check_request_line(request_line)?;
 
-    let mut hosts = Vec::new();
-    let mut content_length: Option<usize> = None;
+    let mut fields = Vec::new();
     for line in lines {
         if line.contains(['\r', '\n']) || line.starts_with([' ', '\t']) {
             return Err(malformed());
@@ -64,26 +96,26 @@ pub fn check_request(sent: &[u8], server_name: &str) -> Result<(), String> {
         if value.bytes().any(|b| (b < 0x20 && b != b'\t') || b == 0x7f) {
             return Err(malformed());
         }
-        let value = value.trim_matches([' ', '\t']);
-        if name.eq_ignore_ascii_case("cookie") || name.eq_ignore_ascii_case("authorization") {
-            return Err(COOKIES_AUTH.to_string());
-        } else if name.eq_ignore_ascii_case("host") {
-            hosts.push(value);
-        } else if name.eq_ignore_ascii_case("transfer-encoding") {
-            return Err(malformed());
-        } else if name.eq_ignore_ascii_case("content-length") {
-            if content_length.is_some()
-                || value.is_empty()
-                || !value.bytes().all(|b| b.is_ascii_digit())
-            {
-                return Err(malformed());
-            }
-            content_length = Some(value.parse().map_err(|_| malformed())?);
-        }
+        fields.push((name, value.trim_matches([' ', '\t'])));
     }
 
-    if body_len != content_length.unwrap_or(0) {
-        return Err(malformed());
+    let mut hosts = Vec::new();
+    for (name, value) in fields {
+        if name.eq_ignore_ascii_case("cookie") || name.eq_ignore_ascii_case("authorization") {
+            return Err(COOKIES_AUTH.to_string());
+        }
+        if !ALLOWED_REQUEST_HEADERS
+            .iter()
+            .any(|h| name.eq_ignore_ascii_case(h))
+        {
+            return Err(header_not_allowed(name));
+        }
+        if name.eq_ignore_ascii_case("accept-encoding") && value != "identity" {
+            return Err(header_not_allowed(name));
+        }
+        if name.eq_ignore_ascii_case("host") {
+            hosts.push(value);
+        }
     }
     match hosts.as_slice() {
         [host]
@@ -96,6 +128,47 @@ pub fn check_request(sent: &[u8], server_name: &str) -> Result<(), String> {
         }
         _ => Err(HOST_MISMATCH.to_string()),
     }
+}
+
+/// Checks the (fully revealed) HTTP response: it must start with a status line
+/// `HTTP/1.x SP 3DIGIT`, and must not be partial content (status 206, or a
+/// `Content-Range` header anywhere in the head). Header lines are split on LF
+/// with an optional CR, like the prover's HTTP parser, and the head ends at the
+/// first empty line; a response with no end of head is malformed.
+pub fn check_response(recv: &[u8]) -> Result<(), String> {
+    let malformed = || MALFORMED_RESPONSE.to_string();
+    let head_end = recv
+        .windows(2)
+        .position(|w| w == b"\n\n")
+        .map(|i| i + 1)
+        .into_iter()
+        .chain(recv.windows(4).position(|w| w == b"\r\n\r\n").map(|i| i + 2))
+        .min()
+        .ok_or_else(malformed)?;
+    let head = String::from_utf8_lossy(&recv[..head_end]);
+    let mut lines = head.split('\n').map(|l| l.strip_suffix('\r').unwrap_or(l));
+
+    let status_line = lines.next().unwrap_or_default();
+    let mut parts = status_line.splitn(3, ' ');
+    let version = parts.next().unwrap_or_default();
+    let code = parts.next().unwrap_or_default();
+    if !version.starts_with("HTTP/1.")
+        || code.len() != 3
+        || !code.bytes().all(|b| b.is_ascii_digit())
+    {
+        return Err(malformed());
+    }
+    if code == "206" {
+        return Err(PARTIAL_CONTENT.to_string());
+    }
+    for line in lines {
+        if let Some((name, _)) = line.split_once(':') {
+            if name.trim().eq_ignore_ascii_case("content-range") {
+                return Err(PARTIAL_CONTENT.to_string());
+            }
+        }
+    }
+    Ok(())
 }
 
 /// RFC 9110 `tchar`: the bytes a header field name may contain.
@@ -344,7 +417,7 @@ mod tests {
 
     #[test]
     fn bare_lf_header_smuggling_rejected() {
-        let sent = req("Host: notice.recall.test\r\nX-A: b\nCookie: a=1\r\n");
+        let sent = req("Host: notice.recall.test\r\nAccept: b\nCookie: a=1\r\n");
         assert_eq!(
             check_request(&sent, HOST),
             Err(MALFORMED_REQUEST.to_string())
@@ -353,7 +426,7 @@ mod tests {
 
     #[test]
     fn obs_fold_and_space_before_colon_rejected() {
-        let sent = req("Host: notice.recall.test\r\nX-A: b\r\n Cookie: a=1\r\n");
+        let sent = req("Host: notice.recall.test\r\nAccept: b\r\n Cookie: a=1\r\n");
         assert_eq!(
             check_request(&sent, HOST),
             Err(MALFORMED_REQUEST.to_string())
@@ -487,8 +560,13 @@ mod tests {
                 "{h:?}"
             );
         }
-        let ok = req("Host: notice.recall.test\r\nX-Custom_1.a~: b\r\n");
-        assert_eq!(check_request(&ok, HOST), Ok(()));
+        // A well-formed token name gets past the structure check and is then
+        // refused by the allowlist.
+        let sent = req("Host: notice.recall.test\r\nX-Custom_1.a~: b\r\n");
+        assert_eq!(
+            check_request(&sent, HOST),
+            Err("recall: header not allowed: x-custom_1.a~".to_string())
+        );
     }
 
     #[test]
@@ -504,7 +582,7 @@ mod tests {
                 "{h:?}"
             );
         }
-        let ok = req("Host: notice.recall.test\r\nX-A: b\tc \u{e9}\r\n");
+        let ok = req("Host: notice.recall.test\r\nUser-Agent: b\tc \u{e9}\r\n");
         assert_eq!(check_request(&ok, HOST), Ok(()));
     }
 
@@ -528,20 +606,155 @@ mod tests {
     }
 
     #[test]
-    fn request_body_must_match_content_length() {
-        let mut sent = req("Host: notice.recall.test\r\nContent-Length: 3\r\n");
+    fn request_body_rejected() {
+        // Any byte after the head is malformed (no body on a GET capture).
+        let mut sent = req("Host: notice.recall.test\r\n");
         sent.extend_from_slice(b"abc");
-        assert_eq!(check_request(&sent, HOST), Ok(()));
-        sent.extend_from_slice(b"d");
         assert_eq!(
             check_request(&sent, HOST),
             Err(MALFORMED_REQUEST.to_string())
+        );
+        // Body-framing headers are outside the allowlist.
+        let sent = req("Host: notice.recall.test\r\nContent-Length: 0\r\n");
+        assert_eq!(
+            check_request(&sent, HOST),
+            Err(header_not_allowed("content-length"))
         );
         let sent = req("Host: notice.recall.test\r\nTransfer-Encoding: chunked\r\n");
         assert_eq!(
             check_request(&sent, HOST),
-            Err(MALFORMED_REQUEST.to_string())
+            Err(header_not_allowed("transfer-encoding"))
         );
+    }
+
+    // --- header allowlist (R20) -------------------------------------------
+
+    #[test]
+    fn allowlisted_headers_ok() {
+        let sent = req(concat!(
+            "Host: notice.recall.test:443\r\n",
+            "User-Agent: Mozilla/5.0 (X11; Linux x86_64)\r\n",
+            "Accept: text/html,application/xhtml+xml;q=0.9,*/*;q=0.8\r\n",
+            "Accept-Language: en-US,en;q=0.5\r\n",
+            "Accept-Encoding: identity\r\n",
+            "Connection: close\r\n",
+        ));
+        assert_eq!(check_request(&sent, HOST), Ok(()));
+        let sent = req(concat!(
+            "HOST: notice.recall.test\r\n",
+            "user-agent: x\r\n",
+            "ACCEPT: */*\r\n",
+            "accept-LANGUAGE: en\r\n",
+            "Accept-Encoding:identity\r\n",
+            "CONNECTION: keep-alive\r\n",
+        ));
+        assert_eq!(check_request(&sent, HOST), Ok(()));
+        assert_eq!(check_request(&req("Host: notice.recall.test\r\n"), HOST), Ok(()));
+    }
+
+    #[test]
+    fn range_header_rejected() {
+        let sent = req("Host: notice.recall.test\r\nRange: bytes=0-99\r\n");
+        assert_eq!(
+            check_request(&sent, HOST),
+            Err("recall: header not allowed: range".to_string())
+        );
+        let sent = req("Host: notice.recall.test\r\nIf-Range: \"x\"\r\n");
+        assert_eq!(check_request(&sent, HOST), Err(header_not_allowed("if-range")));
+    }
+
+    #[test]
+    fn x_original_url_rejected() {
+        let sent = req("Host: notice.recall.test\r\nX-Original-URL: /admin\r\n");
+        assert_eq!(
+            check_request(&sent, HOST),
+            Err("recall: header not allowed: x-original-url".to_string())
+        );
+        for h in ["X-Rewrite-URL: /admin", "X-Forwarded-Host: evil.example", "Forwarded: host=evil.example"] {
+            let sent = req(&format!("Host: notice.recall.test\r\n{h}\r\n"));
+            let name = h.split(':').next().unwrap();
+            assert_eq!(check_request(&sent, HOST), Err(header_not_allowed(name)), "{h}");
+        }
+    }
+
+    #[test]
+    fn gzip_accept_encoding_rejected() {
+        for v in ["gzip", "gzip, deflate, br", "identity, gzip", "Identity", "identity;q=1", "*", ""] {
+            let sent = req(&format!("Host: notice.recall.test\r\nAccept-Encoding: {v}\r\n"));
+            assert_eq!(
+                check_request(&sent, HOST),
+                Err("recall: header not allowed: accept-encoding".to_string()),
+                "{v:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn cookie_and_auth_keep_their_own_message() {
+        // First offending header wins, in request order.
+        let sent = req("Host: notice.recall.test\r\nCookie: a=1\r\nRange: bytes=0-1\r\n");
+        assert_eq!(check_request(&sent, HOST), Err(COOKIES_AUTH.to_string()));
+        let sent = req("Host: notice.recall.test\r\nRange: bytes=0-1\r\nCookie: a=1\r\n");
+        assert_eq!(check_request(&sent, HOST), Err(header_not_allowed("range")));
+    }
+
+    // --- check_response (R20) ---------------------------------------------
+
+    #[test]
+    fn partial_content_206_rejected() {
+        let r = b"HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-1/10\r\nContent-Length: 2\r\n\r\nab";
+        assert_eq!(check_response(r), Err(PARTIAL_CONTENT.to_string()));
+        let r = b"HTTP/1.1 206 Partial Content\r\nContent-Length: 2\r\n\r\nab";
+        assert_eq!(check_response(r), Err(PARTIAL_CONTENT.to_string()));
+    }
+
+    #[test]
+    fn content_range_header_rejected() {
+        for r in [
+            &b"HTTP/1.1 200 OK\r\nContent-Range: bytes 0-1/10\r\n\r\nab"[..],
+            b"HTTP/1.1 200 OK\r\nX-A: b\r\ncontent-RANGE: bytes */10\r\n\r\n",
+            b"HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */10\r\n\r\n",
+            b"HTTP/1.1 200 OK\nContent-Range: bytes 0-1/10\n\nab",
+        ] {
+            assert_eq!(
+                check_response(r),
+                Err(PARTIAL_CONTENT.to_string()),
+                "{}",
+                String::from_utf8_lossy(r)
+            );
+        }
+    }
+
+    #[test]
+    fn full_response_ok() {
+        let r = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\nok";
+        assert_eq!(check_response(r), Ok(()));
+        // A Content-Range inside the body is not a header.
+        let r = b"HTTP/1.1 200 OK\r\nContent-Length: 23\r\n\r\nContent-Range: bytes 0-1";
+        assert_eq!(check_response(r), Ok(()));
+        let r = b"HTTP/1.1 404 Not Found\r\n\r\n";
+        assert_eq!(check_response(r), Ok(()));
+        let mut pdf = b"HTTP/1.1 200 OK\r\nContent-Type: application/pdf\r\n\r\n".to_vec();
+        pdf.extend_from_slice(&[0x25, 0x50, 0xff, 0x00, 0xd0]);
+        assert_eq!(check_response(&pdf), Ok(()));
+    }
+
+    #[test]
+    fn malformed_response_rejected() {
+        for r in [
+            &b""[..],
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n",
+            b"HTTP/2 200\r\n\r\n",
+            b"HTTP/1.1 20 OK\r\n\r\n",
+            b"garbage\r\n\r\n",
+        ] {
+            assert_eq!(
+                check_response(r),
+                Err(MALFORMED_RESPONSE.to_string()),
+                "{}",
+                String::from_utf8_lossy(r)
+            );
+        }
     }
 
     // --- check_proxy_target --------------------------------------------
