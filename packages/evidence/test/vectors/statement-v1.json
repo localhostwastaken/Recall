@@ -1,0 +1,17 @@
+{
+  "privateKey": "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
+  "signer": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+  "statement": {
+    "serverName": "notice.recall.test",
+    "connTime": "1793000000",
+    "signedAt": "1793000042",
+    "sentSha256": "0x1111111111111111111111111111111122222222222222222222222222222222",
+    "recvSha256": "0xa1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4",
+    "sentLen": 312,
+    "recvLen": 4096,
+    "tlsVersion": 12,
+    "nonce": "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  },
+  "digest": "0xfd40a73592d74113c63a3e2b1196db58697ebcc6463ab2552dab4f9645e26712",
+  "signature": "0xb1600b7ddc6afcce59057425f660b4b662b7df7d785f502ddbc15861779561fd49d9de905c6babcc1028be4595f7b8debd3bb87f0726938fe514e42c3bebd2e81c"
+}
