@@ -10,8 +10,8 @@ export type NetConfig = {
 
 export const LOCAL: NetConfig = {
   arkiv: { chain: 'local', rpcUrl: 'http://localhost:8545' },
-  swarm: { uploadUrl: 'http://localhost:1633', downloadUrls: ['http://localhost:1633'] },
-  gnosis: { rpcUrl: 'http://localhost:8545' },
+  swarm: { uploadUrl: 'http://localhost:1633', downloadUrls: ['http://localhost:1643'] },
+  gnosis: { rpcUrl: 'http://localhost:9545' },
   app: { url: 'http://localhost:5173' },
   witness: { pinned: [] },
 };

@@ -3,3 +3,12 @@ services:
     image: ghcr.io/arkiv-network/arkiv-reth-dev:v1.0.1
     ports:
       - "8545:8545"
+  # bee-compose (started by scripts/devnet-up.sh) publishes its second node on
+  # :16331; this forwards it to the :1643 the app config expects.
+  swarm-b:
+    image: alpine/socat:1.8.0.1
+    command: TCP-LISTEN:1643,fork,reuseaddr TCP:host.docker.internal:16331
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "1643:1643"

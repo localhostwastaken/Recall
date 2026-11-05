@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@arkiv-network/sdk": "1.0.1",
+    "@ethersphere/bee-js": "13.2.0",
     "viem": "^2.21.0"
   },
   "devDependencies": {
