@@ -131,7 +131,7 @@ recall/
   - `type ConfirmationRow = { captureKey:Hex; urlHash:Hex; bodySha256:Hex; witness:Address; signedAt:bigint; evidence:Uint8Array }`
   - `arkivPublic(cfg)`, `arkivWallet(cfg, transport, account)`
   - `writeCapture(w,row)`, `writeConfirmation(w,row)`, `writeWitnessProfile(w,{witness,url})` → `Promise<{entityKey:Hex; txHash:Hex}>`
-  - `listByUrl(pub, urlHash) → Promise<Array<({kind:'capture'} & CaptureRow | {kind:'confirmation'} & ConfirmationRow) & {entityKey:Hex; owner:Address; expiresAtBlock:bigint}>>`
+  - `listByUrl(pub, urlHash, opts?:{pageSize?:number; maxRows?:number}) → Promise<{rows: Array<({kind:'capture'} & CaptureRow | {kind:'confirmation'} & ConfirmationRow) & {entityKey:Hex; owner:Address; expiresAtBlock:bigint}>; truncated: boolean}>` (keyset paging on `$key`; separate per-kind budgets, default 2000; `truncated` means more rows existed than the cap. Ruling R10)
   - `latestWitnessUrl(pub, witness) → Promise<string|null>`
   - `extendEntity(w, entityKey, days) → Promise<Hex>`
 
@@ -457,7 +457,7 @@ recall/
 
 **Interfaces:**
 - Consumes: `listByUrl`, `writeCapture`, `writeConfirmation`, `latestWitnessUrl`, `writeWitnessProfile` (Task 1); `runChecks` (Task 8); messaging (Task 11).
-- Dedupe rule (security):
+- Dedupe rule (security). If `listByUrl(...).truncated` is true, treat the result as unknown and take the upload path (fail-safe, R10):
   - Before choosing the confirmation path, the extension **downloads and verifies** the existing capture's evidence (A–C pass, pinned witness).
   - Only a verified identical `bodySha256` produces `kind:'confirmation'` with the evidence inline (≤128 KiB). Otherwise the capture is uploaded.
 - Approve page:
@@ -507,6 +507,7 @@ recall/
 - Consumes: `runChecks`, `downloadBytes`, `batchTtlSeconds`, `listByUrl`.
 - Produces:
   - `useVerifiedCapture(entityKey) → {report, facts, storage:{ttlSeconds:bigint|null; arkivExpiresAtBlock:bigint}}`. Check E = `pass` if TTL > 0, otherwise `warn`. `downloadBytes` failure → A `unavailable` with "evidence unavailable".
+  - When `listByUrl(...).truncated` is true, the timeline/detail shows a notice: "Too many records for this URL (possible spam); some may be hidden" (R10).
   - Home: URL search → `#/u/:urlHash`; a drop zone for `.json` evidence (offline-capable) or a raw file plus URL (check D).
   - Everything displayed comes from `facts` only.
 
