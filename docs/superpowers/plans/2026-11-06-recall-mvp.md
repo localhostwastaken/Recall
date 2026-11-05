@@ -212,7 +212,7 @@ recall/
 
 **Interfaces:**
 - Produces:
-  - The Pages URL `https://localhostwastaken.github.io/recall/notice/`.
+  - The Pages URL `https://localhostwastaken.github.io/Recall/notice/`.
   - Playwright projects `local` (grep `@p\d`) and `live` (grep `@live`; loads `.env.local`).
 
 - [ ] **Step 1: Write the failing live spec** `@live p0`:
@@ -625,7 +625,7 @@ recall/
 - `package-extension.sh` makes a release build (no dev CA) and writes `dist/recall-extension.zip`.
 
 - [ ] **Step 1: Write the failing live spec** `@live p5`:
-  - The Pages app (`https://localhostwastaken.github.io/recall/app/`) verifies the P2 capture.
+  - The Pages app (`https://localhostwastaken.github.io/Recall/app/`) verifies the P2 capture.
   - The Swarm-hosted app verifies the same capture. If the gateway blocks HTML before moderation, use a local Bee node (`http://localhost:1633/bzz/<ref>/`) and record that in the evidence log.
 - [ ] **Step 2:** Run. Expected: FAIL.
 - [ ] **Step 3: Implement** both scripts and the workflow change. The user asks the Swarm booth for gateway approval of the ref.
