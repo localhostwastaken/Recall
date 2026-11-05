@@ -1,0 +1,675 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { Host, preprocessPluginCode } from '../src/index';
+import type { WindowMessage } from '../src/types';
+
+// Skip this entire suite in browser environment — these tests run in Node only.
+// Browser-specific tests live in index.browser.test.ts.
+describe.skipIf(typeof window !== 'undefined')('Host', () => {
+  let host: Host;
+
+  beforeEach(() => {
+    host = new Host({
+      onProve: vi.fn(),
+      onRenderPluginUi: vi.fn(),
+      onCloseWindow: vi.fn(),
+      onOpenWindow: vi.fn(),
+    });
+    host.addCapability('add', (a: number, b: number) => {
+      if (typeof a !== 'number' || typeof b !== 'number') {
+        throw new Error('Invalid arguments');
+      }
+      return a + b;
+    });
+    vi.clearAllMocks();
+  });
+
+  // -------------------------------------------------------------------------
+  // createEvalCode
+  // -------------------------------------------------------------------------
+
+  it('should create eval code and run simple calculations', async () => {
+    // sandbox.eval() returns undefined for expression results (library limitation).
+    // Use a spy capability to capture the result from inside the sandbox instead.
+    const resultSpy = vi.fn();
+    const sandbox = await host.createEvalCode({
+      add: (a: number, b: number) => a + b,
+      result: resultSpy,
+    });
+
+    await sandbox.eval(`
+      const add = env.add;
+      const result = env.result;
+      result(add(1, 2));
+    `);
+
+    expect(resultSpy).toHaveBeenCalledWith(3);
+    sandbox.dispose();
+  });
+
+  it('should handle errors in eval code', async () => {
+    const sandbox = await host.createEvalCode();
+    try {
+      await sandbox.eval('throw new Error("test")');
+      expect.fail('Should have thrown an error');
+    } catch (error: unknown) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe('test');
+    }
+    sandbox.dispose();
+  });
+
+  it('should handle invalid arguments in capabilities', async () => {
+    const sandbox = await host.createEvalCode({
+      add: (a: number, b: number) => {
+        if (typeof a !== 'number' || typeof b !== 'number') {
+          throw new Error('Invalid arguments');
+        }
+        return a + b;
+      },
+    });
+    try {
+      await sandbox.eval('env.add("1", 2)');
+      expect.fail('Should have thrown an error');
+    } catch (error: unknown) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe('Invalid arguments');
+    }
+    sandbox.dispose();
+  });
+
+  // -------------------------------------------------------------------------
+  // addCapability
+  // -------------------------------------------------------------------------
+
+  describe('addCapability', () => {
+    it('should make added capability available in sandbox', async () => {
+      const multiplySpy = vi.fn((a: number, b: number) => a * b);
+      host.addCapability('multiply', multiplySpy);
+
+      const sandbox = await host.createEvalCode();
+      await sandbox.eval('env.multiply(3, 4)');
+
+      expect(multiplySpy).toHaveBeenCalledWith(3, 4);
+      sandbox.dispose();
+    });
+
+    it('should make multiple added capabilities available', async () => {
+      const greetSpy = vi.fn((name: string) => `Hello, ${name}!`);
+      const squareSpy = vi.fn((n: number) => n * n);
+      host.addCapability('greet', greetSpy);
+      host.addCapability('square', squareSpy);
+
+      const sandbox = await host.createEvalCode();
+      await sandbox.eval('env.greet("world"); env.square(5);');
+
+      expect(greetSpy).toHaveBeenCalledWith('world');
+      expect(squareSpy).toHaveBeenCalledWith(5);
+      sandbox.dispose();
+    });
+
+    it('should be overridable by createEvalCode capabilities', async () => {
+      // addCapability sets a base, but createEvalCode can provide a same-named override
+      const baseSpy = vi.fn();
+      const overrideSpy = vi.fn();
+      host.addCapability('fn', baseSpy);
+
+      const sandbox = await host.createEvalCode({ fn: overrideSpy });
+      await sandbox.eval('env.fn(42)');
+
+      expect(overrideSpy).toHaveBeenCalledWith(42);
+      expect(baseSpy).not.toHaveBeenCalled();
+      sandbox.dispose();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // updateExecutionContext
+  // -------------------------------------------------------------------------
+
+  describe('updateExecutionContext', () => {
+    it('should throw when uuid is not in the registry', () => {
+      expect(() => host.updateExecutionContext('nonexistent-uuid', { windowId: 1 })).toThrow(
+        'Execution context not found',
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // preprocessPluginCode
+  // -------------------------------------------------------------------------
+
+  describe('preprocessPluginCode', () => {
+    it('should convert named export function to default export with arrow wrapper', () => {
+      const code = `
+export function main() {
+  return div({}, ['hello']);
+}
+`.trim();
+
+      const result = preprocessPluginCode(code);
+
+      expect(result).toContain('export default {');
+      expect(result).toContain(
+        "main: typeof main === 'function' ? (...args) => main(...args) : main",
+      );
+      expect(result).not.toMatch(/^export function main/m);
+    });
+
+    it('should convert named export async function to default export with arrow wrapper', () => {
+      const code = `
+export async function onClick() {
+  await prove({}, {});
+}
+`.trim();
+
+      const result = preprocessPluginCode(code);
+
+      expect(result).toContain('export default {');
+      expect(result).toContain(
+        "onClick: typeof onClick === 'function' ? (...args) => onClick(...args) : onClick",
+      );
+    });
+
+    it('should convert named export const function to default export with arrow wrapper', () => {
+      const code = `
+export const main = () => div({}, ['hi']);
+`.trim();
+
+      const result = preprocessPluginCode(code);
+
+      expect(result).toContain('export default {');
+      expect(result).toContain(
+        "main: typeof main === 'function' ? (...args) => main(...args) : main",
+      );
+    });
+
+    it('should pass non-function named export (config object) through directly', () => {
+      const code = `
+export const config = { name: 'Test', description: 'A test' };
+export function main() { return null; }
+`.trim();
+
+      const result = preprocessPluginCode(code);
+
+      expect(result).toContain('export default {');
+      // config is non-function — value passed through
+      expect(result).toContain(
+        "config: typeof config === 'function' ? (...args) => config(...args) : config",
+      );
+      // main is a function — wrapped in arrow
+      expect(result).toContain(
+        "main: typeof main === 'function' ? (...args) => main(...args) : main",
+      );
+    });
+
+    it('should wrap function references in export default {} syntax', () => {
+      const code = `
+function main() { return null; }
+const config = { name: 'Test' };
+export default { main, config };
+`.trim();
+
+      const result = preprocessPluginCode(code);
+
+      expect(result).toContain('export default {');
+      expect(result).toContain(
+        "main: typeof main === 'function' ? (...args) => main(...args) : main",
+      );
+      expect(result).toContain(
+        "config: typeof config === 'function' ? (...args) => config(...args) : config",
+      );
+      // original export default should be removed
+      expect(result).not.toMatch(/export default \{ main, config \}/);
+    });
+
+    it('should return code unchanged when there are no exports', () => {
+      const code = `
+function helper() { return 42; }
+const value = helper();
+`.trim();
+
+      const result = preprocessPluginCode(code);
+
+      expect(result).toBe(code);
+    });
+
+    it('should handle mixed named exports: multiple functions and a config', () => {
+      const code = `
+export function main() { return null; }
+export function onClick() { }
+export const config = { name: 'P' };
+`.trim();
+
+      const result = preprocessPluginCode(code);
+
+      expect(result).toContain('export default {');
+      expect(result).toContain('main:');
+      expect(result).toContain('onClick:');
+      expect(result).toContain('config:');
+      // Export keywords stripped from definitions
+      expect(result).not.toMatch(/^export function/m);
+      expect(result).not.toMatch(/^export const config/m);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // useState with falsy values (issue 1)
+  // -------------------------------------------------------------------------
+
+  describe('useState with falsy values', () => {
+    it('should preserve 0 as a stored state value', async () => {
+      const spy = vi.fn();
+      const sandbox = await host.createEvalCode({
+        spy,
+      });
+
+      await sandbox.eval(`
+        const spy = env.spy;
+        const state = {};
+        function useState(key, defaultValue) {
+          if (!(key in state) && defaultValue !== undefined) {
+            state[key] = defaultValue;
+          }
+          return state[key];
+        }
+        function setState(key, value) {
+          state[key] = value;
+        }
+
+        // Set to 0, then read back
+        setState('counter', 0);
+        spy(useState('counter', 99));
+      `);
+
+      // Should return 0, not overwrite with 99
+      expect(spy).toHaveBeenCalledWith(0);
+      sandbox.dispose();
+    });
+
+    it('should preserve false as a stored state value', async () => {
+      const spy = vi.fn();
+      const sandbox = await host.createEvalCode({
+        spy,
+      });
+
+      await sandbox.eval(`
+        const spy = env.spy;
+        const state = {};
+        function useState(key, defaultValue) {
+          if (!(key in state) && defaultValue !== undefined) {
+            state[key] = defaultValue;
+          }
+          return state[key];
+        }
+        function setState(key, value) {
+          state[key] = value;
+        }
+
+        setState('flag', false);
+        spy(useState('flag', true));
+      `);
+
+      // Should return false, not overwrite with true
+      expect(spy).toHaveBeenCalledWith(false);
+      sandbox.dispose();
+    });
+
+    it('should preserve empty string as a stored state value', async () => {
+      const spy = vi.fn();
+      const sandbox = await host.createEvalCode({
+        spy,
+      });
+
+      await sandbox.eval(`
+        const spy = env.spy;
+        const state = {};
+        function useState(key, defaultValue) {
+          if (!(key in state) && defaultValue !== undefined) {
+            state[key] = defaultValue;
+          }
+          return state[key];
+        }
+        function setState(key, value) {
+          state[key] = value;
+        }
+
+        setState('name', '');
+        spy(useState('name', 'default'));
+      `);
+
+      // Should return '', not overwrite with 'default'
+      expect(spy).toHaveBeenCalledWith('');
+      sandbox.dispose();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // getPluginConfig
+  // -------------------------------------------------------------------------
+
+  describe('getPluginConfig', () => {
+    it('should return config from plugin using export default syntax', async () => {
+      const code = `
+const config = {
+  name: 'My Plugin',
+  description: 'Does something useful',
+};
+function main() { return null; }
+export default { main, config };
+`.trim();
+
+      const result = await host.getPluginConfig(code);
+
+      expect(result).not.toBeNull();
+      expect(result.name).toBe('My Plugin');
+      expect(result.description).toBe('Does something useful');
+    });
+
+    it('should return config from plugin using named export const syntax', async () => {
+      const code = `
+export const config = {
+  name: 'Named Export Plugin',
+  description: 'Uses named export',
+};
+export function main() { return null; }
+`.trim();
+
+      const result = await host.getPluginConfig(code);
+
+      expect(result).not.toBeNull();
+      expect(result.name).toBe('Named Export Plugin');
+      expect(result.description).toBe('Uses named export');
+    });
+
+    it('should return full config including requests and urls arrays', async () => {
+      const code = `
+export const config = {
+  name: 'Full Config Plugin',
+  description: 'Has permissions',
+  requests: [{ method: 'GET', host: 'api.example.com', pathname: '/data' }],
+  urls: ['https://example.com/*'],
+};
+export function main() { return null; }
+`.trim();
+
+      const result = await host.getPluginConfig(code);
+
+      expect(result.name).toBe('Full Config Plugin');
+      expect(result.requests).toHaveLength(1);
+      expect(result.requests[0].host).toBe('api.example.com');
+      expect(result.urls).toEqual(['https://example.com/*']);
+    });
+
+    it('should return undefined config for plugin without config export', async () => {
+      const code = `
+export function main() { return null; }
+`.trim();
+
+      const result = await host.getPluginConfig(code);
+
+      expect(result).toBeUndefined();
+    });
+
+    it('should dispose sandbox even when eval throws (issue 3)', async () => {
+      const code = `
+export const config = { name: 'Test' };
+// This will cause a syntax error in the sandbox
+this is not valid javascript!!!
+`.trim();
+
+      // Should not leak the sandbox — just throw
+      await expect(host.getPluginConfig(code)).rejects.toThrow();
+
+      // Calling again should succeed (no resource leak blocking)
+      const code2 = `
+export const config = { name: 'Retry Plugin' };
+export function main() { return null; }
+`.trim();
+
+      const result = await host.getPluginConfig(code2);
+      expect(result.name).toBe('Retry Plugin');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // PluginLifecycle — drain mechanism & race condition safety
+  // -------------------------------------------------------------------------
+
+  describe('PluginLifecycle', () => {
+    // Helper to create event emitter for tests
+    function createTestEventEmitter() {
+      type Listener = (message: WindowMessage) => void;
+      const listeners: Listener[] = [];
+      return {
+        emit: (message: WindowMessage) => {
+          listeners.forEach((l) => l(message));
+        },
+        addListener: (listener: Listener) => {
+          listeners.push(listener);
+        },
+        removeListener: (listener: Listener) => {
+          const idx = listeners.indexOf(listener);
+          if (idx >= 0) listeners.splice(idx, 1);
+        },
+      };
+    }
+
+    it('done() from main() completes without callbacks in-flight', async () => {
+      const lifecycleHost = new Host({
+        onProve: vi.fn(),
+        onRenderPluginUi: vi.fn(),
+        onCloseWindow: vi.fn(),
+        onOpenWindow: vi.fn(),
+      });
+
+      const pluginCode = `
+export const config = { name: 'Immediate Done' };
+export function main() {
+  done('immediate');
+  return div({}, ['done']);
+}
+`.trim();
+
+      const eventEmitter = createTestEventEmitter();
+
+      const result = await lifecycleHost.executePlugin(pluginCode, {
+        eventEmitter,
+      });
+      expect(result).toBe('immediate');
+    }, 15_000);
+
+    it('done() called twice is idempotent (second call is no-op)', async () => {
+      const lifecycleHost = new Host({
+        onProve: vi.fn(),
+        onRenderPluginUi: vi.fn(),
+        onCloseWindow: vi.fn(),
+        onOpenWindow: vi.fn(),
+      });
+
+      const pluginCode = `
+export const config = { name: 'Double Done' };
+export function main() {
+  done('first');
+  done('second');
+  return div({}, ['done']);
+}
+`.trim();
+
+      const eventEmitter = createTestEventEmitter();
+
+      const result = await lifecycleHost.executePlugin(pluginCode, {
+        eventEmitter,
+      });
+      // First done() wins, second is a no-op because isCompleted is true
+      expect(result).toBe('first');
+    }, 15_000);
+
+    it('doneWithOverlay() shows overlay, delays, then resolves', async () => {
+      const onRenderPluginUi = vi.fn();
+      const onCloseWindow = vi.fn();
+
+      const lifecycleHost = new Host({
+        onProve: vi.fn(),
+        onRenderPluginUi,
+        onCloseWindow,
+        onOpenWindow: vi.fn(),
+      });
+
+      const pluginCode = `
+export const config = { name: 'Overlay Done' };
+export function main() {
+  doneWithOverlay('overlay-result', { delayMs: 100 });
+  return div({}, ['done']);
+}
+`.trim();
+
+      const eventEmitter = createTestEventEmitter();
+
+      const result = await lifecycleHost.executePlugin(pluginCode, {
+        eventEmitter,
+      });
+      expect(result).toBe('overlay-result');
+      // No window was opened (windowId is 0), so doneWithOverlay falls back
+      // to done()-like behavior — no overlay rendered, no window closed
+      expect(onRenderPluginUi).not.toHaveBeenCalled();
+      expect(onCloseWindow).not.toHaveBeenCalled();
+    }, 15_000);
+
+    it('doneWithOverlay() respects custom title and message', async () => {
+      const onRenderPluginUi = vi.fn();
+      const onCloseWindow = vi.fn();
+
+      const lifecycleHost = new Host({
+        onProve: vi.fn(),
+        onRenderPluginUi,
+        onCloseWindow,
+        onOpenWindow: vi.fn(),
+      });
+
+      const pluginCode = `
+export const config = { name: 'Custom Overlay' };
+export function main() {
+  doneWithOverlay('custom-result', {
+    title: 'All done!',
+    message: 'Closing soon.',
+    delayMs: 50,
+  });
+  return div({}, ['done']);
+}
+`.trim();
+
+      const eventEmitter = createTestEventEmitter();
+
+      const result = await lifecycleHost.executePlugin(pluginCode, {
+        eventEmitter,
+      });
+      expect(result).toBe('custom-result');
+      // No window opened, so no overlay or close
+      expect(onRenderPluginUi).not.toHaveBeenCalled();
+      expect(onCloseWindow).not.toHaveBeenCalled();
+    }, 15_000);
+
+    // Full doneWithOverlay() with window test is in index.browser.test.ts
+    // (requires Playwright to pump the QuickJS async event loop for openWindow)
+
+    it('waitForPendingCallbacks timeout resolves after DRAIN_TIMEOUT_MS', async () => {
+      // Test the timeout mechanism directly by simulating the lifecycle pattern
+      // used inside executePlugin. This avoids QuickJS GC issues in Node tests.
+      const lifecycle = {
+        isCompleted: false,
+        pendingCallbacks: 1, // simulate a stuck callback
+        onDrain: null as (() => void) | null,
+      };
+
+      const DRAIN_TIMEOUT_MS = 100; // short timeout for test
+
+      const waitForPendingCallbacks = (): Promise<void> => {
+        if (lifecycle.pendingCallbacks === 0) return Promise.resolve();
+        if (lifecycle.onDrain !== null) {
+          // Should not happen in practice
+          throw new Error('onDrain already set');
+        }
+        return new Promise<void>((resolve) => {
+          lifecycle.onDrain = resolve;
+          setTimeout(() => {
+            if (lifecycle.onDrain === resolve) {
+              lifecycle.onDrain = null;
+              resolve();
+            }
+          }, DRAIN_TIMEOUT_MS);
+        });
+      };
+
+      // Callbacks stuck at 1 — timeout should force-resolve
+      const start = Date.now();
+      await waitForPendingCallbacks();
+      const elapsed = Date.now() - start;
+
+      expect(elapsed).toBeGreaterThanOrEqual(90); // ~100ms with tolerance
+      expect(lifecycle.onDrain).toBeNull(); // cleaned up
+    });
+
+    it('waitForPendingCallbacks resolves immediately when callbacks drain naturally', async () => {
+      const lifecycle = {
+        isCompleted: false,
+        pendingCallbacks: 1,
+        onDrain: null as (() => void) | null,
+      };
+
+      const waitForPendingCallbacks = (): Promise<void> => {
+        if (lifecycle.pendingCallbacks === 0) return Promise.resolve();
+        if (lifecycle.onDrain !== null) {
+          throw new Error('onDrain already set');
+        }
+        return new Promise<void>((resolve) => {
+          lifecycle.onDrain = resolve;
+          setTimeout(() => {
+            if (lifecycle.onDrain === resolve) {
+              lifecycle.onDrain = null;
+              resolve();
+            }
+          }, 30_000); // long timeout
+        });
+      };
+
+      // Simulate: callback drains after 50ms
+      setTimeout(() => {
+        lifecycle.pendingCallbacks--;
+        if (lifecycle.pendingCallbacks === 0 && lifecycle.onDrain) {
+          lifecycle.onDrain();
+          lifecycle.onDrain = null;
+        }
+      }, 50);
+
+      const start = Date.now();
+      await waitForPendingCallbacks();
+      const elapsed = Date.now() - start;
+
+      // Should resolve in ~50ms (not 30s timeout)
+      expect(elapsed).toBeLessThan(200);
+      expect(lifecycle.onDrain).toBeNull();
+    });
+
+    it('waitForPendingCallbacks returns immediately when count is already 0', async () => {
+      const lifecycle = {
+        isCompleted: false,
+        pendingCallbacks: 0,
+        onDrain: null as (() => void) | null,
+      };
+
+      const waitForPendingCallbacks = (): Promise<void> => {
+        if (lifecycle.pendingCallbacks === 0) return Promise.resolve();
+        return new Promise<void>((resolve) => {
+          lifecycle.onDrain = resolve;
+        });
+      };
+
+      const start = Date.now();
+      await waitForPendingCallbacks();
+      const elapsed = Date.now() - start;
+
+      expect(elapsed).toBeLessThan(10);
+      expect(lifecycle.onDrain).toBeNull(); // never set
+    });
+  });
+});

@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "target": "esnext",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "noFallthroughCasesInSwitch": true,
+    "noEmit": false,
+    "jsx": "react-jsx",
+    "types": ["chrome", "node"]
+  },
+  "include": ["src"],
+  "exclude": ["build", "node_modules"]
+}

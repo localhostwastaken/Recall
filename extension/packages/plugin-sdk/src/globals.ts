@@ -1,0 +1,172 @@
+/**
+ * Global type declarations for TLSNotary plugin runtime environment
+ *
+ * These functions are injected at runtime by the plugin sandbox.
+ * They are automatically available as globals in TypeScript plugins.
+ */
+
+import type {
+  InterceptedRequest,
+  InterceptedRequestHeader,
+  Handler,
+  DomOptions,
+  DomJson,
+} from './types';
+
+/**
+ * Extract and parse a JSON body from an intercepted request.
+ * Returns the parsed JSON object, the raw string if not valid JSON, or null if no body.
+ */
+export type GetJsonBodyFunction = (request: InterceptedRequest) => unknown;
+
+/**
+ * Create a div DOM element
+ */
+export type DivFunction = {
+  (options?: DomOptions, children?: DomJson[]): DomJson;
+  (children: DomJson[]): DomJson;
+};
+
+/**
+ * Create a button DOM element
+ */
+export type ButtonFunction = {
+  (options?: DomOptions, children?: DomJson[]): DomJson;
+  (children: DomJson[]): DomJson;
+};
+
+/**
+ * Create an input DOM element
+ */
+export type InputFunction = {
+  (options?: DomOptions, children?: DomJson[]): DomJson;
+  (children: DomJson[]): DomJson;
+};
+
+/**
+ * Open a new browser window
+ */
+export type OpenWindowFunction = (
+  url: string,
+  options?: {
+    width?: number;
+    height?: number;
+    showOverlay?: boolean;
+  },
+) => Promise<{
+  windowId: number;
+  uuid: string;
+  tabId: number;
+}>;
+
+/**
+ * React-like effect hook that runs when dependencies change
+ */
+export type UseEffectFunction = (callback: () => void, deps: unknown[]) => void;
+
+/**
+ * Subscribe to intercepted HTTP headers with filtering
+ */
+export type UseHeadersFunction = (
+  filter: (headers: InterceptedRequestHeader[]) => InterceptedRequestHeader[],
+) => InterceptedRequestHeader[];
+
+/**
+ * Subscribe to intercepted HTTP requests with filtering
+ */
+export type UseRequestsFunction = (
+  filter: (requests: InterceptedRequest[]) => InterceptedRequest[],
+) => InterceptedRequest[];
+
+/**
+ * Get state value (does not trigger re-render)
+ */
+export type UseStateFunction = <T>(key: string, defaultValue: T) => T;
+
+/**
+ * Set state value (triggers UI re-render)
+ */
+export type SetStateFunction = <T>(key: string, value: T) => void;
+
+/**
+ * Generate TLS proof using the unified prove() API
+ */
+export type ProveFunction = (
+  requestOptions: {
+    url: string;
+    method: string;
+    headers: Record<string, string | undefined>;
+    body?: string;
+  },
+  proverOptions: {
+    verifierUrl: string;
+    proxyUrl: string;
+    maxRecvData?: number;
+    maxSentData?: number;
+    handlers: Handler[];
+  },
+) => Promise<unknown>;
+
+/**
+ * Complete plugin execution and return result
+ */
+export type DoneFunction = (result?: unknown) => void;
+
+/**
+ * Complete plugin execution with a success overlay shown before the window closes.
+ * The overlay is displayed for `delayMs` milliseconds (default 2000), then done() is called.
+ * Plugin developers can customize the overlay text or use the defaults.
+ */
+export type DoneWithOverlayFunction = (
+  result?: unknown,
+  options?: {
+    /** Overlay heading (default: "Proof complete!") */
+    title?: string;
+    /** Overlay subtext (default: "This window will close shortly.") */
+    message?: string;
+    /** Milliseconds to show overlay before closing (default: 2000) */
+    delayMs?: number;
+  },
+) => void;
+
+/**
+ * Complete Plugin API surface available in the QuickJS sandbox
+ */
+export interface PluginAPI {
+  div: DivFunction;
+  button: ButtonFunction;
+  input: InputFunction;
+  openWindow: OpenWindowFunction;
+  useEffect: UseEffectFunction;
+  useHeaders: UseHeadersFunction;
+  useRequests: UseRequestsFunction;
+  useState: UseStateFunction;
+  setState: SetStateFunction;
+  prove: ProveFunction;
+  getJsonBody: GetJsonBodyFunction;
+  done: DoneFunction;
+  doneWithOverlay: DoneWithOverlayFunction;
+}
+
+/**
+ * Global declarations for plugin environment
+ *
+ * These are automatically available in TypeScript plugins without imports.
+ */
+declare global {
+  const div: DivFunction;
+  const button: ButtonFunction;
+  const input: InputFunction;
+  const openWindow: OpenWindowFunction;
+  const useEffect: UseEffectFunction;
+  const useHeaders: UseHeadersFunction;
+  const useRequests: UseRequestsFunction;
+  const useState: UseStateFunction;
+  const setState: SetStateFunction;
+  const prove: ProveFunction;
+  const getJsonBody: GetJsonBodyFunction;
+  const done: DoneFunction;
+  const doneWithOverlay: DoneWithOverlayFunction;
+}
+
+export {};

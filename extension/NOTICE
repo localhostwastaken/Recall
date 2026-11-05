@@ -1,0 +1,98 @@
+Recall browser extension
+
+Provenance: vendored from https://github.com/tlsnotary/tlsn-extension at tag
+0.1.0.1501 (commit 68bbd380d6e1a89d79748e5294661c752f5d1205), repository root
+minus the parts listed below. The npm workspaces kept are packages/common,
+packages/plugin-sdk and packages/extension, with upstream's package-lock.json
+as the base. Recall's changes are listed below and in this repository's git
+history.
+
+Removed from upstream (not needed by Recall, or page-facing attack surface):
+- Repository: app/ (mobile app), servers/ (Recall vendors the verifier
+  separately in ../witness), .github/ and the other tooling dot-directories,
+  the top-level docs (README.md, PLUGIN.md, RELEASING.md, VERIFIER.md and a
+  contributor guide), .easignore, and the mobile root dependencies and scripts.
+- Workspaces: packages/demo, packages/eas-webhook, packages/tlsn-mobile,
+  packages/tlsn-wasm (wasm build script; the npm tlsn-wasm package is used),
+  packages/ts-plugin-sample, packages/tutorial and packages/plugins (demo
+  plugins).
+- packages/extension, the page-facing plugin API: the content script and the
+  window.tlsn / execCode page bridge (src/entries/Content), the plugin
+  confirmation popup (src/entries/ConfirmPopup), the managed-window, overlay
+  and request-interception code (src/background), the background EXEC_CODE,
+  window, overlay, progress-routing and relay handlers, the offscreen plugin
+  handlers (EXEC_CODE_OFFSCREEN, GET_PLUGIN_STATS_OFFSCREEN, RELAY_DELIVER*),
+  SessionManager's page relay mode and its sessionData.proxyBase override,
+  the manifest's content_scripts, web_accessible_resources and webRequest /
+  windows permissions, helpers used only by those parts, and their tests.
+- Browser (Playwright) test suites and their devDependencies in
+  packages/extension and packages/plugin-sdk; STORE_LISTING.md,
+  test-session-manager.html, a contributor guide and unused images.
+
+Recall changes in packages/extension:
+- manifest: name Recall, action popup, externally_connectable for the Recall
+  web app origins, storage permission.
+- src/entries/Popup and src/recall: the Recall popup, settings, witness health
+  check, build flags and UI tokens.
+- src/offscreen/ProveManager/index.ts: keeps the witness's signed
+  `attestation` from session_completed; root_certs come from the build-time
+  dev CA (RECALL_DEV_CA_DER_B64) when set.
+- webpack.config.js: popup entry, @recall/evidence and @recall/net aliases,
+  Recall build flags, a single React copy.
+- src/entries/Background and src/entries/Offscreen: reduced to what the popup
+  and the offscreen prover need.
+
+The upstream code is Copyright TLSNotary contributors and is licensed under
+either of:
+
+- Apache License, Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0)
+- MIT license (http://opensource.org/licenses/MIT)
+
+at your option. The upstream licence statement (tlsn-extension README.md,
+"License" section) reads:
+
+    This repository is licensed under either of:
+
+    - [Apache License, Version 2.0](http://www.apache.org/licenses/LICENSE-2.0)
+    - [MIT license](http://opensource.org/licenses/MIT)
+
+    at your option.
+
+-------------------------------------------------------------------------------
+MIT License
+
+Copyright (c) TLSNotary contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+-------------------------------------------------------------------------------
+Apache License, Version 2.0
+
+Copyright TLSNotary contributors
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not
+use this file except in compliance with the License. You may obtain a copy of
+the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+License for the specific language governing permissions and limitations under
+the License.
