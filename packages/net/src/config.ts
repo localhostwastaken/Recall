@@ -25,10 +25,16 @@ export function liveConfig(env: Record<string, string>): NetConfig {
     },
     swarm: {
       uploadUrl: 'https://api.gateway.ethswarm.org',
-      downloadUrls: ['https://api.gateway.ethswarm.org', 'https://bzz.limo'],
+      downloadUrls: ['https://download.gateway.ethswarm.org', 'https://bzz.link'],
     },
     gnosis: { rpcUrl: 'https://rpc.gnosischain.com' },
-    app: { url: env.WITNESS_PUBLIC_URL ?? '' },
+    app: { url: 'https://localhostwastaken.github.io/Recall/app/' },
     witness: { pinned: [] },
   };
+}
+
+/** Accepts a private key with or without the 0x prefix (ruling R11). */
+export function normalizeKey(k: string): Address {
+  const t = k.trim();
+  return (t.startsWith('0x') || t.startsWith('0X') ? `0x${t.slice(2)}` : `0x${t}`) as Address;
 }
