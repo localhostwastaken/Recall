@@ -17,6 +17,7 @@ pub const PROXY_PORT: &str = "recall: proxy port must be 443";
 pub const PROXY_TARGET: &str = "recall: proxy target not allowed";
 pub const PROXY_SESSION: &str = "recall: proxy requires an active session";
 pub const MALFORMED_REQUEST: &str = "recall: malformed request";
+pub const METHOD_NOT_ALLOWED: &str = "recall: only GET requests allowed";
 pub const NONCE: &str = "recall: nonce missing or malformed";
 
 /// Server-side caps on the transcript sizes a client may register.
@@ -28,11 +29,14 @@ pub struct Limits {
 
 /// Checks the (fully revealed) HTTP request the prover sent:
 ///
-/// - exactly one HTTP/1.x request: the head plus a body of `Content-Length`
-///   bytes (no pipelined second request, no `Transfer-Encoding`);
-/// - CRLF-only header lines, no obs-fold, no whitespace before the colon;
+/// - request line exactly `GET SP origin-form SP HTTP/1.1`;
+/// - exactly one request: the head plus a body of `Content-Length` bytes (no
+///   pipelined second request, no `Transfer-Encoding`);
+/// - CRLF-only header lines, every one with a `:`, no obs-fold, no whitespace
+///   before the colon;
 /// - no `Cookie` or `Authorization` header (case-insensitive);
-/// - exactly one `Host` header, equal to `server_name` (ASCII case-insensitive).
+/// - exactly one `Host` header, equal to `server_name` (ASCII
+///   case-insensitive, optional `:443` suffix).
 pub fn check_request(sent: &[u8], server_name: &str) -> Result<(), String> {
     let malformed = || MALFORMED_REQUEST.to_string();
     let head_end = sent
@@ -44,9 +48,7 @@ pub fn check_request(sent: &[u8], server_name: &str) -> Result<(), String> {
 
     let mut lines = head.split("\r\n");
     let request_line = lines.next().unwrap_or_default();
-    if request_line.is_empty() || request_line.contains(['\r', '\n']) {
-        return Err(malformed());
-    }
+    check_request_line(request_line)?;
 
     let mut hosts = Vec::new();
     let mut content_length: Option<usize> = None;
@@ -55,11 +57,11 @@ pub fn check_request(sent: &[u8], server_name: &str) -> Result<(), String> {
             return Err(malformed());
         }
         let (name, value) = line.split_once(':').ok_or_else(malformed)?;
-        if name.is_empty()
-            || name
-                .bytes()
-                .any(|b| b.is_ascii_whitespace() || b.is_ascii_control())
-        {
+        if name.is_empty() || !name.bytes().all(is_tchar) {
+            return Err(malformed());
+        }
+        // field-value: VCHAR / obs-text / SP / HTAB; no other control bytes.
+        if value.bytes().any(|b| (b < 0x20 && b != b'\t') || b == 0x7f) {
             return Err(malformed());
         }
         let value = value.trim_matches([' ', '\t']);
@@ -84,9 +86,48 @@ pub fn check_request(sent: &[u8], server_name: &str) -> Result<(), String> {
         return Err(malformed());
     }
     match hosts.as_slice() {
-        [host] if host.eq_ignore_ascii_case(server_name) => Ok(()),
+        [host]
+            if host
+                .strip_suffix(":443")
+                .unwrap_or(host)
+                .eq_ignore_ascii_case(server_name) =>
+        {
+            Ok(())
+        }
         _ => Err(HOST_MISMATCH.to_string()),
     }
+}
+
+/// RFC 9110 `tchar`: the bytes a header field name may contain.
+fn is_tchar(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b)
+}
+
+/// The request line must be exactly `GET SP origin-form SP HTTP/1.1`. The
+/// origin-form target starts with one `/` and is printable ASCII without `\`
+/// or `#`, so `https://` + server name + target is the URL that was fetched
+/// (no absolute-form, authority-form, `*`, fragment, or `//host` / `/\host`
+/// tricks).
+fn check_request_line(line: &str) -> Result<(), String> {
+    let malformed = || MALFORMED_REQUEST.to_string();
+    let mut parts = line.split(' ');
+    let (Some(method), Some(target), Some(version), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return Err(malformed());
+    };
+    if method != "GET" {
+        return Err(METHOD_NOT_ALLOWED.to_string());
+    }
+    if version != "HTTP/1.1"
+        || !target.starts_with('/')
+        || target.starts_with("//")
+        || target.contains(['\\', '#'])
+        || !target.bytes().all(|b| b.is_ascii_graphic())
+    {
+        return Err(malformed());
+    }
+    Ok(())
 }
 
 /// Parses the `/proxy?token=<host>[:<port>]` target. The port defaults to 443;
@@ -168,11 +209,17 @@ pub fn check_limits(max_sent: usize, max_recv: usize, limits: Limits) -> Result<
     Ok(())
 }
 
-/// `true` only for globally routable unicast addresses. Rejects loopback,
-/// private, link-local (incl. cloud metadata 169.254.169.254), CGNAT,
-/// unique-local, unspecified, multicast, broadcast, documentation,
-/// benchmarking and reserved ranges, and IPv6 forms that embed such an IPv4
-/// address (IPv4-mapped, IPv4-compatible, NAT64, 6to4).
+/// `true` only for public unicast space (an allowlist).
+///
+/// - IPv4: everything except 0/8, 10/8, 100.64/10, 127/8, 169.254/16 (incl.
+///   cloud metadata 169.254.169.254), 172.16/12, 192.0.0/24, 192.0.2/24,
+///   192.88.99/24, 192.168/16, 198.18/15, 198.51.100/24, 203.0.113/24, 224/4,
+///   240/4 and 255.255.255.255.
+/// - IPv6: only global unicast 2000::/3, minus 2001::/23 (incl. Teredo
+///   2001::/32), 2001:db8::/32, 2002::/16 (6to4) and 3fff::/20. Loopback,
+///   ULA, link-local, multicast, NAT64 (64:ff9b::/96, 64:ff9b:1::/48) and
+///   IPv4-compatible addresses all fall outside 2000::/3. IPv4-mapped
+///   addresses (::ffff:a.b.c.d) are classified by their IPv4 address.
 pub fn is_public_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => is_public_v4(v4),
@@ -184,12 +231,13 @@ fn is_public_v4(ip: Ipv4Addr) -> bool {
     let [a, b, c, _] = ip.octets();
     !(a == 0                                   // 0.0.0.0/8 "this network"
         || a == 10                             // 10/8 private
-        || a == 127                            // 127/8 loopback
         || (a == 100 && (64..128).contains(&b)) // 100.64/10 CGNAT
+        || a == 127                            // 127/8 loopback
         || (a == 169 && b == 254)              // 169.254/16 link-local, metadata
         || (a == 172 && (16..32).contains(&b)) // 172.16/12 private
         || (a == 192 && b == 0 && c == 0)      // 192.0.0/24 IETF protocol
         || (a == 192 && b == 0 && c == 2)      // 192.0.2/24 documentation
+        || (a == 192 && b == 88 && c == 99)    // 192.88.99/24 6to4 relay anycast
         || (a == 192 && b == 168)              // 192.168/16 private
         || (a == 198 && (b == 18 || b == 19))  // 198.18/15 benchmarking
         || (a == 198 && b == 51 && c == 100)   // 198.51.100/24 documentation
@@ -199,29 +247,16 @@ fn is_public_v4(ip: Ipv4Addr) -> bool {
 
 fn is_public_v6(ip: Ipv6Addr) -> bool {
     let seg = ip.segments();
-    let embedded_v4 =
-        |hi: u16, lo: u16| Ipv4Addr::new((hi >> 8) as u8, hi as u8, (lo >> 8) as u8, lo as u8);
-    if ip.is_unspecified() || ip.is_loopback() {
-        return false;
+    if let Some(v4) = ip.to_ipv4_mapped() {
+        return is_public_v4(v4); // ::ffff:a.b.c.d
     }
-    // ::ffff:a.b.c.d (mapped) and ::a.b.c.d (deprecated compatible)
-    if seg[..5] == [0; 5] && (seg[5] == 0xffff || seg[5] == 0) {
-        return is_public_v4(embedded_v4(seg[6], seg[7]));
+    if seg[0] & 0xe000 != 0x2000 {
+        return false; // outside 2000::/3 global unicast
     }
-    // 64:ff9b::/96 NAT64 well-known prefix
-    if seg[..6] == [0x64, 0xff9b, 0, 0, 0, 0] {
-        return is_public_v4(embedded_v4(seg[6], seg[7]));
-    }
-    // 2002::/16 6to4
-    if seg[0] == 0x2002 {
-        return is_public_v4(embedded_v4(seg[1], seg[2]));
-    }
-    !((seg[0] & 0xfe00) == 0xfc00          // fc00::/7 unique local
-        || (seg[0] & 0xffc0) == 0xfe80     // fe80::/10 link-local
-        || (seg[0] & 0xffc0) == 0xfec0     // fec0::/10 site-local (deprecated)
-        || (seg[0] & 0xff00) == 0xff00     // ff00::/8 multicast
-        || (seg[0] == 0x2001 && seg[1] == 0x0db8) // 2001:db8::/32 documentation
-        || (seg[0] == 0x0100 && seg[1..4] == [0, 0, 0])) // 100::/64 discard
+    !((seg[0] == 0x2001 && seg[1] < 0x0200)            // 2001::/23 incl. Teredo
+        || (seg[0] == 0x2001 && seg[1] == 0x0db8)      // 2001:db8::/32 documentation
+        || seg[0] == 0x2002                            // 2002::/16 6to4
+        || (seg[0] == 0x3fff && seg[1] & 0xf000 == 0)) // 3fff::/20 documentation
 }
 
 /// Picks the resolved addresses `/proxy` may dial: only public ones, unless
@@ -328,6 +363,149 @@ mod tests {
             check_request(&sent, HOST),
             Err(MALFORMED_REQUEST.to_string())
         );
+    }
+
+    fn raw(request_line: &str, headers: &str) -> Vec<u8> {
+        format!("{request_line}\r\n{headers}\r\n").into_bytes()
+    }
+
+    #[test]
+    fn absolute_form_target_rejected() {
+        let h = "Host: notice.recall.test\r\n";
+        for line in [
+            "GET https://evil.example/notice HTTP/1.1",
+            "GET http://notice.recall.test/notice HTTP/1.1",
+            "GET notice.recall.test:443 HTTP/1.1",
+            "GET * HTTP/1.1",
+            "GET notice HTTP/1.1",
+            "GET //evil.example/notice HTTP/1.1",
+            "GET /\\evil.example/notice HTTP/1.1",
+            "GET /notice\u{e9} HTTP/1.1",
+            "GET /notice#frag HTTP/1.1",
+            "GET /notice\r HTTP/1.1",
+        ] {
+            assert_eq!(
+                check_request(&raw(line, h), HOST),
+                Err(MALFORMED_REQUEST.to_string()),
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn non_get_method_rejected() {
+        let h = "Host: notice.recall.test\r\n";
+        for line in [
+            "POST /notice HTTP/1.1",
+            "HEAD /notice HTTP/1.1",
+            "get /notice HTTP/1.1",
+            "CONNECT notice.recall.test:443 HTTP/1.1",
+        ] {
+            assert_eq!(
+                check_request(&raw(line, h), HOST),
+                Err(METHOD_NOT_ALLOWED.to_string()),
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn request_line_must_be_exactly_get_target_http11() {
+        let h = "Host: notice.recall.test\r\n";
+        for line in [
+            "GET /notice HTTP/1.0",
+            "GET /notice HTTP/2",
+            "GET  /notice HTTP/1.1",
+            "GET /notice  HTTP/1.1",
+            "GET /notice HTTP/1.1 extra",
+            "GET /no tice HTTP/1.1",
+            "GET /notice\tHTTP/1.1",
+            "GET /notice",
+        ] {
+            assert_eq!(
+                check_request(&raw(line, h), HOST),
+                Err(MALFORMED_REQUEST.to_string()),
+                "{line:?}"
+            );
+        }
+        let ok = raw("GET /notice?a=1&b=%20 HTTP/1.1", h);
+        assert_eq!(check_request(&ok, HOST), Ok(()));
+    }
+
+    #[test]
+    fn duplicate_host_rejected() {
+        let sent = req("Host: notice.recall.test\r\nHost: notice.recall.test\r\n");
+        assert_eq!(check_request(&sent, HOST), Err(HOST_MISMATCH.to_string()));
+    }
+
+    #[test]
+    fn host_with_443_port_ok() {
+        let sent = req("Host: notice.recall.test:443\r\n");
+        assert_eq!(check_request(&sent, HOST), Ok(()));
+        let sent = req("Host: Notice.Recall.Test:443\r\n");
+        assert_eq!(check_request(&sent, HOST), Ok(()));
+        let sent = req("Host: notice.recall.test:\r\n");
+        assert_eq!(check_request(&sent, HOST), Err(HOST_MISMATCH.to_string()));
+    }
+
+    #[test]
+    fn host_with_other_port_rejected() {
+        for h in [
+            "Host: notice.recall.test:80\r\n",
+            "Host: notice.recall.test:0443\r\n",
+            "Host: notice.recall.test:443:443\r\n",
+            "Host: notice.recall.test :443\r\n",
+        ] {
+            assert_eq!(
+                check_request(&req(h), HOST),
+                Err(HOST_MISMATCH.to_string()),
+                "{h:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn header_line_without_colon_rejected() {
+        let sent = req("Host: notice.recall.test\r\nX-Broken\r\n");
+        assert_eq!(
+            check_request(&sent, HOST),
+            Err(MALFORMED_REQUEST.to_string())
+        );
+    }
+
+    #[test]
+    fn header_name_must_be_token() {
+        for h in [
+            "Host: notice.recall.test\r\nX(A): b\r\n",
+            "Host: notice.recall.test\r\nX\u{e9}: b\r\n",
+            "Host: notice.recall.test\r\n\0Cookie: a=1\r\n",
+            "Host: notice.recall.test\r\n: b\r\n",
+        ] {
+            assert_eq!(
+                check_request(&req(h), HOST),
+                Err(MALFORMED_REQUEST.to_string()),
+                "{h:?}"
+            );
+        }
+        let ok = req("Host: notice.recall.test\r\nX-Custom_1.a~: b\r\n");
+        assert_eq!(check_request(&ok, HOST), Ok(()));
+    }
+
+    #[test]
+    fn header_value_control_bytes_rejected() {
+        for h in [
+            "Host: notice.recall.test\r\nX-A: b\0c\r\n",
+            "Host: notice.recall.test\r\nX-A: b\rCookie: a=1\r\n",
+            "Host: notice.recall.test\u{7f}\r\n",
+        ] {
+            assert_eq!(
+                check_request(&req(h), HOST),
+                Err(MALFORMED_REQUEST.to_string()),
+                "{h:?}"
+            );
+        }
+        let ok = req("Host: notice.recall.test\r\nX-A: b\tc \u{e9}\r\n");
+        assert_eq!(check_request(&ok, HOST), Ok(()));
     }
 
     #[test]
@@ -460,6 +638,62 @@ mod tests {
     }
 
     #[test]
+    fn teredo_rejected() {
+        assert!(!is_public_ip(ip("2001:0:4136:e378:8000:63bf:3fff:fdd2")));
+        assert!(!is_public_ip(ip("2001::1")));
+        assert!(!is_public_ip(ip("2001:1ff::1"))); // rest of 2001::/23
+    }
+
+    #[test]
+    fn nat64_rejected() {
+        // Even when the embedded IPv4 address is public.
+        assert!(!is_public_ip(ip("64:ff9b::808:808")));
+        assert!(!is_public_ip(ip("64:ff9b::a00:1")));
+        assert!(!is_public_ip(ip("64:ff9b:1::808:808")));
+    }
+
+    #[test]
+    fn six_to_four_rejected() {
+        assert!(!is_public_ip(ip("2002:808:808::1")));
+        assert!(!is_public_ip(ip("192.88.99.1")));
+    }
+
+    #[test]
+    fn v4_mapped_private_rejected() {
+        for s in [
+            "::ffff:192.168.1.1",
+            "::ffff:10.0.0.1",
+            "::ffff:100.64.0.1",
+            "::ffff:198.18.0.1",
+        ] {
+            assert!(!is_public_ip(ip(s)), "{s} must be rejected");
+        }
+    }
+
+    #[test]
+    fn benchmark_198_18_rejected() {
+        assert!(!is_public_ip(ip("198.18.0.1")));
+        assert!(!is_public_ip(ip("198.19.255.255")));
+        assert!(is_public_ip(ip("198.20.0.1")));
+    }
+
+    #[test]
+    fn ipv6_outside_global_unicast_rejected() {
+        for s in [
+            "::a00:1",
+            "::808:808",
+            "100::1",
+            "4000::1",
+            "e000::1",
+            "fec0::1",
+            "3fff::1",
+        ] {
+            // 3fff::/20 is documentation space (RFC 9637); the rest is outside 2000::/3.
+            assert!(!is_public_ip(ip(s)), "{s} must be rejected");
+        }
+    }
+
+    #[test]
     fn metadata_ip_rejected() {
         assert!(!is_public_ip(ip("169.254.169.254")));
         assert!(!is_public_ip(ip("::ffff:169.254.169.254")));
@@ -479,6 +713,8 @@ mod tests {
             "2606:4700:4700::1111",
             "2a00:1450:4001::200e",
             "::ffff:8.8.8.8",
+            "2001:4860:4860::8888",
+            "2001:200::1",
         ] {
             assert!(is_public_ip(ip(s)), "{s} must be allowed");
         }

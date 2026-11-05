@@ -18,7 +18,9 @@ extension as `{"type":"error","message":"recall: …"}`.
 | before `accept()` | server identity proven | `recall: server identity required` |
 | before `accept()` | no transcript commitments | `recall: commitments not allowed` |
 | after verify | every sent and received byte revealed | `recall: partial reveal not allowed` |
-| after verify | one HTTP request; `Host` = server name | `recall: host mismatch` / `recall: malformed request` |
+| after verify | request line exactly `GET /origin-form HTTP/1.1` | `recall: only GET requests allowed` / `recall: malformed request` |
+| after verify | one well-formed HTTP request (CRLF lines, token header names, no obs-fold, no `Transfer-Encoding`, body = `Content-Length`) | `recall: malformed request` |
+| after verify | exactly one `Host`, equal to the server name (case-insensitive, optional `:443`) | `recall: host mismatch` |
 | after verify | no `Cookie` or `Authorization` header | `recall: cookies/auth not allowed` |
 
 On success, `session_completed` gains `attestation: {message, signature, signer}`
@@ -29,8 +31,9 @@ and a `{"type":"RECALL_ATTESTATION","value":"<attestation JSON>"}` entry in
 
 `/proxy` is not an open relay: it needs `sessionId` of an active session (one
 relay per session, otherwise 403), port 443 only (400 `recall: proxy port must
-be 443`), and a host that resolves to public addresses (403 `recall: proxy
-target not allowed`). It dials the checked addresses. CORS is off on `/proxy`.
+be 443`), and a host that resolves to public addresses only (an allowlist: public IPv4,
+IPv6 `2000::/3` minus Teredo/6to4/documentation ranges; IPv4-mapped addresses
+are judged by their IPv4; otherwise 403 `recall: proxy target not allowed`). It dials the checked addresses. CORS is off on `/proxy`.
 The webhook feature and `config.yaml` are removed.
 
 ## Configuration
