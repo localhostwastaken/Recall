@@ -1,6 +1,6 @@
 import { createPublicClient, createWalletClient, ExpirationTime } from '@arkiv-network/sdk';
 import { localhost, rabdi } from '@arkiv-network/sdk/chains';
-import { eq } from '@arkiv-network/sdk/query';
+import { asc, eq } from '@arkiv-network/sdk/query';
 import { addr, bytes, defineSchema, i32, key, str, u64 } from '@arkiv-network/sdk/schema';
 import type { Account, Address, Hex, Transport } from 'viem';
 import { bytesToString, http, stringToBytes } from 'viem';
@@ -132,19 +132,61 @@ export type Listed = (({ kind: 'capture' } & CaptureRow) | ({ kind: 'confirmatio
   expiresAtBlock: bigint;
 };
 
-export async function listByUrl(pub: ArkivPublic, urlHash: Hex): Promise<Listed[]> {
-  const captures = await pub
-    .select()
-    .from(CaptureSchema)
-    .where(eq('urlHash', key(urlHash)))
-    .limit(100)
-    .fetch();
-  const confirmations = await pub
-    .select()
-    .from(ConfirmationSchema)
-    .where(eq('urlHash', key(urlHash)))
-    .limit(100)
-    .fetch();
+export async function listByUrl(
+  pub: ArkivPublic,
+  urlHash: Hex,
+  opts: { pageSize?: number; maxRows?: number } = {},
+): Promise<Listed[]> {
+  const pageSize = opts.pageSize ?? 100;
+  const maxRows = opts.maxRows ?? 2000;
+  let remaining = maxRows;
+  let truncated = false;
+
+  // Anyone can write rows with our schema tag, so a single page could hide genuine records.
+  async function collect<E>(
+    fetchPage: (limit: number, offset: number) => Promise<{ entities: readonly E[] }>,
+  ): Promise<E[]> {
+    const all: E[] = [];
+    while (true) {
+      if (remaining <= 0) {
+        truncated = true;
+        break;
+      }
+      const page = (await fetchPage(pageSize, all.length)).entities;
+      const take = page.slice(0, remaining);
+      all.push(...take);
+      remaining -= take.length;
+      if (page.length < pageSize) break;
+    }
+    return all;
+  }
+
+  const captures = {
+    entities: await collect((limit, offset) =>
+      pub
+        .select()
+        .from(CaptureSchema)
+        .where(eq('urlHash', key(urlHash)))
+        .orderBy(asc('$key'))
+        .limit(limit)
+        .offset(offset)
+        .fetch(),
+    ),
+  };
+  const confirmations = {
+    entities: await collect((limit, offset) =>
+      pub
+        .select()
+        .from(ConfirmationSchema)
+        .where(eq('urlHash', key(urlHash)))
+        .orderBy(asc('$key'))
+        .limit(limit)
+        .offset(offset)
+        .fetch(),
+    ),
+  };
+  if (remaining <= 0) truncated = true;
+  if (truncated) console.warn(`listByUrl: truncated at ${maxRows} rows for ${urlHash}`);
   const out: Listed[] = [];
   for (const e of captures.entities) {
     out.push({

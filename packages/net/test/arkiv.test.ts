@@ -110,3 +110,61 @@ describe('arkiv confirmation and witness profile', () => {
     ).toBe('https://two.example');
   });
 });
+
+describe('listByUrl paging', () => {
+  async function seed() {
+    const dev = privateKeyToAccount(DEV_PRIVATE_KEY);
+    const acct = privateKeyToAccount(generatePrivateKey());
+    const pub = arkivPublic(LOCAL);
+    const bank = createWalletClient({ account: dev, chain: pub.chain, transport });
+    await pub.waitForTransactionReceipt({
+      hash: await bank.sendTransaction({ to: acct.address, value: parseEther('1') }),
+    });
+    const w = arkivWallet(LOCAL, transport, acct);
+    const urlHash = keccak256(stringToBytes(`https://page.recall.test/x?run=${randomUUID()}`));
+    for (let i = 0; i < 3; i++) {
+      await writeCapture(w, {
+        urlHash,
+        bodySha256: ('0x' + '01'.repeat(32)) as Hex,
+        serverName: 'page.recall.test',
+        witness: acct.address,
+        signedAt: BigInt(i),
+        httpStatus: 200,
+        batchId: ('0x' + '02'.repeat(32)) as Hex,
+        evidenceRef: ('0x' + '03'.repeat(32)) as Hex,
+        canonicalUrl: 'https://page.recall.test/x',
+      });
+    }
+    for (let i = 0; i < 2; i++) {
+      await writeConfirmation(w, {
+        captureKey: ('0x' + '04'.repeat(32)) as Hex,
+        urlHash,
+        bodySha256: ('0x' + '01'.repeat(32)) as Hex,
+        witness: acct.address,
+        signedAt: BigInt(i),
+        evidence: new Uint8Array([i]),
+      });
+    }
+    return { pub, urlHash };
+  }
+
+  it('listByUrl paginates beyond one page', async () => {
+    const { pub, urlHash } = await seed();
+    const rows = await eventually(
+      () => listByUrl(pub, urlHash, { pageSize: 2 }),
+      (r) => r.length >= 5,
+    );
+    expect(rows).toHaveLength(5);
+    expect(new Set(rows.map((r) => r.entityKey)).size).toBe(5);
+  });
+
+  it('listByUrl stops at maxRows', async () => {
+    const { pub, urlHash } = await seed();
+    await eventually(
+      () => listByUrl(pub, urlHash, { pageSize: 2 }),
+      (r) => r.length >= 5,
+    );
+    const rows = await listByUrl(pub, urlHash, { pageSize: 2, maxRows: 3 });
+    expect(rows).toHaveLength(3);
+  });
+});
