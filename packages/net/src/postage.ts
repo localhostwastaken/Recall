@@ -127,7 +127,7 @@ function publicFrom(wallet: WalletClient): PublicClient {
   return createPublicClient({ chain: wallet.chain, transport: custom(wallet.transport) }) as PublicClient;
 }
 
-/** Bee accepts stamps only this many blocks after batch creation (measured ~11 on bee 2.8.1). */
+/** Bee accepts stamps only this many blocks after batch creation (measured ~11 on bee 2.8.0). */
 const USABLE_AFTER_BLOCKS = 12;
 
 /**

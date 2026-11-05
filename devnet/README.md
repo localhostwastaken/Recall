@@ -13,8 +13,8 @@ Swarm and Anvil come from `@snaha/bee-compose@0.3.0` (Bee 2.8.0, three full node
 run by `devnet/up.sh`. The first run builds Bee images and takes several minutes; later runs are fast.
 
 - Money: the public bee-compose faucet (`BEE_COMPOSE_FAUCET_KEY` in `e2e/fixtures/keys.ts`) holds about
-  250 xBZZ. A one-day depth-17 batch costs about 5.4 xBZZ, so a fresh chain supports roughly 40 runs of the
-  swarm tests. `docker volume rm bee-compose_blockchain` (after `devnet:down`) restores the snapshot.
+  250 xBZZ. A one-day depth-17 batch costs about 0.0054 xBZZ on the fork (lastPrice 24000), so the faucet
+  covers tens of thousands of runs. `docker volume rm bee-compose_blockchain` (after `devnet:down`) restores the snapshot.
 - A new batch needs about 12 blocks (about 1 minute) before Bee accepts stamps for it.
 - Bee nodes must be full nodes and there must be three of them: with a light peer or only two nodes, Bee never marks the peer healthy, so `POST /chunks` takes 30 s per chunk and node B cannot retrieve anything. `devnet:up` waits for this (up to about 5 minutes on a fresh start). Deferred chunk uploads also hang here, so `uploadStamped` pushes synchronously.
 - Bee rejects unstamped uploads, so `uploadFree` is only exercised against the live gateway.

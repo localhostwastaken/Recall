@@ -30,22 +30,39 @@ export async function uploadStamped(
 
 const bare = (ref: string) => ref.replace(/^0x/, '');
 
-/** Tries each gateway's `/bytes/{ref}` in order and returns the first success. */
+/** Swarm root reference of `bytes`, computed locally with the same chunking as uploadStamped. */
+export async function swarmRootOf(bytes: Uint8Array): Promise<string> {
+  const splitter = new ChunkSplitter(async () => []);
+  await splitter.append(bytes);
+  return (await splitter.finalize()).hash().toHex();
+}
+
+/**
+ * Tries each gateway's `/bytes/{ref}` in order and returns the first response
+ * whose locally recomputed root reference equals `ref`; gateways are not trusted.
+ */
 export async function downloadBytes(
   ref: string,
   urls: string[],
 ): Promise<{ bytes: Uint8Array; from: string }> {
+  if (!/^(0x)?[0-9a-f]{64}$/i.test(ref)) throw new Error('invalid swarm reference');
+  const want = bare(ref).toLowerCase();
   const errors: string[] = [];
   for (const url of urls) {
     try {
       const res = await fetch(`${url.replace(/\/$/, '')}/bytes/${bare(ref)}`);
-      if (res.ok) return { bytes: new Uint8Array(await res.arrayBuffer()), from: url };
-      errors.push(`${url}: ${res.status}`);
+      if (!res.ok) {
+        errors.push(`${url}: ${res.status}`);
+        continue;
+      }
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      if ((await swarmRootOf(bytes)) === want) return { bytes, from: url };
+      errors.push(`${url}: reference mismatch (returned bytes do not hash to ${want})`);
     } catch (e) {
       errors.push(`${url}: ${(e as Error).message}`);
     }
   }
-  throw new Error(`download of ${bare(ref)} failed: ${errors.join('; ')}`);
+  throw new Error(`download of ${want} failed: ${errors.join('; ')}`);
 }
 
 /** Unstamped upload; only public gateways (which stamp with their own batch) accept it. */
