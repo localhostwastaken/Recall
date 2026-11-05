@@ -8,6 +8,8 @@
 | Anvil fork of Gnosis | `http://localhost:9545` | chain 100, Swarm contracts at their mainnet addresses |
 | Bee node A (full, "queen") | `http://localhost:1633` | uploads |
 | Bee node B (full) | `http://localhost:1643` | downloads (bee-compose worker-1); socat forwards to bee-compose's `:16331` |
+| Notice fixture | `https://notice.recall.test` (host `:443`) | TLS 1.2 only, fixture CA in `fixtures/notice/.certs` |
+| Witness | `http://localhost:7047` | `witness/` in dev CA mode; signer `0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC` (public test key, `DEVNET_WITNESS_KEY`) |
 
 Swarm and Anvil come from `@snaha/bee-compose@0.3.0` (Bee 2.8.0, three full nodes; the third only makes the health check work),
 run by `devnet/up.sh`. The first run builds Bee images and takes several minutes; later runs are fast.

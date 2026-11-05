@@ -17,12 +17,14 @@ use bytes::BytesMut;
 use futures_util::SinkExt;
 use rangeset::prelude::RangeSet;
 use serde::{Deserialize, Serialize};
+use alloy_signer_local::PrivateKeySigner;
+use recall_witness::{attest, gates};
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tlsn::transcript::PartialTranscript;
+use tlsn::webpki::{CertificateDer, RootCertStore};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{oneshot, Mutex};
 use tokio::time::timeout;
@@ -30,9 +32,68 @@ use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tower_http::cors::CorsLayer;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
-use verifier::verifier;
+use verifier::{verifier, Rejection};
 use ws::{TungsteniteStream, WsUpgrade};
 use ws_stream_tungstenite::WsStream;
+
+/// Recall: how long a registered session (and its single /proxy relay) may
+/// live: 30 s to connect the prover + 120 s verification + 30 s reveal config.
+const SESSION_TTL: Duration = Duration::from_secs(180);
+
+/// Reads an env var, treating an empty value as unset.
+fn env_var(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|v| !v.trim().is_empty())
+}
+
+fn env_usize(name: &str, default: usize) -> usize {
+    match env_var(name) {
+        None => default,
+        Some(v) => v.trim().parse().unwrap_or_else(|_| {
+            error!("{} must be a positive integer", name);
+            std::process::exit(1);
+        }),
+    }
+}
+
+/// Recall: root certificates for server identity. `WITNESS_DEV_CA_DER` (dev
+/// only) replaces the Mozilla roots with that single CA certificate.
+fn load_root_store() -> (RootCertStore, Vec<String>) {
+    let Some(path) = env_var("WITNESS_DEV_CA_DER") else {
+        if env_var("WITNESS_DEV_ALLOW_HOSTS").is_some() {
+            warn!("WITNESS_DEV_ALLOW_HOSTS is ignored without WITNESS_DEV_CA_DER");
+        }
+        info!("Root store: Mozilla roots");
+        return (RootCertStore::mozilla(), Vec::new());
+    };
+    let bytes = std::fs::read(&path).unwrap_or_else(|e| {
+        error!("Cannot read WITNESS_DEV_CA_DER {}: {}", path, e);
+        std::process::exit(1);
+    });
+    let cert = if bytes.starts_with(b"-----BEGIN") {
+        CertificateDer::from_pem_slice(&bytes).unwrap_or_else(|_| {
+            error!("WITNESS_DEV_CA_DER {} is not a valid certificate", path);
+            std::process::exit(1);
+        })
+    } else {
+        CertificateDer(bytes)
+    };
+    let allow: Vec<String> = env_var("WITNESS_DEV_ALLOW_HOSTS")
+        .map(|v| {
+            v.split(',')
+                .map(|h| h.trim().to_ascii_lowercase())
+                .filter(|h| !h.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    warn!("================================================================");
+    warn!("DEV CA MODE: trusting ONLY {} (WITNESS_DEV_CA_DER)", path);
+    warn!("DEV CA MODE: Mozilla roots are OFF; never use this witness for real captures");
+    if !allow.is_empty() {
+        warn!("DEV CA MODE: /proxy may dial private addresses of {:?}", allow);
+    }
+    warn!("================================================================");
+    (RootCertStore { roots: vec![cert] }, allow)
+}
 
 #[tokio::main]
 async fn main() {
@@ -44,31 +105,35 @@ async fn main() {
         .with_line_number(true)
         .init();
 
-    // Load configuration from YAML file
-    let config = Config::load(Path::new("config.yaml"));
-    info!(
-        "Webhook configurations loaded: {} endpoints",
-        config.webhooks.len()
-    );
-    for (server_name, webhook) in &config.webhooks {
-        info!("  {} -> {}", server_name, webhook.url);
-    }
+    // Recall: the witness signing key. Only the address is ever logged.
+    let signer = attest::signer_from_env(&std::env::var("WITNESS_PRIVATE_KEY").unwrap_or_default())
+        .unwrap_or_else(|e| {
+            error!("{}", e);
+            std::process::exit(1);
+        });
+    info!("Witness signer: {}", signer.address().to_checksum(None));
 
-    // Create application state with session storage and config
+    let (root_store, dev_allow_hosts) = load_root_store();
+    let limits = gates::Limits {
+        max_sent: env_usize("MAX_SENT_DATA", 4096),
+        max_recv: env_usize("MAX_RECV_DATA", 65536),
+    };
+    info!(
+        "Limits: maxSentData <= {}, maxRecvData <= {}",
+        limits.max_sent, limits.max_recv
+    );
+
+    // Create application state with session storage and the witness config
     let app_state = Arc::new(AppState {
         sessions: Arc::new(Mutex::new(HashMap::new())),
-        config: Arc::new(config),
+        signer: Arc::new(signer),
+        root_store: Arc::new(root_store),
+        dev_allow_hosts: Arc::new(dev_allow_hosts),
+        limits,
     });
 
     // Build router with routes
-    let app = Router::new()
-        .route("/health", get(health_handler))
-        .route("/info", get(info_handler))
-        .route("/session", get(session_ws_handler))
-        .route("/verifier", get(verifier_ws_handler))
-        .route("/proxy", get(proxy_ws_handler))
-        .layer(CorsLayer::permissive())
-        .with_state(app_state);
+    let app = app(app_state);
 
     // Start server
     let port: u16 = std::env::var("PORT")
@@ -95,11 +160,27 @@ async fn main() {
         "Verifier WebSocket endpoint: ws://{}/verifier?sessionId=<id>",
         addr
     );
-    info!("Proxy WebSocket endpoint: ws://{}/proxy?token=<host>", addr);
+    info!(
+        "Proxy WebSocket endpoint: ws://{}/proxy?token=<host>&sessionId=<id>",
+        addr
+    );
 
     axum::serve(listener, app)
         .await
         .expect("Server error");
+}
+
+/// Router with all routes. Recall: CORS stays on the routes the web app and
+/// extension use, but not on /proxy (added after the layer).
+pub(crate) fn app(state: Arc<AppState>) -> Router {
+    Router::new()
+        .route("/health", get(health_handler))
+        .route("/info", get(info_handler))
+        .route("/session", get(session_ws_handler))
+        .route("/verifier", get(verifier_ws_handler))
+        .layer(CorsLayer::permissive())
+        .route("/proxy", get(proxy_ws_handler))
+        .with_state(state)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -186,31 +267,49 @@ struct HandlerResult {
     value: String,
 }
 
-// Verification result containing handler results or an error
-#[derive(Debug, Clone, Serialize)]
+// Verification result containing handler results and the signed statement,
+// or an error
+#[derive(Debug, Clone)]
 struct VerificationResult {
     results: Vec<HandlerResult>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    attestation: Option<attest::Attestation>,
     error: Option<String>,
+}
+
+impl VerificationResult {
+    fn error(message: impl Into<String>) -> Self {
+        Self {
+            results: vec![],
+            attestation: None,
+            error: Some(message.into()),
+        }
+    }
 }
 
 // Type aliases for WebSocket senders
 type ProverSocketSender = oneshot::Sender<TungsteniteStream>;
-type ProxySocketSender = oneshot::Sender<TungsteniteStream>;
 
 // Session data stored in AppState
 pub(crate) struct SessionData {
     pub(crate) prover_socket_tx: Option<ProverSocketSender>,
-    /// In proxy mode, the verifier task stores a sender here so the /proxy
-    /// endpoint can route the prover's proxy WebSocket to it.
-    pub(crate) proxy_socket_tx: Option<ProxySocketSender>,
+    /// Recall: when the session was registered (sessions expire after SESSION_TTL).
+    pub(crate) created_at: Instant,
+    /// Recall: a session may open exactly one /proxy relay.
+    pub(crate) proxy_used: bool,
 }
 
 // Application state for sharing data between handlers
 #[derive(Clone)]
 pub(crate) struct AppState {
     pub(crate) sessions: Arc<Mutex<HashMap<String, SessionData>>>,
-    pub(crate) config: Arc<Config>,
+    /// Recall: the witness key that signs the statement.
+    pub(crate) signer: Arc<PrivateKeySigner>,
+    /// Recall: roots for server identity (Mozilla, or the dev CA).
+    pub(crate) root_store: Arc<RootCertStore>,
+    /// Recall: dev CA mode only, hosts /proxy may dial at private addresses.
+    pub(crate) dev_allow_hosts: Arc<Vec<String>>,
+    /// Recall: server caps on maxSentData/maxRecvData.
+    pub(crate) limits: gates::Limits,
 }
 
 // Query parameters for verifier WebSocket connection
@@ -222,7 +321,7 @@ struct VerifierQuery {
 
 // Query parameters for proxy WebSocket connection
 // Supports both `token` (notary.pse.dev compatible) and `host` (legacy)
-// In proxy mode, `session_id` routes the WS to the verifier task.
+// Recall: `sessionId` is required and must name an active session.
 #[derive(Debug, Deserialize)]
 struct ProxyQuery {
     #[serde(alias = "host")]
@@ -264,135 +363,17 @@ enum ServerMessage {
         #[serde(rename = "sessionId")]
         session_id: String,
     },
-    /// Session completed with results
+    /// Session completed with results.
+    /// Recall: `attestation` is the signed statement; `results` also carries
+    /// it as a `RECALL_ATTESTATION` entry for clients that only keep results.
     SessionCompleted {
-        results: Vec<HandlerResult>,
+        results: Vec<serde_json::Value>,
+        attestation: attest::Attestation,
     },
     /// Error occurred
     Error {
         message: String,
     },
-}
-
-// ============================================================================
-// Webhook Types
-// ============================================================================
-
-/// Webhook configuration for a specific server
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct WebhookConfig {
-    pub(crate) url: String,
-    #[serde(default)]
-    pub(crate) headers: HashMap<String, String>,
-}
-
-/// Application configuration loaded from YAML
-#[derive(Debug, Clone, Deserialize, Default)]
-pub(crate) struct Config {
-    #[serde(default)]
-    pub(crate) webhooks: HashMap<String, WebhookConfig>,
-}
-
-impl Config {
-    /// Load configuration from YAML file, returns default if file doesn't exist
-    fn load(path: &Path) -> Self {
-        match std::fs::read_to_string(path) {
-            Ok(contents) => match serde_yaml_ng::from_str(&contents) {
-                Ok(config) => {
-                    info!("Loaded config from {:?}", path);
-                    config
-                }
-                Err(e) => {
-                    warn!("Failed to parse config file {:?}: {}", path, e);
-                    Self::default()
-                }
-            },
-            Err(_) => {
-                info!("No config file found at {:?}, using defaults", path);
-                Self::default()
-            }
-        }
-    }
-
-    /// Get webhook configuration for a server name (with wildcard fallback)
-    fn get_webhook(&self, server_name: &str) -> Option<&WebhookConfig> {
-        self.webhooks
-            .get(server_name)
-            .or_else(|| self.webhooks.get("*"))
-    }
-}
-
-/// Webhook payload sent to configured endpoints
-#[derive(Debug, Serialize)]
-struct WebhookPayload {
-    /// The server name (hostname) from the TLS connection
-    server_name: String,
-    /// Handler results with revealed values
-    results: Vec<HandlerResult>,
-    /// The reveal configuration (ranges + handlers)
-    config: RevealConfigForWebhook,
-    /// Session metadata
-    session: SessionInfo,
-    /// Redacted transcripts (bytes outside revealed ranges replaced with 0x00)
-    transcript: RedactedTranscript,
-}
-
-/// Reveal config for webhook (same structure, different purpose)
-#[derive(Debug, Serialize)]
-struct RevealConfigForWebhook {
-    sent: Vec<RangeWithHandler>,
-    recv: Vec<RangeWithHandler>,
-}
-
-/// Session information for webhook
-#[derive(Debug, Serialize)]
-struct SessionInfo {
-    id: String,
-    #[serde(flatten)]
-    data: HashMap<String, String>,
-}
-
-/// Redacted transcript data - bytes outside revealed ranges are zeroed out
-#[derive(Debug, Serialize)]
-struct RedactedTranscript {
-    /// Redacted sent data (request) - unrevealed bytes replaced with 0x00
-    sent: String,
-    /// Redacted received data (response) - unrevealed bytes replaced with 0x00
-    recv: String,
-    /// Original sent length before redaction
-    sent_length: usize,
-    /// Original recv length before redaction
-    recv_length: usize,
-}
-
-impl RedactedTranscript {
-    /// Create redacted transcript from raw bytes and reveal config
-    fn from_transcript(
-        sent_bytes: &[u8],
-        recv_bytes: &[u8],
-        reveal_config: &RevealConfig,
-    ) -> Self {
-        Self {
-            sent: Self::redact_bytes(sent_bytes, &reveal_config.sent),
-            recv: Self::redact_bytes(recv_bytes, &reveal_config.recv),
-            sent_length: sent_bytes.len(),
-            recv_length: recv_bytes.len(),
-        }
-    }
-
-    /// Redact bytes by zeroing out bytes outside the revealed ranges
-    fn redact_bytes(bytes: &[u8], ranges: &[RangeWithHandler]) -> String {
-        let mut redacted = vec![0u8; bytes.len()];
-
-        for range in ranges {
-            if range.start < bytes.len() && range.end <= bytes.len() {
-                redacted[range.start..range.end].copy_from_slice(&bytes[range.start..range.end]);
-            }
-        }
-
-        // Convert to string - using lossy conversion for non-UTF8 bytes
-        String::from_utf8_lossy(&redacted).to_string()
-    }
 }
 
 // Health check endpoint handler
@@ -409,16 +390,19 @@ struct InfoResponse {
     git_hash: String,
     /// TLSNotary library version
     tlsn_version: &'static str,
+    /// Recall: the witness signer address (EIP-55)
+    signer: String,
 }
 
 /// Info endpoint handler - returns server information as JSON
-pub(crate) async fn info_handler() -> impl IntoResponse {
+pub(crate) async fn info_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let git_hash = std::env::var("GIT_HASH").unwrap_or_else(|_| "dev".to_string());
 
     axum::Json(InfoResponse {
         version: env!("CARGO_PKG_VERSION"),
         git_hash,
         tlsn_version: "0.1.0-alpha.15",
+        signer: state.signer.address().to_checksum(None),
     })
 }
 
@@ -510,6 +494,20 @@ async fn handle_session_websocket(mut socket: TungsteniteStream, state: Arc<AppS
         session_data.keys().collect::<Vec<_>>()
     );
 
+    // Recall gates at registration: server caps on the transcript sizes, and a
+    // 32-byte nonce from the extension to bind into the statement.
+    let nonce = match gates::check_limits(max_sent_data, max_recv_data, state.limits)
+        .and_then(|_| gates::parse_nonce(session_data.get("nonce").map(String::as_str)))
+    {
+        Ok(nonce) => nonce,
+        Err(msg) => {
+            warn!("[{}] Registration rejected: {}", session_id, msg);
+            send_error(&mut socket, &msg).await;
+            let _ = socket.close(None).await;
+            return;
+        }
+    };
+
     // Send session_registered response
     if !send_server_message(
         &mut socket,
@@ -530,8 +528,6 @@ async fn handle_session_websocket(mut socket: TungsteniteStream, state: Arc<AppS
     let (reveal_config_tx, reveal_config_rx) = oneshot::channel::<RevealConfig>();
     let (result_tx, result_rx) = oneshot::channel::<VerificationResult>();
 
-    let session_data_storage = Arc::new(session_data.clone());
-
     let session_config = SessionConfig {
         max_recv_data,
         max_sent_data,
@@ -544,7 +540,8 @@ async fn handle_session_websocket(mut socket: TungsteniteStream, state: Arc<AppS
             session_id.clone(),
             SessionData {
                 prover_socket_tx: Some(prover_socket_tx),
-                proxy_socket_tx: None,
+                created_at: Instant::now(),
+                proxy_used: false,
             },
         );
     }
@@ -557,12 +554,11 @@ async fn handle_session_websocket(mut socket: TungsteniteStream, state: Arc<AppS
     // Spawn the verifier task with the result sender
     let session_id_clone = session_id.clone();
     let state_clone = state.clone();
-    let session_data_clone = session_data_storage.clone();
     tokio::spawn(async move {
         run_verifier_task(
             session_id_clone,
             session_config,
-            (*session_data_clone).clone(),
+            nonce,
             reveal_config_rx,
             prover_socket_rx,
             result_tx,
@@ -576,8 +572,25 @@ async fn handle_session_websocket(mut socket: TungsteniteStream, state: Arc<AppS
         session_id
     );
 
-    // Wait for reveal_config message
-    let reveal_msg = match socket.next().await {
+    // Wait for reveal_config message. Recall: if the verifier task finishes
+    // first (a gate rejected the session before the prover got that far),
+    // send its error right away instead of waiting for a reveal_config that
+    // will never come.
+    let mut result_rx = result_rx;
+    let next = tokio::select! {
+        msg = socket.next() => msg,
+        early = &mut result_rx => {
+            let msg = match early {
+                Ok(result) => result.error.unwrap_or_else(|| "Verification failed".to_string()),
+                Err(_) => "Verification failed".to_string(),
+            };
+            error!("[{}] ❌ {}", session_id, msg);
+            send_error(&mut socket, &msg).await;
+            let _ = socket.close(None).await;
+            return;
+        }
+    };
+    let reveal_msg = match next {
         Some(Ok(Message::Text(text))) => text,
         Some(Ok(msg)) => {
             error!(
@@ -627,19 +640,19 @@ async fn handle_session_websocket(mut socket: TungsteniteStream, state: Arc<AppS
         reveal_config.recv.len()
     );
 
-    // Forward reveal config to verifier task
+    // Forward reveal config to verifier task. Recall: if the task already
+    // finished, fall through so its result (an error) still reaches the client.
     if reveal_config_tx.send(reveal_config).is_err() {
         error!(
             "[{}] ❌ Verifier task dropped reveal config receiver",
             session_id
         );
-        return;
+    } else {
+        info!(
+            "[{}] ✅ Reveal config sent, verifier task can now proceed",
+            session_id
+        );
     }
-
-    info!(
-        "[{}] ✅ Reveal config sent, verifier task can now proceed",
-        session_id
-    );
 
     // Wait for verification result
     match result_rx.await {
@@ -655,10 +668,25 @@ async fn handle_session_websocket(mut socket: TungsteniteStream, state: Arc<AppS
             );
 
             // Send session_completed to extension
+            let Some(attestation) = result.attestation else {
+                send_error(&mut socket, "Verification failed").await;
+                let _ = socket.close(None).await;
+                return;
+            };
+            let mut results: Vec<serde_json::Value> = result
+                .results
+                .iter()
+                .map(|r| serde_json::to_value(r).expect("handler result serialises"))
+                .collect();
+            results.push(serde_json::json!({
+                "type": "RECALL_ATTESTATION",
+                "value": serde_json::to_string(&attestation).expect("attestation serialises"),
+            }));
             if send_server_message(
                 &mut socket,
                 &ServerMessage::SessionCompleted {
-                    results: result.results,
+                    results,
+                    attestation,
                 },
             )
             .await
@@ -732,52 +760,53 @@ pub(crate) async fn verifier_ws_handler(
 
 // WebSocket proxy handler - bridges WebSocket to TCP
 // Compatible with notary.pse.dev: /proxy?token=<host> or legacy /proxy?host=<host>
-// In proxy mode: /proxy?token=<host>&sessionId=<id> routes to verifier task
+//
+// Recall: no longer an open relay. The target must be port 443, the request
+// must name an active session (one relay per session), and the host must
+// resolve to public addresses (dev CA mode may allow listed hosts). The relay
+// dials the checked addresses, so a DNS rebind cannot swap them.
 pub(crate) async fn proxy_ws_handler(
     ws: WsUpgrade,
     Query(query): Query<ProxyQuery>,
     State(state): State<Arc<AppState>>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let host = query.token;
-    let session_id = query.session_id;
+    let (host, port) =
+        gates::check_proxy_target(&query.token).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+
+    let forbidden = |msg: &str| {
+        warn!("[Proxy] Refused {}:{}: {}", host, port, msg);
+        (StatusCode::FORBIDDEN, msg.to_string())
+    };
+
+    let Some(session_id) = query.session_id else {
+        return Err(forbidden(gates::PROXY_SESSION));
+    };
+    {
+        let mut sessions = state.sessions.lock().await;
+        match sessions.get_mut(&session_id) {
+            Some(s) if !s.proxy_used && s.created_at.elapsed() < SESSION_TTL => s.proxy_used = true,
+            _ => return Err(forbidden(gates::PROXY_SESSION)),
+        }
+    }
+
+    let resolved: Vec<SocketAddr> = match tokio::net::lookup_host((host.as_str(), port)).await {
+        Ok(addrs) => addrs.collect(),
+        Err(_) => return Err(forbidden(gates::PROXY_TARGET)),
+    };
+    let addrs = gates::select_proxy_addrs(&host, &resolved, &state.dev_allow_hosts)
+        .map_err(|e| forbidden(&e))?;
 
     info!(
-        "[Proxy] New proxy request for host: {}, sessionId: {:?}",
-        host, session_id
+        "[Proxy] Session {} relaying to {}:{} via {:?}",
+        session_id, host, port, addrs
     );
-
-    if let Some(sid) = session_id {
-        // Proxy mode: route this WebSocket to the verifier task
-        Ok(ws.on_upgrade(move |socket| async move {
-            let proxy_tx = {
-                let mut sessions = state.sessions.lock().await;
-                sessions
-                    .get_mut(&sid)
-                    .and_then(|s| s.proxy_socket_tx.take())
-            };
-            match proxy_tx {
-                Some(tx) => {
-                    info!("[Proxy] Routing proxy WS to verifier task for session {}", sid);
-                    if tx.send(socket).is_err() {
-                        error!("[Proxy] Verifier task dropped proxy channel for session {}", sid);
-                    }
-                }
-                None => {
-                    error!(
-                        "[Proxy] No proxy socket channel for session {} (not proxy mode or already connected)",
-                        sid
-                    );
-                }
-            }
-        }))
-    } else {
-        // MPC mode: standard TCP bridge
-        Ok(ws.on_upgrade(move |socket| handle_proxy_connection(socket, host)))
-    }
+    Ok(ws.on_upgrade(move |socket| handle_proxy_connection(socket, host, addrs)))
 }
 
 // Handle the proxy WebSocket connection by bridging to TCP
-async fn handle_proxy_connection(ws: TungsteniteStream, host: String) {
+// Recall: dials only the pre-checked `addrs` (port 443) and the relay lives at
+// most SESSION_TTL.
+async fn handle_proxy_connection(ws: TungsteniteStream, host: String, addrs: Vec<SocketAddr>) {
     use futures_util::StreamExt;
 
     let proxy_id = Uuid::new_v4().to_string();
@@ -786,33 +815,30 @@ async fn handle_proxy_connection(ws: TungsteniteStream, host: String) {
         proxy_id, host
     );
 
-    // Parse host and port (default to 443 for HTTPS)
-    let (hostname, port) = if host.contains(':') {
-        let parts: Vec<&str> = host.split(':').collect();
-        (
-            parts[0].to_string(),
-            parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(443),
-        )
-    } else {
-        (host.clone(), 443)
-    };
-
-    info!("[{}] Connecting to {}:{}", proxy_id, hostname, port);
+    info!("[{}] Connecting to {} at {:?}", proxy_id, host, addrs);
 
     // Connect to the remote TCP host
-    let tcp_stream = match tokio::net::TcpStream::connect((hostname.as_str(), port)).await {
-        Ok(stream) => {
+    let tcp_stream = match timeout(
+        Duration::from_secs(10),
+        tokio::net::TcpStream::connect(&addrs[..]),
+    )
+    .await
+    {
+        Ok(Ok(stream)) => {
             info!(
-                "[{}] TCP connection established to {}:{}",
-                proxy_id, hostname, port
+                "[{}] TCP connection established to {} at {:?}",
+                proxy_id,
+                host,
+                stream.peer_addr().ok()
             );
             stream
         }
-        Err(e) => {
-            error!(
-                "[{}] Failed to connect to {}:{} - {}",
-                proxy_id, hostname, port, e
-            );
+        Ok(Err(e)) => {
+            error!("[{}] Failed to connect to {} - {}", proxy_id, host, e);
+            return;
+        }
+        Err(_) => {
+            error!("[{}] Timed out connecting to {}", proxy_id, host);
             return;
         }
     };
@@ -920,11 +946,17 @@ async fn handle_proxy_connection(ws: TungsteniteStream, host: String) {
         total_bytes
     });
 
-    // Wait for both tasks to complete
-    let (ws_result, tcp_result) = tokio::join!(ws_to_tcp, tcp_to_ws);
-
-    let ws_total = ws_result.unwrap_or(0);
-    let tcp_total = tcp_result.unwrap_or(0);
+    // Wait for both tasks to complete (Recall: at most SESSION_TTL)
+    let aborts = [ws_to_tcp.abort_handle(), tcp_to_ws.abort_handle()];
+    let (ws_total, tcp_total) =
+        match timeout(SESSION_TTL, async { tokio::join!(ws_to_tcp, tcp_to_ws) }).await {
+            Ok((ws_result, tcp_result)) => (ws_result.unwrap_or(0), tcp_result.unwrap_or(0)),
+            Err(_) => {
+                warn!("[{}] Proxy relay exceeded {:?}, closing", proxy_id, SESSION_TTL);
+                aborts.iter().for_each(|a| a.abort());
+                (0, 0)
+            }
+        };
 
     info!(
         "[{}] Proxy closed: WS→TCP {} bytes, TCP→WS {} bytes",
@@ -936,7 +968,7 @@ async fn handle_proxy_connection(ws: TungsteniteStream, host: String) {
 async fn run_verifier_task(
     session_id: String,
     config: SessionConfig,
-    session_data: HashMap<String, String>,
+    nonce: [u8; 32],
     reveal_config_rx: oneshot::Receiver<RevealConfig>,
     socket_rx: oneshot::Receiver<TungsteniteStream>,
     result_tx: oneshot::Sender<VerificationResult>,
@@ -976,22 +1008,13 @@ async fn run_verifier_task(
                 "[{}] ⏱️  Timed out waiting for WebSocket connection after {:?}",
                 session_id, connection_timeout
             );
+            let _ = result_tx.send(VerificationResult::error(
+                "Timed out waiting for the prover to connect",
+            ));
             cleanup_session(&state, &session_id).await;
             return;
         }
     };
-
-    // Set up a channel to receive the prover's proxy WebSocket.
-    // In universal mode the verifier accepts both MPC and Proxy — the prover decides.
-    // If the prover chooses proxy, it connects to /proxy?sessionId=... which routes here.
-    let (proxy_tx, proxy_rx) = oneshot::channel::<TungsteniteStream>();
-    {
-        let mut sessions = state.sessions.lock().await;
-        if let Some(session_data) = sessions.get_mut(&session_id) {
-            session_data.proxy_socket_tx = Some(proxy_tx);
-        }
-    }
-    let proxy_socket_rx = Some(proxy_rx);
 
     // Wrap the WebSocket stream in WsStream for AsyncRead/AsyncWrite compatibility
     let stream = WsStream::new(socket);
@@ -1009,169 +1032,45 @@ async fn run_verifier_task(
 
     let verification_result = timeout(
         verification_timeout,
-        verifier(stream, config.max_sent_data, config.max_recv_data, proxy_socket_rx),
+        verifier(
+            stream,
+            config.max_sent_data,
+            config.max_recv_data,
+            (*state.root_store).clone(),
+        ),
     )
     .await;
 
     // Handle the verification result
-    match verification_result {
-        Ok(Ok((server_name, transcript, transcript_commitments))) => {
+    let result = match verification_result {
+        Ok(Ok(session)) => {
             info!("[{}] ✅ Verification completed successfully!", session_id);
-
-            // Extract sent and received data
-            let sent_bytes = transcript.sent_unsafe().to_vec();
-            let recv_bytes = transcript.received_unsafe().to_vec();
-
-            info!(
-                "[{}] Sent data length: {} bytes (authed: {} bytes)",
-                session_id,
-                sent_bytes.len(),
-                transcript.sent_authed().len(),
-            );
-            info!(
-                "[{}] Received data length: {} bytes (authed: {} bytes)",
-                session_id,
-                recv_bytes.len(),
-                transcript.received_authed().len()
-            );
-
-            // Wait for RevealConfig from the session handler (with timeout)
-            let reveal_config_wait_timeout = Duration::from_secs(30);
-            let reveal_config = match timeout(reveal_config_wait_timeout, reveal_config_rx).await {
-                Ok(Ok(config)) => {
-                    info!("[{}] ✅ RevealConfig received, mapping results", session_id);
-                    config
-                }
-                Ok(Err(_)) => {
-                    error!(
-                        "[{}] ❌ RevealConfig channel closed before delivery",
-                        session_id
-                    );
-                    cleanup_session(&state, &session_id).await;
-                    return;
-                }
-                Err(_) => {
-                    error!(
-                        "[{}] ❌ Timed out waiting for RevealConfig after verification",
-                        session_id
-                    );
-                    cleanup_session(&state, &session_id).await;
-                    return;
-                }
-            };
-
-            // Validate that reveal_config ranges match authenticated transcript
-            // ranges. Hash-committed ranges aren't in `sent_authed`/`received_authed`
-            // (those hold revealed plaintext), so we union the commitment ranges in.
-            if let Err((direction, start, end)) = verify_reveal_config(
-                &reveal_config,
-                &transcript,
-                &transcript_commitments,
-            ) {
-                error!(
-                    "[{}] ❌ Invalid {} range [{}, {}) - not fully within authenticated ranges",
-                    session_id, direction, start, end
-                );
-                cleanup_session(&state, &session_id).await;
-                return;
-            }
-
-            info!(
-                "[{}] ✅ All reveal_config ranges validated against authenticated transcript",
-                session_id
-            );
-
-            // Map revealed ranges to handler results using raw transcript bytes.
-            // For HASH handlers, substitute the hex-encoded hash digest (the
-            // plaintext was never revealed, so `bytes[..]` is zeroed).
-
-            let mut handler_results = Vec::new();
-
-            handler_results.extend(process_ranges(
-                &reveal_config.sent,
-                &sent_bytes,
-                tlsn::transcript::Direction::Sent,
-                &transcript_commitments,
-                "SENT",
-                &session_id,
-            ));
-            handler_results.extend(process_ranges(
-                &reveal_config.recv,
-                &recv_bytes,
-                tlsn::transcript::Direction::Received,
-                &transcript_commitments,
-                "RECV",
-                &session_id,
-            ));
-
-            // Check if webhook is configured for this server_name
-            let server_name_str = server_name.as_ref();
-            if let Some(webhook_config) = state.config.get_webhook(server_name_str) {
-                info!(
-                    "[{}] Webhook configured for {}, sending POST to {}",
-                    session_id, server_name_str, webhook_config.url
-                );
-
-                // Create redacted transcript - only revealed ranges are visible
-                let redacted_transcript = RedactedTranscript::from_transcript(
-                    &sent_bytes,
-                    &recv_bytes,
-                    &reveal_config,
-                );
-
-                let payload = WebhookPayload {
-                    server_name: server_name_str.to_string(),
-                    results: handler_results.clone(),
-                    config: RevealConfigForWebhook {
-                        sent: reveal_config.sent.clone(),
-                        recv: reveal_config.recv.clone(),
-                    },
-                    session: SessionInfo {
-                        id: session_id.clone(),
-                        data: session_data.clone(),
-                    },
-                    transcript: redacted_transcript,
-                };
-
-                // Fire and forget - don't block on webhook
-                let webhook_config = webhook_config.clone();
-                let session_id_for_webhook = session_id.clone();
-                tokio::spawn(async move {
-                    send_webhook(&webhook_config, &payload, &session_id_for_webhook).await;
-                });
-            }
-
-            // Send result to extension via the result channel
-            let result = VerificationResult {
-                results: handler_results,
-                error: None,
-            };
-
-            if result_tx.send(result).is_err() {
-                error!(
-                    "[{}] ❌ Failed to send result to extension - channel closed",
-                    session_id
-                );
-            } else {
-                info!("[{}] ✅ Result sent to extension successfully", session_id);
-            }
+            complete_session(&session_id, session, nonce, reveal_config_rx, &state).await
         }
         Ok(Err(e)) => {
-            let msg = format!("Verification failed: {}", e);
-            error!("[{}] ❌ {}", session_id, msg);
-            let _ = result_tx.send(VerificationResult {
-                results: vec![],
-                error: Some(msg),
-            });
+            // Recall: gate rejections go to the extension verbatim.
+            let msg = match e.downcast_ref::<Rejection>() {
+                Some(rejection) => rejection.0.clone(),
+                None => format!("Verification failed: {}", e),
+            };
+            VerificationResult::error(msg)
         }
-        Err(_) => {
-            let msg = format!("Verification timed out after {:?}", verification_timeout);
-            error!("[{}] ⏱️  {}", session_id, msg);
-            let _ = result_tx.send(VerificationResult {
-                results: vec![],
-                error: Some(msg),
-            });
-        }
+        Err(_) => VerificationResult::error(format!(
+            "Verification timed out after {:?}",
+            verification_timeout
+        )),
+    };
+
+    if let Some(msg) = &result.error {
+        error!("[{}] ❌ {}", session_id, msg);
+    }
+    if result_tx.send(result).is_err() {
+        error!(
+            "[{}] ❌ Failed to send result to extension - channel closed",
+            session_id
+        );
+    } else {
+        info!("[{}] ✅ Result sent to extension", session_id);
     }
 
     // Clean up session (if it still exists in the map)
@@ -1180,41 +1079,142 @@ async fn run_verifier_task(
     info!("[{}] Verifier task completed and cleaned up", session_id);
 }
 
+/// After a verified, gate-passing session: map the reveal config to handler
+/// results and sign the Recall statement.
+async fn complete_session(
+    session_id: &str,
+    session: verifier::VerifiedSession,
+    nonce: [u8; 32],
+    reveal_config_rx: oneshot::Receiver<RevealConfig>,
+    state: &Arc<AppState>,
+) -> VerificationResult {
+    let transcript = &session.transcript;
+
+    // Extract sent and received data
+    let sent_bytes = transcript.sent_unsafe();
+    let recv_bytes = transcript.received_unsafe();
+
+    info!(
+        "[{}] Sent data length: {} bytes (authed: {} bytes)",
+        session_id,
+        sent_bytes.len(),
+        transcript.sent_authed().len(),
+    );
+    info!(
+        "[{}] Received data length: {} bytes (authed: {} bytes)",
+        session_id,
+        recv_bytes.len(),
+        transcript.received_authed().len()
+    );
+
+    // Wait for RevealConfig from the session handler (with timeout)
+    let reveal_config_wait_timeout = Duration::from_secs(30);
+    let reveal_config = match timeout(reveal_config_wait_timeout, reveal_config_rx).await {
+        Ok(Ok(config)) => {
+            info!("[{}] ✅ RevealConfig received, mapping results", session_id);
+            config
+        }
+        Ok(Err(_)) => {
+            return VerificationResult::error("RevealConfig channel closed before delivery");
+        }
+        Err(_) => {
+            return VerificationResult::error(
+                "Timed out waiting for RevealConfig after verification",
+            );
+        }
+    };
+
+    // Validate that reveal_config ranges match authenticated transcript ranges.
+    if let Err(msg) = verify_reveal_config(&reveal_config, transcript) {
+        return VerificationResult::error(msg);
+    }
+
+    info!(
+        "[{}] ✅ All reveal_config ranges validated against authenticated transcript",
+        session_id
+    );
+
+    // Map revealed ranges to handler results using raw transcript bytes.
+    let mut handler_results = Vec::new();
+    handler_results.extend(process_ranges(
+        &reveal_config.sent,
+        sent_bytes,
+        "SENT",
+        session_id,
+    ));
+    handler_results.extend(process_ranges(
+        &reveal_config.recv,
+        recv_bytes,
+        "RECV",
+        session_id,
+    ));
+
+    // Recall: sign the statement. signedAt is the witness clock.
+    let signed_at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let statement = match attest::build_statement(
+        session.server_name.as_str(),
+        session.conn_time,
+        signed_at,
+        sent_bytes,
+        recv_bytes,
+        attest::tls_version_code(session.tls_version),
+        nonce,
+    ) {
+        Ok(statement) => statement,
+        Err(msg) => return VerificationResult::error(format!("Verification failed: {}", msg)),
+    };
+    let attestation = attest::attestation(&statement, &state.signer);
+    info!(
+        "[{}] ✅ Signed statement for {} (digest 0x{}, signer {})",
+        session_id,
+        statement.serverName,
+        statement_digest_hex(&statement),
+        attestation.signer
+    );
+
+    VerificationResult {
+        results: handler_results,
+        attestation: Some(attestation),
+        error: None,
+    }
+}
+
+fn statement_digest_hex(statement: &attest::CaptureStatement) -> String {
+    use std::fmt::Write;
+    attest::eip712_digest(statement)
+        .iter()
+        .fold(String::with_capacity(64), |mut out, b| {
+            let _ = write!(out, "{:02x}", b);
+            out
+        })
+}
+
 /// Validates that all ranges in reveal config are fully within authenticated transcript ranges.
 ///
-/// "Authenticated" means either:
-/// - Revealed as plaintext (in `transcript.sent_authed()` / `received_authed()`), or
-/// - Hash-committed via `TranscriptCommitment::Hash` (the prover proved knowledge of
-///   plaintext whose hash matches the commitment; the range itself is bound).
-///
-/// Returns error with (direction, start, end) if any range contains unauthenticated data.
+/// Recall: transcript commitments are rejected before `accept()`, so HASH
+/// handlers can never be satisfied and are refused here; "authenticated"
+/// means revealed as plaintext.
 fn verify_reveal_config(
     reveal_config: &RevealConfig,
     transcript: &PartialTranscript,
-    transcript_commitments: &[tlsn::transcript::TranscriptCommitment],
-) -> Result<(), (String, usize, usize)> {
-    use tlsn::transcript::{Direction, TranscriptCommitment};
-
-    // Union of revealed + hash-committed ranges, per direction.
-    let mut sent_auth = transcript.sent_authed().clone();
-    let mut recv_auth = transcript.received_authed().clone();
-    for commitment in transcript_commitments {
-        if let TranscriptCommitment::Hash(hash) = commitment {
-            match hash.direction {
-                Direction::Sent => sent_auth.union_mut(&hash.idx),
-                Direction::Received => recv_auth.union_mut(&hash.idx),
-            }
-        }
-    }
-
+) -> Result<(), String> {
     fn validate_ranges_against_auth_set(
         ranges: &[RangeWithHandler],
         auth_set: &RangeSet<usize>,
         direction: &str,
-    ) -> Result<(), (String, usize, usize)> {
+    ) -> Result<(), String> {
         for range in ranges {
+            if let HandlerAction::Hash { .. } = range.handler.action {
+                return Err(gates::COMMITMENTS.to_string());
+            }
             if !(range.start..range.end).all(|i| auth_set.contains(&i)) {
-                return Err((direction.to_string(), range.start, range.end));
+                return Err(format!(
+                    "Invalid {} range [{}, {}) - not fully within authenticated ranges",
+                    direction, range.start, range.end
+                ));
             }
 
             debug!(
@@ -1225,8 +1225,8 @@ fn verify_reveal_config(
         Ok(())
     }
 
-    validate_ranges_against_auth_set(&reveal_config.sent, &sent_auth, "sent")?;
-    validate_ranges_against_auth_set(&reveal_config.recv, &recv_auth, "recv")?;
+    validate_ranges_against_auth_set(&reveal_config.sent, transcript.sent_authed(), "sent")?;
+    validate_ranges_against_auth_set(&reveal_config.recv, transcript.received_authed(), "recv")?;
 
     Ok(())
 }
@@ -1241,48 +1241,28 @@ async fn cleanup_session(state: &Arc<AppState>, session_id: &str) {
 
 /// Processes ranges and extracts values from the transcript.
 ///
-/// - For REVEAL handlers, returns the revealed plaintext bytes as UTF-8.
-/// - For HASH handlers, returns the hex-encoded hash digest from the matching
-///   `TranscriptCommitment::Hash` (plaintext was never revealed).
+/// Returns the revealed plaintext bytes as (lossy) UTF-8. Recall: HASH
+/// handlers are refused by `verify_reveal_config`.
 fn process_ranges(
     ranges: &[RangeWithHandler],
     bytes: &[u8],
-    direction: tlsn::transcript::Direction,
-    transcript_commitments: &[tlsn::transcript::TranscriptCommitment],
     direction_label: &str,
     session_id: &str,
 ) -> Vec<HandlerResult> {
     ranges
         .iter()
         .map(|range_with_handler| {
-            let value = match range_with_handler.handler.action {
-                HandlerAction::Hash { .. } => find_hash_digest(
-                    transcript_commitments,
-                    direction,
-                    range_with_handler.start,
-                    range_with_handler.end,
+            let value = if range_with_handler.start < bytes.len()
+                && range_with_handler.end <= bytes.len()
+                && range_with_handler.start < range_with_handler.end
+            {
+                let extracted_bytes = &bytes[range_with_handler.start..range_with_handler.end];
+                String::from_utf8_lossy(extracted_bytes).to_string()
+            } else {
+                format!(
+                    "ERROR: Invalid range [{}, {})",
+                    range_with_handler.start, range_with_handler.end
                 )
-                .unwrap_or_else(|| {
-                    format!(
-                        "ERROR: No hash commitment for [{}, {})",
-                        range_with_handler.start, range_with_handler.end
-                    )
-                }),
-                HandlerAction::Reveal => {
-                    if range_with_handler.start < bytes.len()
-                        && range_with_handler.end <= bytes.len()
-                        && range_with_handler.start < range_with_handler.end
-                    {
-                        let extracted_bytes =
-                            &bytes[range_with_handler.start..range_with_handler.end];
-                        String::from_utf8_lossy(extracted_bytes).to_string()
-                    } else {
-                        format!(
-                            "ERROR: Invalid range [{}, {})",
-                            range_with_handler.start, range_with_handler.end
-                        )
-                    }
-                }
             };
 
             debug!(
@@ -1301,71 +1281,4 @@ fn process_ranges(
             }
         })
         .collect()
-}
-
-/// Finds the hash digest (hex) for a given range+direction from the list of
-/// transcript commitments. Returns `None` if no `Hash` commitment covers the
-/// exact range for the requested direction.
-fn find_hash_digest(
-    commitments: &[tlsn::transcript::TranscriptCommitment],
-    direction: tlsn::transcript::Direction,
-    start: usize,
-    end: usize,
-) -> Option<String> {
-    use tlsn::transcript::TranscriptCommitment;
-
-    for commitment in commitments {
-        if let TranscriptCommitment::Hash(hash) = commitment {
-            if hash.direction == direction
-                && (start..end).all(|i| hash.idx.contains(&i))
-            {
-                let bytes = hash.hash.value.as_bytes();
-                let mut hex_str = String::with_capacity(bytes.len() * 2);
-                for b in bytes {
-                    use std::fmt::Write;
-                    let _ = write!(hex_str, "{:02x}", b);
-                }
-                return Some(hex_str);
-            }
-        }
-    }
-    None
-}
-
-
-/// Send webhook POST request to configured endpoint
-async fn send_webhook(config: &WebhookConfig, payload: &WebhookPayload, session_id: &str) {
-    let client = reqwest::Client::new();
-
-    let mut request = client.post(&config.url).json(payload);
-
-    // Add custom headers from config
-    for (key, value) in &config.headers {
-        request = request.header(key, value);
-    }
-
-    match request.send().await {
-        Ok(response) => {
-            if response.status().is_success() {
-                info!(
-                    "[{}] ✅ Webhook POST successful: {}",
-                    session_id, config.url
-                );
-            } else {
-                error!(
-                    "[{}] ❌ Webhook POST failed with status {}: {}",
-                    session_id,
-                    response.status(),
-                    config.url
-                );
-            }
-        }
-        Err(e) => {
-            // Log error but don't fail the verification
-            error!(
-                "[{}] ❌ Webhook POST error: {} - {}",
-                session_id, config.url, e
-            );
-        }
-    }
 }

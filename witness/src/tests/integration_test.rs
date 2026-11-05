@@ -1,10 +1,15 @@
-//! Integration test for the verifier server with webhook functionality.
+//! Recall witness integration tests (replace upstream's webhook test).
 //!
-//! This test validates the complete end-to-end flow:
-//! 1. Verifier server with webhook configuration
-//! 2. Prover connecting via WebSocket
-//! 3. MPC-TLS verification against swapi.dev
-//! 4. Webhook delivery to test server
+//! The fast tests run an in-process witness and need no network.
+//!
+//! The `e2e_*` tests are `#[ignore]`d: they run a real MPC-TLS prover against
+//! the devnet notice fixture (`pnpm devnet:up`, which publishes it on
+//! localhost:443 with the fixture CA). Run them in release mode:
+//!
+//! ```sh
+//! cargo test --release -- --ignored e2e_
+//! WITNESS_E2E_ADDR=127.0.0.1:7047 cargo test --release -- --ignored e2e_  # the devnet container
+//! ```
 
 use std::collections::HashMap;
 use std::future::IntoFuture;
@@ -12,793 +17,553 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use alloy_primitives::{Signature, B256};
 use async_tungstenite::tungstenite::Message;
-use axum::{extract::State, routing::post, Json, Router};
-use futures_util::{io::AsyncRead, io::AsyncWrite, StreamExt};
+use futures_util::{SinkExt, StreamExt};
 use http_body_util::Empty;
-use hyper::{body::Bytes, Request, StatusCode};
+use hyper::{body::Bytes, Request};
 use hyper_util::rt::TokioIo;
-use serde::{Deserialize, Serialize};
+use recall_witness::{attest, gates};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tokio::net::TcpStream;
-use tokio::sync::{oneshot, Mutex};
-use tokio::task::JoinHandle;
+use tokio::sync::Mutex;
 use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
-use tower_http::cors::CorsLayer;
-use tracing::info;
 use ws_stream_tungstenite::WsStream;
 
 use tlsn::{
     config::{
-        prove::ProveConfig, prover::ProverConfig, tls::TlsClientConfig,
-        tls_commit::mpc::MpcTlsConfig,
+        prove::ProveConfig,
+        prover::ProverConfig,
+        tls::TlsClientConfig,
+        tls_commit::{mpc::MpcTlsConfig, proxy::ProxyTlsConfig},
     },
-    prover::Prover,
-    Mpc, Session,
+    connection::ServerName,
+    transcript::TranscriptCommitConfig,
+    webpki::{CertificateDer, RootCertStore},
+    Session,
 };
 
-// ============================================================================
-// Test Configuration Constants
-// ============================================================================
+// Hardhat account #2: public, test-only (same as the devnet witness).
+const TEST_KEY: &str = "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a";
+const TEST_SIGNER: &str = "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC";
+const NOTICE_HOST: &str = "notice.recall.test";
+const NONCE: &str = "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const MAX_SENT: usize = 4096;
+const MAX_RECV: usize = 16384;
 
-const VERIFIER_PORT: u16 = 17047;
-const WEBHOOK_PORT: u16 = 18080;
-const MAX_SENT_DATA: usize = 4096;
-const MAX_RECV_DATA: usize = 16384;
+type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
-// ============================================================================
-// Types matching the verifier's WebSocket protocol
-// ============================================================================
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "UPPERCASE")]
-enum HandlerType {
-    Sent,
-    Recv,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-enum HandlerPart {
-    StartLine,
-    Protocol,
-    Method,
-    RequestTarget,
-    StatusCode,
-    Headers,
-    Body,
-    All,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "UPPERCASE")]
-enum HandlerAction {
-    Reveal,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Handler {
-    #[serde(rename = "type")]
-    handler_type: HandlerType,
-    part: HandlerPart,
-    action: HandlerAction,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct RangeWithHandler {
-    start: usize,
-    end: usize,
-    handler: Handler,
-}
-
-// ============================================================================
-// Test Webhook Server
-// ============================================================================
-
-/// Simple HTTP server that captures POST requests for verification
-struct TestWebhookServer {
-    received_payloads: Arc<Mutex<Vec<Value>>>,
-    shutdown_tx: Option<oneshot::Sender<()>>,
-    handle: Option<JoinHandle<()>>,
-}
-
-impl TestWebhookServer {
-    async fn start(port: u16) -> Self {
-        let received_payloads = Arc::new(Mutex::new(Vec::new()));
-        let payloads_clone = received_payloads.clone();
-
-        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-
-        let app = Router::new()
-            .route("/", post(webhook_handler))
-            .layer(CorsLayer::permissive())
-            .with_state(payloads_clone);
-
-        let addr = SocketAddr::from(([127, 0, 0, 1], port));
-
-        let handle = tokio::spawn(async move {
-            let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-            info!("[TestWebhookServer] Listening on {}", addr);
-
-            axum::serve(listener, app)
-                .with_graceful_shutdown(async {
-                    let _ = shutdown_rx.await;
-                    info!("[TestWebhookServer] Shutting down");
-                })
-                .await
-                .unwrap();
-        });
-
-        // Wait for server to be ready
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
-        Self {
-            received_payloads,
-            shutdown_tx: Some(shutdown_tx),
-            handle: Some(handle),
-        }
-    }
-
-    async fn get_payloads(&self) -> Vec<Value> {
-        self.received_payloads.lock().await.clone()
-    }
-
-    async fn shutdown(mut self) {
-        if let Some(tx) = self.shutdown_tx.take() {
-            let _ = tx.send(());
-        }
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.await;
-        }
-    }
-}
-
-async fn webhook_handler(
-    State(payloads): State<Arc<Mutex<Vec<Value>>>>,
-    Json(body): Json<Value>,
-) -> StatusCode {
-    info!("[TestWebhookServer] Received webhook: {:?}", body);
-    payloads.lock().await.push(body);
-    StatusCode::OK
-}
-
-// ============================================================================
-// Verifier Server Launcher
-// ============================================================================
-
-async fn start_verifier_server(webhook_port: u16, verifier_port: u16) -> JoinHandle<()> {
-    // Create config with webhook for raw.githubusercontent.com
-    let config_yaml = format!(
-        r#"
-webhooks:
-  "raw.githubusercontent.com":
-    url: "http://127.0.0.1:{}"
-    headers: {{}}
-"#,
-        webhook_port
+fn dev_ca() -> RootCertStore {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../fixtures/notice/.certs/ca.der"
     );
+    let der = std::fs::read(path).expect("fixture CA (run fixtures/notice/gen-certs.sh)");
+    RootCertStore {
+        roots: vec![CertificateDer(der)],
+    }
+}
 
-    let config: crate::Config = serde_yaml_ng::from_str(&config_yaml).unwrap();
-
-    let app_state = Arc::new(crate::AppState {
+/// Starts an in-process witness on an ephemeral port; returns its address.
+async fn start_witness(root_store: RootCertStore, dev_allow_hosts: Vec<String>) -> SocketAddr {
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .try_init();
+    let state = Arc::new(crate::AppState {
         sessions: Arc::new(Mutex::new(HashMap::new())),
-        config: Arc::new(config),
+        signer: Arc::new(attest::signer_from_env(TEST_KEY).unwrap()),
+        root_store: Arc::new(root_store),
+        dev_allow_hosts: Arc::new(dev_allow_hosts),
+        limits: gates::Limits {
+            max_sent: MAX_SENT,
+            max_recv: MAX_RECV,
+        },
     });
-
-    let app = Router::new()
-        .route("/health", axum::routing::get(|| async { "ok" }))
-        .route("/info", axum::routing::get(crate::info_handler))
-        .route("/session", axum::routing::get(crate::session_ws_handler))
-        .route("/verifier", axum::routing::get(crate::verifier_ws_handler))
-        .route("/proxy", axum::routing::get(crate::proxy_ws_handler))
-        .layer(CorsLayer::permissive())
-        .with_state(app_state);
-
-    let addr = SocketAddr::from(([127, 0, 0, 1], verifier_port));
-
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
-        let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-        info!("[TestVerifier] Listening on {}", addr);
-        axum::serve(listener, app).await.unwrap();
-    })
+        axum::serve(listener, crate::app(state)).await.unwrap();
+    });
+    addr
 }
 
-// ============================================================================
-// WebSocket Session Client
-// ============================================================================
+type ClientWs = async_tungstenite::WebSocketStream<tokio_util::compat::Compat<TcpStream>>;
 
-/// Client that implements the /session WebSocket protocol
-struct SessionClient {
-    ws: async_tungstenite::WebSocketStream<tokio_util::compat::Compat<TcpStream>>,
-    session_id: Option<String>,
-}
-
-impl SessionClient {
-    async fn connect(verifier_url: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let url = format!("{}/session", verifier_url);
-        info!("[SessionClient] Connecting to {}", url);
-
-        // Parse the URL to get host and port
-        let parsed = url.parse::<http::Uri>()?;
-        let host = parsed.host().ok_or("Missing host in URL")?;
-        let port = parsed.port_u16().unwrap_or(80);
-
-        // Connect via TCP and wrap for futures_io compatibility
-        let tcp_stream = TcpStream::connect((host, port)).await?;
-        let stream = tcp_stream.compat();
-
-        // Perform WebSocket handshake
-        let (ws, _) = async_tungstenite::client_async(&url, stream).await?;
-        info!("[SessionClient] Connected");
-
-        Ok(Self {
-            ws,
-            session_id: None,
-        })
-    }
-
-    async fn register(
-        &mut self,
-        max_recv_data: usize,
-        max_sent_data: usize,
-        session_data: HashMap<String, String>,
-    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-        let msg = json!({
-            "type": "register",
-            "maxRecvData": max_recv_data,
-            "maxSentData": max_sent_data,
-            "sessionData": session_data
-        });
-
-        info!("[SessionClient] Sending register: {:?}", msg);
-        self.ws.send(Message::Text(msg.to_string().into())).await?;
-
-        // Wait for session_registered response
-        while let Some(msg) = self.ws.next().await {
-            match msg? {
-                Message::Text(text) => {
-                    let response: Value = serde_json::from_str(&text)?;
-                    info!("[SessionClient] Received: {:?}", response);
-
-                    if response["type"] == "session_registered" {
-                        let session_id = response["sessionId"]
-                            .as_str()
-                            .ok_or("Missing sessionId")?
-                            .to_string();
-                        self.session_id = Some(session_id.clone());
-                        return Ok(session_id);
-                    } else if response["type"] == "error" {
-                        return Err(format!(
-                            "Server error: {}",
-                            response["message"].as_str().unwrap_or("unknown")
-                        )
-                        .into());
-                    }
-                }
-                Message::Close(_) => {
-                    return Err("Connection closed unexpectedly".into());
-                }
-                _ => {}
-            }
-        }
-
-        Err("Connection closed before registration".into())
-    }
-
-    async fn send_reveal_config(
-        &mut self,
-        sent: Vec<RangeWithHandler>,
-        recv: Vec<RangeWithHandler>,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        let msg = json!({
-            "type": "reveal_config",
-            "sent": sent,
-            "recv": recv
-        });
-
-        info!(
-            "[SessionClient] Sending reveal_config: {} sent, {} recv",
-            sent.len(),
-            recv.len()
-        );
-        self.ws.send(Message::Text(msg.to_string().into())).await?;
-
-        Ok(())
-    }
-
-    async fn wait_for_completion(
-        &mut self,
-    ) -> Result<Vec<Value>, Box<dyn std::error::Error + Send + Sync>> {
-        info!("[SessionClient] Waiting for session completion...");
-
-        while let Some(msg) = self.ws.next().await {
-            match msg? {
-                Message::Text(text) => {
-                    let response: Value = serde_json::from_str(&text)?;
-                    info!("[SessionClient] Received: {:?}", response);
-
-                    if response["type"] == "session_completed" {
-                        let results = response["results"]
-                            .as_array()
-                            .ok_or("Missing results")?
-                            .clone();
-                        return Ok(results);
-                    } else if response["type"] == "error" {
-                        return Err(format!(
-                            "Server error: {}",
-                            response["message"].as_str().unwrap_or("unknown")
-                        )
-                        .into());
-                    }
-                }
-                Message::Close(_) => {
-                    return Err("Connection closed unexpectedly".into());
-                }
-                _ => {}
-            }
-        }
-
-        Err("Connection closed before completion".into())
-    }
-}
-
-// ============================================================================
-// Prover Implementation
-// ============================================================================
-
-/// Helper to connect WebSocket with futures_io compatible stream
-async fn connect_ws(
-    url: &str,
-) -> Result<
-    async_tungstenite::WebSocketStream<tokio_util::compat::Compat<TcpStream>>,
-    Box<dyn std::error::Error + Send + Sync>,
-> {
+async fn connect_ws(url: &str) -> Result<ClientWs, BoxError> {
     let parsed = url.parse::<http::Uri>()?;
     let host = parsed.host().ok_or("Missing host in URL")?;
     let port = parsed.port_u16().unwrap_or(80);
-
     let tcp_stream = TcpStream::connect((host, port)).await?;
-    let stream = tcp_stream.compat();
-
-    let (ws, _) = async_tungstenite::client_async(url, stream).await?;
+    let (ws, _) = async_tungstenite::client_async(url, tcp_stream.compat()).await?;
     Ok(ws)
 }
 
-/// Helper to connect secure WebSocket (wss://) with futures_io compatible stream
-async fn connect_wss(
-    url: &str,
-) -> Result<
-    async_tungstenite::WebSocketStream<
-        tokio_util::compat::Compat<tokio_native_tls::TlsStream<TcpStream>>,
-    >,
-    Box<dyn std::error::Error + Send + Sync>,
-> {
-    let parsed = url.parse::<http::Uri>()?;
-    let host = parsed.host().ok_or("Missing host in URL")?.to_string();
-    let port = parsed.port_u16().unwrap_or(443);
-
-    let tcp_stream = TcpStream::connect((&*host, port)).await?;
-
-    // Create TLS connector
-    let connector = native_tls::TlsConnector::new()?;
-    let connector = tokio_native_tls::TlsConnector::from(connector);
-    let tls_stream = connector.connect(&host, tcp_stream).await?;
-
-    let stream = tls_stream.compat();
-    let (ws, _) = async_tungstenite::client_async(url, stream).await?;
-    Ok(ws)
+/// Reads the next JSON text message from the session WebSocket.
+async fn next_json(ws: &mut ClientWs) -> Result<Value, BoxError> {
+    while let Some(msg) = ws.next().await {
+        if let Message::Text(text) = msg? {
+            return Ok(serde_json::from_str(&text)?);
+        }
+    }
+    Err("session WebSocket closed".into())
 }
 
-/// Helper function that performs MPC-TLS and HTTP request with a given proxy stream
-async fn run_prover_with_stream<S>(
-    prover: Prover,
-    mpc_tls_config: MpcTlsConfig,
-    tls_client_config: TlsClientConfig,
-    proxy_stream: S,
-) -> Result<(Vec<u8>, Vec<u8>), Box<dyn std::error::Error + Send + Sync>>
-where
-    S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
-{
-    // 5. Start the TLS commitment protocol (MPC mode).
-    let prover: Prover<tlsn::prover::state::CommitAccepted<Mpc>> = prover
-        .commit(mpc_tls_config)
+async fn register(addr: SocketAddr, session_data: Value, max_recv: usize) -> (ClientWs, Value) {
+    let mut ws = connect_ws(&format!("ws://{addr}/session")).await.unwrap();
+    let msg = json!({
+        "type": "register",
+        "maxRecvData": max_recv,
+        "maxSentData": MAX_SENT,
+        "sessionData": session_data,
+    });
+    ws.send(Message::Text(msg.to_string().into()))
         .await
-        .map_err(|e| format!("Commitment failed: {}", e))?;
-
-    // 6. Pass proxy connection into the prover for TLS
-    let (mpc_tls_connection, connected_prover) = prover
-        .connect(tls_client_config, proxy_stream)
-        .map_err(|e| format!("TLS connect failed: {}", e))?;
-
-    info!("[Prover] MPC-TLS connection established");
-
-    // Wrap for hyper compatibility
-    let mpc_tls_connection = TokioIo::new(mpc_tls_connection.compat());
-
-    // Spawn the prover task — Prover<Connected<S>> is IntoFuture, not Future.
-    let prover_task = tokio::spawn(connected_prover.into_future());
-
-    // 7. HTTP handshake
-    let (mut request_sender, connection) =
-        hyper::client::conn::http1::handshake(mpc_tls_connection)
-            .await
-            .map_err(|e| format!("HTTP handshake failed: {}", e))?;
-
-    tokio::spawn(connection);
-
-    // 8. Send HTTP GET request
-    info!("[Prover] Sending GET /tlsnotary/tlsn/ceadf458f6f75909eda013aa50108f9f94956188/crates/server-fixture/server/src/data/1kb.json");
-    let request = Request::builder()
-        .uri("/tlsnotary/tlsn/ceadf458f6f75909eda013aa50108f9f94956188/crates/server-fixture/server/src/data/1kb.json")
-        .header("Host", "raw.githubusercontent.com")
-        .header("Accept", "application/json")
-        .header("Connection", "close")
-        .method("GET")
-        .body(Empty::<Bytes>::new())
         .unwrap();
-
-    let response = request_sender
-        .send_request(request)
-        .await
-        .map_err(|e| format!("HTTP request failed: {}", e))?;
-
-    info!("[Prover] Response status: {}", response.status());
-    assert_eq!(response.status(), StatusCode::OK);
-
-    // 9. Wait for prover task to complete
-    let mut prover = prover_task
-        .await
-        .map_err(|e| format!("Prover task panicked: {}", e))?
-        .map_err(|e| format!("Prover task failed: {}", e))?;
-
-    let sent = prover.transcript().sent().to_vec();
-    let recv = prover.transcript().received().to_vec();
-
-    info!(
-        "[Prover] Transcript: sent={} bytes, recv={} bytes",
-        sent.len(),
-        recv.len()
-    );
-
-    // 10. Build proof configuration (reveal everything including server identity)
-    let mut prove_config = ProveConfig::builder(prover.transcript());
-    prove_config.server_identity();
-    prove_config
-        .reveal_sent(&(0..sent.len()))
-        .map_err(|e| format!("reveal_sent failed: {}", e))?;
-    prove_config
-        .reveal_recv(&(0..recv.len()))
-        .map_err(|e| format!("reveal_recv failed: {}", e))?;
-    let prove_config = prove_config
-        .build()
-        .map_err(|e| format!("build proof failed: {}", e))?;
-
-    // 11. Send proof to verifier
-    info!("[Prover] Sending proof to verifier");
-    prover
-        .prove(&prove_config)
-        .await
-        .map_err(|e| format!("prove failed: {}", e))?;
-
-    prover
-        .close()
-        .await
-        .map_err(|e| format!("close failed: {}", e))?;
-
-    info!("[Prover] Proof sent successfully");
-
-    Ok((sent, recv))
+    let reply = next_json(&mut ws).await.unwrap();
+    (ws, reply)
 }
 
-/// Prover that connects to verifier and performs MPC-TLS with swapi.dev
-async fn run_prover(
-    verifier_ws_url: String,
-    proxy_url: String,
-    max_sent_data: usize,
-    max_recv_data: usize,
-) -> Result<(Vec<u8>, Vec<u8>), Box<dyn std::error::Error + Send + Sync>> {
-    info!("[Prover] Connecting to verifier at {}", verifier_ws_url);
-
-    // 1. Connect to verifier WebSocket (ws://)
-    let verifier_ws = connect_ws(&verifier_ws_url).await?;
-    info!("[Prover] Connected to verifier");
-
-    // Convert WebSocket to stream compatible with tlsn
-    // WsStream implements tokio::io::AsyncRead/AsyncWrite when inner implements futures_io traits
-    let verifier_stream = WsStream::new(verifier_ws);
-
-    // 2. Create session with verifier stream
-    let session = Session::new(verifier_stream);
-    let (driver, mut handle) = session.split();
-
-    // Spawn the session driver in the background
-    let driver_task = tokio::spawn(driver);
-
-    // 3. Create TLS commit config for MPC protocol
-    let mpc_tls_config = MpcTlsConfig::builder()
-        .max_sent_data(max_sent_data)
-        .max_recv_data(max_recv_data)
-        .build()
-        .map_err(|e| format!("Failed to build MPC TLS config: {}", e))?;
-
-    // 4. Create prover config
-    let prover_config = ProverConfig::builder()
-        .build()
-        .map_err(|e| format!("Failed to build prover config: {}", e))?;
-
-    info!("[Prover] Setting up MPC-TLS with verifier");
-
-    // 5. Create prover via handle
-    let prover = handle
-        .new_prover(prover_config)
-        .map_err(|e| format!("Failed to create prover: {}", e))?;
-
-    // 6. Create TLS client config with server name and root certs
-    use tlsn::{connection::ServerName, webpki::RootCertStore};
-    let tls_client_config = TlsClientConfig::builder()
-        .server_name(ServerName::Dns(
-            "raw.githubusercontent.com".try_into().unwrap(),
-        ))
-        .root_store(RootCertStore::mozilla())
-        .build()
-        .map_err(|e| format!("Failed to build TLS client config: {}", e))?;
-
-    info!("[Prover] Connecting to proxy at {}", proxy_url);
-
-    // 7. Connect to proxy WebSocket (ws:// or wss://) and run prover
-    let result = if proxy_url.starts_with("wss://") {
-        let proxy_ws = connect_wss(&proxy_url).await?;
-        info!("[Prover] Connected to proxy (wss)");
-        let proxy_stream = WsStream::new(proxy_ws);
-        run_prover_with_stream(prover, mpc_tls_config, tls_client_config, proxy_stream).await
-    } else {
-        let proxy_ws = connect_ws(&proxy_url).await?;
-        info!("[Prover] Connected to proxy (ws)");
-        let proxy_stream = WsStream::new(proxy_ws);
-        run_prover_with_stream(prover, mpc_tls_config, tls_client_config, proxy_stream).await
-    };
-
-    // 8. Close the session handle
-    handle.close();
-
-    // 9. Wait for the driver to complete
-    driver_task
+/// GET with WebSocket upgrade headers (so the WS extractor passes and the
+/// handler's own checks decide); returns (status, body).
+async fn ws_upgrade_get(url: &str) -> (u16, String) {
+    let resp = reqwest::Client::new()
+        .get(url)
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Version", "13")
+        .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+        .send()
         .await
-        .map_err(|e| format!("Driver task failed: {}", e))?
-        .map_err(|e| format!("Session driver error: {}", e))?;
+        .unwrap();
+    let status = resp.status().as_u16();
+    (status, resp.text().await.unwrap_or_default())
+}
 
+// ============================================================================
+// Fast tests (no network)
+// ============================================================================
+
+#[tokio::test]
+async fn health() {
+    let addr = start_witness(RootCertStore::empty(), vec![]).await;
+    let body = reqwest::get(format!("http://{addr}/health"))
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert_eq!(body, "ok");
+}
+
+#[tokio::test]
+async fn info_reports_signer() {
+    let addr = start_witness(RootCertStore::empty(), vec![]).await;
+    let info: Value = reqwest::get(format!("http://{addr}/info"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(info["signer"], TEST_SIGNER);
+    assert_eq!(info["tlsn_version"], "0.1.0-alpha.15");
+}
+
+#[tokio::test]
+async fn register_without_nonce_rejected() {
+    let addr = start_witness(RootCertStore::empty(), vec![]).await;
+    let (_ws, reply) = register(addr, json!({}), MAX_RECV).await;
+    assert_eq!(reply, json!({"type": "error", "message": gates::NONCE}));
+    let (_ws, reply) = register(addr, json!({"nonce": "0x1234"}), MAX_RECV).await;
+    assert_eq!(reply, json!({"type": "error", "message": gates::NONCE}));
+}
+
+#[tokio::test]
+async fn register_over_limit_rejected() {
+    let addr = start_witness(RootCertStore::empty(), vec![]).await;
+    let (_ws, reply) = register(addr, json!({"nonce": NONCE}), MAX_RECV + 1).await;
+    assert_eq!(reply["type"], "error");
+    let msg = reply["message"].as_str().unwrap();
+    assert!(msg.starts_with("recall: maxRecvData too large"), "{msg}");
+}
+
+#[tokio::test]
+async fn proxy_without_session_forbidden() {
+    let addr = start_witness(RootCertStore::empty(), vec![]).await;
+    let (status, body) = ws_upgrade_get(&format!("http://{addr}/proxy?token=example.com")).await;
+    assert_eq!((status, body.as_str()), (403, gates::PROXY_SESSION));
+    let (status, body) = ws_upgrade_get(&format!(
+        "http://{addr}/proxy?token=example.com&sessionId=nope"
+    ))
+    .await;
+    assert_eq!((status, body.as_str()), (403, gates::PROXY_SESSION));
+}
+
+#[tokio::test]
+async fn proxy_non_443_rejected() {
+    let addr = start_witness(RootCertStore::empty(), vec![]).await;
+    let (status, body) = ws_upgrade_get(&format!(
+        "http://{addr}/proxy?token=example.com:22&sessionId=x"
+    ))
+    .await;
+    assert_eq!((status, body.as_str()), (400, gates::PROXY_PORT));
+}
+
+#[tokio::test]
+async fn proxy_private_target_forbidden_and_session_single_use() {
+    let addr = start_witness(RootCertStore::empty(), vec![]).await;
+    let (_ws, reply) = register(addr, json!({"nonce": NONCE}), MAX_RECV).await;
+    let sid = reply["sessionId"]
+        .as_str()
+        .expect("session_registered")
+        .to_string();
+    let (status, body) = ws_upgrade_get(&format!(
+        "http://{addr}/proxy?token=127.0.0.1&sessionId={sid}"
+    ))
+    .await;
+    assert_eq!((status, body.as_str()), (403, gates::PROXY_TARGET));
+    let (status, body) = ws_upgrade_get(&format!(
+        "http://{addr}/proxy?token=127.0.0.1&sessionId={sid}"
+    ))
+    .await;
+    assert_eq!((status, body.as_str()), (403, gates::PROXY_SESSION));
+}
+
+#[tokio::test]
+async fn proxy_has_no_cors_but_info_does() {
+    let addr = start_witness(RootCertStore::empty(), vec![]).await;
+    let client = reqwest::Client::new();
+    let info = client
+        .get(format!("http://{addr}/info"))
+        .header("Origin", "https://example.com")
+        .send()
+        .await
+        .unwrap();
+    assert!(info.headers().contains_key("access-control-allow-origin"));
+    let proxy = client
+        .get(format!("http://{addr}/proxy?token=example.com"))
+        .header("Origin", "https://example.com")
+        .send()
+        .await
+        .unwrap();
+    assert!(!proxy.headers().contains_key("access-control-allow-origin"));
+}
+
+// ============================================================================
+// End-to-end MPC-TLS against the devnet notice fixture (#[ignore])
+// ============================================================================
+
+/// How the test prover misbehaves (mirrors the extension's dev overrides).
+#[derive(Clone, Copy, Default)]
+struct Overrides {
+    proxy_mode: bool,
+    cookie: bool,
+    host_header: Option<&'static str>,
+    recv_reveal_end: Option<usize>,
+    commit: bool,
+    no_identity: bool,
+}
+
+struct Outcome {
+    /// Final session message (`session_completed` or `error`).
+    message: Value,
+    /// The prover's transcript (empty if the prover failed).
+    sent: Vec<u8>,
+    recv: Vec<u8>,
+}
+
+type SessionSink = futures_util::stream::SplitSink<ClientWs, Message>;
+
+async fn run_capture(path: &str, o: Overrides) -> Outcome {
+    // By default an in-process witness dials "localhost" (the notice fixture
+    // published on :443); TLS still names notice.recall.test and checks the
+    // fixture CA. With WITNESS_E2E_ADDR (e.g. 127.0.0.1:7047) the tests drive
+    // the devnet witness container, which dials notice.recall.test itself.
+    let (addr, proxy_host) = match std::env::var("WITNESS_E2E_ADDR") {
+        Ok(external) => (external.parse().expect("WITNESS_E2E_ADDR"), NOTICE_HOST),
+        Err(_) => (
+            start_witness(dev_ca(), vec!["localhost".to_string()]).await,
+            "localhost",
+        ),
+    };
+    let (session_ws, reply) = register(addr, json!({"nonce": NONCE}), MAX_RECV).await;
+    let sid = reply["sessionId"]
+        .as_str()
+        .expect("session_registered")
+        .to_string();
+    let (sink, mut stream) = session_ws.split();
+
+    let prover = tokio::spawn(prove(
+        format!("ws://{addr}/verifier?sessionId={sid}"),
+        format!("ws://{addr}/proxy?token={proxy_host}&sessionId={sid}"),
+        path.to_string(),
+        o,
+        sink,
+    ));
+
+    let message = tokio::time::timeout(Duration::from_secs(180), async {
+        while let Some(msg) = stream.next().await {
+            if let Ok(Message::Text(text)) = msg {
+                let m: Value = serde_json::from_str(&text).unwrap();
+                if m["type"] == "session_completed" || m["type"] == "error" {
+                    return m;
+                }
+            }
+        }
+        panic!("session WebSocket closed without a result");
+    })
+    .await
+    .expect("session result in time");
+
+    let (sent, recv) = match tokio::time::timeout(Duration::from_secs(60), prover).await {
+        Ok(Ok(Ok(t))) => t,
+        Ok(Ok(Err(e))) => {
+            eprintln!("prover error: {e}");
+            (vec![], vec![])
+        }
+        _ => (vec![], vec![]),
+    };
+    Outcome {
+        message,
+        sent,
+        recv,
+    }
+}
+
+fn reveal_all(direction: &str, len: usize) -> Value {
+    json!([{
+        "start": 0,
+        "end": len,
+        "handler": {"type": direction, "part": "ALL", "action": {"kind": "REVEAL"}},
+    }])
+}
+
+/// A test prover modelled on the extension's flow: MPC-TLS through the
+/// witness /proxy, GET `path`, send reveal_config, then prove.
+async fn prove(
+    verifier_url: String,
+    proxy_url: String,
+    path: String,
+    o: Overrides,
+    mut session_sink: SessionSink,
+) -> Result<(Vec<u8>, Vec<u8>), BoxError> {
+    let verifier_ws = connect_ws(&verifier_url).await?;
+    let session = Session::new(WsStream::new(verifier_ws));
+    let (driver, mut handle) = session.split();
+    let driver_task = tokio::spawn(driver);
+    let prover = handle.new_prover(ProverConfig::builder().build()?)?;
+
+    let result: Result<(Vec<u8>, Vec<u8>), BoxError> = async {
+        if o.proxy_mode {
+            let cfg = ProxyTlsConfig::builder()
+                .server_name(NOTICE_HOST.try_into().unwrap())
+                .build()?;
+            prover.commit(cfg).await?;
+            return Err("proxy-mode commitment was accepted".into());
+        }
+
+        let mpc = MpcTlsConfig::builder()
+            .max_sent_data(MAX_SENT)
+            .max_recv_data(MAX_RECV)
+            .build()?;
+        let prover = prover.commit(mpc).await?;
+        let tls = TlsClientConfig::builder()
+            .server_name(ServerName::Dns(NOTICE_HOST.try_into().unwrap()))
+            .root_store(dev_ca())
+            .build()?;
+        let proxy_ws = connect_ws(&proxy_url).await?;
+        let (conn, connected) = prover.connect(tls, WsStream::new(proxy_ws))?;
+        let prover_task = tokio::spawn(connected.into_future());
+
+        let (mut sender, connection) =
+            hyper::client::conn::http1::handshake(TokioIo::new(conn.compat())).await?;
+        tokio::spawn(connection);
+        let mut req = Request::builder()
+            .uri(path.as_str())
+            .method("GET")
+            .header("Host", o.host_header.unwrap_or(NOTICE_HOST))
+            .header("Accept", "*/*")
+            .header("Connection", "close");
+        if o.cookie {
+            req = req.header("Cookie", "a=1");
+        }
+        let response = sender
+            .send_request(req.body(Empty::<Bytes>::new())?)
+            .await?;
+        assert_eq!(response.status(), 200);
+        http_body_util::BodyExt::collect(response.into_body()).await?;
+
+        let mut prover = prover_task.await??;
+        let sent = prover.transcript().sent().to_vec();
+        let recv = prover.transcript().received().to_vec();
+
+        let reveal_config = json!({
+            "type": "reveal_config",
+            "sent": reveal_all("SENT", sent.len()),
+            "recv": reveal_all("RECV", recv.len()),
+        });
+        session_sink
+            .send(Message::Text(reveal_config.to_string().into()))
+            .await?;
+
+        let mut cfg = ProveConfig::builder(prover.transcript());
+        if !o.no_identity {
+            cfg.server_identity();
+        }
+        cfg.reveal_sent(&(0..sent.len()))?;
+        cfg.reveal_recv(&(0..o.recv_reveal_end.unwrap_or(recv.len())))?;
+        if o.commit {
+            let mut commit = TranscriptCommitConfig::builder(prover.transcript());
+            commit.commit_recv(&(0..recv.len()))?;
+            cfg.transcript_commit(commit.build()?);
+        }
+        let proved = prover.prove(&cfg.build()?).await;
+        if proved.is_ok() {
+            prover.close().await?;
+        }
+        proved?;
+        Ok((sent, recv))
+    }
+    .await;
+
+    handle.close();
+    let _ = tokio::time::timeout(Duration::from_secs(10), driver_task).await;
     result
 }
 
-// ============================================================================
-// Integration Tests
-// ============================================================================
-
-/// Test the /health endpoint
-#[tokio::test]
-async fn health() {
-    let _ = tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .try_init();
-
-    let verifier_handle = start_verifier_server(WEBHOOK_PORT + 1, VERIFIER_PORT + 1).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    let client = reqwest::Client::new();
-    let resp = client
-        .get(format!("http://127.0.0.1:{}/health", VERIFIER_PORT + 1))
-        .send()
-        .await
-        .expect("Failed to send request");
-
-    assert_eq!(resp.status(), StatusCode::OK);
-    assert_eq!(resp.text().await.unwrap(), "ok");
-
-    verifier_handle.abort();
+fn assert_rejected(outcome: &Outcome, message: &str) {
+    assert_eq!(
+        outcome.message,
+        json!({"type": "error", "message": message}),
+        "unexpected session result"
+    );
 }
 
-/// Test the /info endpoint returns expected JSON structure
-#[tokio::test]
-async fn info() {
-    let _ = tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .try_init();
+/// Checks the signed statement against the prover's own transcript.
+fn assert_signed_capture(outcome: &Outcome) {
+    let m = &outcome.message;
+    assert_eq!(m["type"], "session_completed", "{m}");
+    let att = &m["attestation"];
+    assert_eq!(att["signer"], TEST_SIGNER);
+    let msg = &att["message"];
+    let hex = |b: &[u8]| alloy_primitives::hex::encode_prefixed(Sha256::digest(b));
+    assert_eq!(msg["serverName"], NOTICE_HOST);
+    assert_eq!(msg["tlsVersion"], 12);
+    assert_eq!(msg["nonce"], NONCE);
+    assert_eq!(msg["sentLen"], outcome.sent.len());
+    assert_eq!(msg["recvLen"], outcome.recv.len());
+    assert_eq!(msg["sentSha256"], hex(&outcome.sent));
+    assert_eq!(msg["recvSha256"], hex(&outcome.recv));
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let conn_time: u64 = msg["connTime"].as_str().unwrap().parse().unwrap();
+    let signed_at: u64 = msg["signedAt"].as_str().unwrap().parse().unwrap();
+    assert!(conn_time <= signed_at && signed_at <= now && now - conn_time < 300);
 
-    let verifier_handle = start_verifier_server(WEBHOOK_PORT + 2, VERIFIER_PORT + 2).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // The signature recovers to the witness over the statement in `message`.
+    let b32 = |k: &str| msg[k].as_str().unwrap().parse::<B256>().unwrap();
+    let statement = attest::CaptureStatement {
+        serverName: NOTICE_HOST.to_string(),
+        connTime: conn_time,
+        signedAt: signed_at,
+        sentSha256: b32("sentSha256"),
+        recvSha256: b32("recvSha256"),
+        sentLen: outcome.sent.len() as u32,
+        recvLen: outcome.recv.len() as u32,
+        tlsVersion: 12,
+        nonce: b32("nonce"),
+    };
+    let sig: Signature = att["signature"].as_str().unwrap().parse().unwrap();
+    let signer = sig
+        .recover_address_from_prehash(&B256::from(attest::eip712_digest(&statement)))
+        .unwrap();
+    assert_eq!(signer.to_checksum(None), TEST_SIGNER);
 
-    let client = reqwest::Client::new();
-    let resp = client
-        .get(format!("http://127.0.0.1:{}/info", VERIFIER_PORT + 2))
-        .send()
-        .await
-        .expect("Failed to send request");
-
-    assert_eq!(resp.status(), StatusCode::OK);
-
-    let info: Value = resp.json().await.expect("Failed to parse JSON");
-
-    // Verify required fields exist
-    info.get("version").expect("Missing version field");
-    info.get("git_hash").expect("Missing git_hash field");
-    info.get("tlsn_version")
-        .expect("Missing tlsn_version field");
-
-    verifier_handle.abort();
+    // The same attestation is also a RECALL_ATTESTATION results entry.
+    let results = m["results"].as_array().unwrap();
+    let entry = results
+        .iter()
+        .find(|r| r["type"] == "RECALL_ATTESTATION")
+        .expect("RECALL_ATTESTATION entry");
+    let value: Value = serde_json::from_str(entry["value"].as_str().unwrap()).unwrap();
+    assert_eq!(&value, att);
 }
 
 #[tokio::test]
-async fn test_webhook_integration_with_github() {
-    // Initialize tracing for debugging
-    let _ = tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .try_init();
+#[ignore = "needs the devnet notice fixture on localhost:443 (pnpm devnet:up)"]
+async fn e2e_capture_signs_statement() {
+    let outcome = run_capture("/notice", Overrides::default()).await;
+    assert_signed_capture(&outcome);
+    let body = String::from_utf8_lossy(&outcome.recv);
+    assert!(body.contains("Deadline:"), "{body}");
+}
 
-    info!("Starting integration test");
+#[tokio::test]
+#[ignore = "needs the devnet notice fixture on localhost:443 (pnpm devnet:up)"]
+async fn e2e_pdf_capture_signs_statement() {
+    let outcome = run_capture("/notice.pdf", Overrides::default()).await;
+    assert_signed_capture(&outcome);
+    assert!(outcome.recv.windows(4).any(|w| w == b"%PDF"));
+}
 
-    // 1. Start test webhook server
-    info!("Starting webhook server on port {}", WEBHOOK_PORT);
-    let webhook_server = TestWebhookServer::start(WEBHOOK_PORT).await;
+#[tokio::test]
+#[ignore = "needs the devnet notice fixture on localhost:443 (pnpm devnet:up)"]
+async fn e2e_proxy_mode_rejected() {
+    let o = Overrides {
+        proxy_mode: true,
+        ..Default::default()
+    };
+    assert_rejected(&run_capture("/notice", o).await, gates::PROXY_MODE);
+}
 
-    // 2. Start verifier server
-    info!("Starting verifier server on port {}", VERIFIER_PORT);
-    let verifier_handle = start_verifier_server(WEBHOOK_PORT, VERIFIER_PORT).await;
+#[tokio::test]
+#[ignore = "needs the devnet notice fixture on localhost:443 (pnpm devnet:up)"]
+async fn e2e_cookie_rejected() {
+    let o = Overrides {
+        cookie: true,
+        ..Default::default()
+    };
+    assert_rejected(&run_capture("/notice", o).await, gates::COOKIES_AUTH);
+}
 
-    // Wait for servers to be ready
-    tokio::time::sleep(Duration::from_secs(1)).await;
+#[tokio::test]
+#[ignore = "needs the devnet notice fixture on localhost:443 (pnpm devnet:up)"]
+async fn e2e_partial_reveal_rejected() {
+    let o = Overrides {
+        recv_reveal_end: Some(100),
+        ..Default::default()
+    };
+    assert_rejected(&run_capture("/notice", o).await, gates::PARTIAL_REVEAL);
+}
 
-    // 3. Create session client and register
-    let verifier_url = format!("ws://127.0.0.1:{}", VERIFIER_PORT);
-    let mut session = SessionClient::connect(&verifier_url)
-        .await
-        .expect("Failed to connect to session endpoint");
+#[tokio::test]
+#[ignore = "needs the devnet notice fixture on localhost:443 (pnpm devnet:up)"]
+async fn e2e_commitments_rejected() {
+    let o = Overrides {
+        commit: true,
+        ..Default::default()
+    };
+    assert_rejected(&run_capture("/notice", o).await, gates::COMMITMENTS);
+}
 
-    let session_data = HashMap::from([("test_key".to_string(), "test_value".to_string())]);
+#[tokio::test]
+#[ignore = "needs the devnet notice fixture on localhost:443 (pnpm devnet:up)"]
+async fn e2e_host_mismatch_rejected() {
+    let o = Overrides {
+        host_header: Some("evil.example"),
+        ..Default::default()
+    };
+    assert_rejected(&run_capture("/notice", o).await, gates::HOST_MISMATCH);
+}
 
-    let session_id = session
-        .register(MAX_RECV_DATA, MAX_SENT_DATA, session_data)
-        .await
-        .expect("Failed to register session");
-
-    info!("Session registered: {}", session_id);
-
-    // 4. Run prover in background
-    let verifier_ws_url = format!(
-        "ws://127.0.0.1:{}/verifier?sessionId={}",
-        VERIFIER_PORT, session_id
-    );
-    let proxy_url = format!(
-        "ws://127.0.0.1:{}/proxy?token=raw.githubusercontent.com",
-        VERIFIER_PORT
-    );
-
-    let prover_handle = tokio::spawn(async move {
-        run_prover(verifier_ws_url, proxy_url, MAX_SENT_DATA, MAX_RECV_DATA).await
-    });
-
-    // 5. Wait for prover to complete first so we know the actual transcript sizes
-    let prover_result = tokio::time::timeout(Duration::from_secs(120), prover_handle)
-        .await
-        .expect("Prover timed out")
-        .expect("Prover task panicked");
-
-    let (sent_transcript, recv_transcript) = prover_result.expect("Prover execution failed");
-
-    info!(
-        "Prover completed: sent={} bytes, recv={} bytes",
-        sent_transcript.len(),
-        recv_transcript.len()
-    );
-
-    // 6. Send reveal config with actual transcript sizes
-    // The reveal_config ranges must match the authenticated transcript ranges
-    let sent_ranges = vec![RangeWithHandler {
-        start: 0,
-        end: sent_transcript.len(),
-        handler: Handler {
-            handler_type: HandlerType::Sent,
-            part: HandlerPart::All,
-            action: HandlerAction::Reveal,
-        },
-    }];
-    let recv_ranges = vec![RangeWithHandler {
-        start: 0,
-        end: recv_transcript.len(),
-        handler: Handler {
-            handler_type: HandlerType::Recv,
-            part: HandlerPart::All,
-            action: HandlerAction::Reveal,
-        },
-    }];
-
-    session
-        .send_reveal_config(sent_ranges, recv_ranges)
-        .await
-        .expect("Failed to send reveal config");
-
-    // 7. Wait for session completion
-    let results = tokio::time::timeout(Duration::from_secs(30), session.wait_for_completion())
-        .await
-        .expect("Session completion timed out")
-        .expect("Session did not complete successfully");
-
-    info!("Session completed with {} results", results.len());
-
-    // 8. Verify results contain expected data
-    assert!(!results.is_empty(), "Should have handler results");
-
-    // Check that response contains expected JSON data
-    let recv_str = String::from_utf8_lossy(&recv_transcript);
-    assert!(
-        recv_str.contains("software engineer") || recv_str.contains("Anytown"),
-        "Response should contain expected JSON data: {}",
-        &recv_str[..recv_str.len().min(500)]
-    );
-
-    // 9. Wait for webhook delivery
-    tokio::time::sleep(Duration::from_secs(2)).await;
-
-    // 10. Verify webhook was received
-    let payloads = webhook_server.get_payloads().await;
-    assert_eq!(
-        payloads.len(),
-        1,
-        "Should have received exactly one webhook"
-    );
-
-    let payload = &payloads[0];
-
-    // Verify webhook payload structure
-    assert_eq!(
-        payload["server_name"], "raw.githubusercontent.com",
-        "server_name should be raw.githubusercontent.com"
-    );
-    assert!(payload["results"].is_array(), "results should be an array");
-    assert!(
-        payload["config"]["sent"].is_array(),
-        "config.sent should be an array"
-    );
-    assert!(
-        payload["config"]["recv"].is_array(),
-        "config.recv should be an array"
-    );
-    assert!(
-        payload["session"]["id"].is_string(),
-        "session.id should be a string"
-    );
-    assert_eq!(
-        payload["session"]["test_key"], "test_value",
-        "session.test_key should match"
-    );
-    assert!(
-        payload["transcript"]["sent"].is_string(),
-        "transcript.sent should be a string"
-    );
-    assert!(
-        payload["transcript"]["recv"].is_string(),
-        "transcript.recv should be a string"
-    );
-    assert!(
-        payload["transcript"]["sent_length"].is_number(),
-        "transcript.sent_length should be a number"
-    );
-    assert!(
-        payload["transcript"]["recv_length"].is_number(),
-        "transcript.recv_length should be a number"
-    );
-
-    // Verify transcript contains expected content
-    let webhook_recv = payload["transcript"]["recv"].as_str().unwrap();
-    assert!(
-        webhook_recv.contains("software engineer") || webhook_recv.contains("Anytown"),
-        "Webhook transcript should contain expected JSON data"
-    );
-
-    info!("All assertions passed!");
-
-    // 11. Cleanup
-    webhook_server.shutdown().await;
-    verifier_handle.abort();
-
-    info!("Integration test completed successfully!");
+#[tokio::test]
+#[ignore = "needs the devnet notice fixture on localhost:443 (pnpm devnet:up)"]
+async fn e2e_missing_server_identity_rejected() {
+    let o = Overrides {
+        no_identity: true,
+        ..Default::default()
+    };
+    assert_rejected(&run_capture("/notice", o).await, gates::SERVER_IDENTITY);
 }

@@ -1,7 +1,18 @@
 [package]
-name = "tlsn-verifier-server"
+name = "recall-witness"
 version = "0.1.0"
 edition = "2021"
+description = "Recall witness: TLSNotary verifier server (tlsn-extension 0.1.0.1501) with Recall gates and an EIP-712 signed statement"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+name = "recall_witness"
+path = "src/lib.rs"
+
+[[bin]]
+name = "recall-witness"
+path = "src/main.rs"
 
 [dependencies]
 # TLSNotary dependency
@@ -24,13 +35,16 @@ futures-util = "0.3"
 sha1 = "0.10"
 base64 = "0.22"
 
+# Recall: statement hashing and EIP-712 signing
+sha2 = "0.10"
+alloy-primitives = "1"
+alloy-sol-types = "1"
+alloy-signer = "2"
+alloy-signer-local = "2"
+
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-serde_yaml_ng = "0.10"
-
-# HTTP client (for webhooks)
-reqwest = { version = "0.12", features = ["json"] }
 
 # Logging
 tracing = "0.1"
@@ -47,9 +61,16 @@ rangeset = "0.4.0"
 bytes = "1"
 
 [dev-dependencies]
+reqwest = { version = "0.12", features = ["json"] }
 tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
 http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["tokio", "http1"] }
 native-tls = "0.2"
 tokio-native-tls = "0.3"
 either = "1.13"
+
+# Standalone crate. The upstream `servers/` workspace used lto = true and
+# codegen-units = 1; thin LTO keeps the Docker build shorter.
+[profile.release]
+lto = "thin"
+codegen-units = 4

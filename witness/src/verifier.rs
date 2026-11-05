@@ -1,32 +1,68 @@
-use crate::ws::TungsteniteStream;
 use eyre::eyre;
+use recall_witness::gates;
+use std::time::Duration;
 use tlsn::{
     config::verifier::VerifierConfig,
-    connection::{DnsName, ServerName},
-    transcript::{PartialTranscript, TranscriptCommitment},
+    connection::{DnsName, ServerName, TlsVersion},
+    transcript::PartialTranscript,
     verifier::{VerifierCommitStart, VerifierOutput},
     webpki::RootCertStore,
-    Session,
+    Session, SessionHandle,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use tokio_util::compat::TokioAsyncReadCompatExt;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
+
+/// A Recall gate rejected the session. The message (`recall: …`) is sent to
+/// the extension verbatim.
+#[derive(Debug)]
+pub struct Rejection(pub String);
+
+impl std::fmt::Display for Rejection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Rejection {}
+
+/// What a successful, gate-passing session yields.
+pub struct VerifiedSession {
+    pub server_name: DnsName,
+    /// Fully revealed: `sent_unauthed()` and `received_unauthed()` are empty.
+    pub transcript: PartialTranscript,
+    /// TLS connection start time, Unix seconds (checked against the witness
+    /// clock by the MPC-TLS handshake).
+    pub conn_time: u64,
+    pub tls_version: TlsVersion,
+}
+
+/// Closes the session after a rejection and gives the driver a moment to
+/// flush the rejection message to the prover.
+async fn shutdown<R>(handle: SessionHandle, driver_task: JoinHandle<R>) {
+    handle.close();
+    let abort = driver_task.abort_handle();
+    if tokio::time::timeout(Duration::from_secs(5), driver_task)
+        .await
+        .is_err()
+    {
+        abort.abort();
+    }
+}
 
 /// Core verifier logic that validates the TLS proof.
-/// Supports both MPC and Proxy modes — the prover picks via its commit config.
 ///
-/// `_proxy_socket_rx` is a leftover from the previous proxy plumbing
-/// (`/proxy?sessionId=…`). The current `tlsn` API tunnels prover↔verifier proxy
-/// traffic through the existing session multiplexer, so this channel is
-/// unused. Kept on the signature to avoid rippling changes through `main.rs`
-/// until that endpoint is removed.
+/// Recall patch: MPC mode only. Proxy mode, missing server identity,
+/// transcript commitments and partial reveals are rejected (see
+/// `recall_witness::gates`), so the upstream proxy-mode dialler and the
+/// hash-commitment paths never run.
 pub async fn verifier<T: AsyncWrite + AsyncRead + Send + Unpin + 'static>(
     socket: T,
     max_sent_data: usize,
     max_recv_data: usize,
-    _proxy_socket_rx: Option<oneshot::Receiver<TungsteniteStream>>,
-) -> Result<(DnsName, PartialTranscript, Vec<TranscriptCommitment>), eyre::ErrReport> {
+    root_store: RootCertStore,
+) -> Result<VerifiedSession, eyre::ErrReport> {
     info!(
         "Starting verification with maxSentData={}, maxRecvData={}",
         max_sent_data, max_recv_data
@@ -47,7 +83,7 @@ pub async fn verifier<T: AsyncWrite + AsyncRead + Send + Unpin + 'static>(
     });
 
     let verifier_config = VerifierConfig::builder()
-        .root_store(RootCertStore::mozilla())
+        .root_store(root_store)
         .build()
         .map_err(|e| eyre!("Failed to build verifier config: {}", e))?;
 
@@ -65,19 +101,25 @@ pub async fn verifier<T: AsyncWrite + AsyncRead + Send + Unpin + 'static>(
     {
         VerifierCommitStart::Mpc(verifier) => {
             let cfg = verifier.config();
-            if cfg.max_sent_data() > max_sent_data {
-                return Err(eyre!(
+            let over_limit = if cfg.max_sent_data() > max_sent_data {
+                Some(format!(
                     "Prover requested max_sent_data {} exceeds limit {}",
                     cfg.max_sent_data(),
                     max_sent_data
-                ));
-            }
-            if cfg.max_recv_data() > max_recv_data {
-                return Err(eyre!(
+                ))
+            } else if cfg.max_recv_data() > max_recv_data {
+                Some(format!(
                     "Prover requested max_recv_data {} exceeds limit {}",
                     cfg.max_recv_data(),
                     max_recv_data
-                ));
+                ))
+            } else {
+                None
+            };
+            if let Some(msg) = over_limit {
+                let _ = verifier.reject(Some(&msg)).await;
+                shutdown(handle, driver_task).await;
+                return Err(eyre!(msg));
             }
             info!(
                 "Accepting MPC TLS commitment with max_sent={}, max_recv={}",
@@ -94,32 +136,39 @@ pub async fn verifier<T: AsyncWrite + AsyncRead + Send + Unpin + 'static>(
                 .map_err(|e| eyre!("Run failed: {}", e))?
         }
         VerifierCommitStart::Proxy(verifier) => {
-            let host = verifier.config().server_name().as_str().to_string();
-            info!("Accepting Proxy TLS commitment for server: {}", host);
-
-            let server_addr = format!("{}:443", host);
-            let server_stream = tokio::net::TcpStream::connect(&server_addr)
-                .await
-                .map_err(|e| eyre!("Failed to connect to target server {}: {}", server_addr, e))?;
-            info!("Connected to target server {}", server_addr);
-
-            verifier
-                .accept()
-                .await
-                .map_err(|e| eyre!("Accept failed: {}", e))?
-                .run(server_stream.compat())
-                .await
-                .map_err(|e| eyre!("Run failed: {}", e))?
+            // Recall gate: in proxy mode the witness itself would dial the
+            // prover-named host. Reject before accept(); the upstream dialler
+            // is removed.
+            warn!("Rejecting proxy-mode commitment");
+            let _ = verifier.reject(Some(gates::PROXY_MODE)).await;
+            shutdown(handle, driver_task).await;
+            return Err(Rejection(gates::PROXY_MODE.to_string()).into());
         }
     };
 
+    // Recall: keep the connection time and TLS version (upstream discards them).
+    let conn_time = verifier.tls_transcript().time();
+    let tls_version = verifier.tls_transcript().version();
+
     info!("TLS connection complete, starting verification");
 
-    // Verify the proof
+    // Receive the prover's proving request
     let verifier = verifier
         .verify()
         .await
         .map_err(|e| eyre!("Verification failed: {}", e))?;
+
+    // Recall gates before accept(): server identity proven, no transcript
+    // commitments (this also keeps alpha.15's commitment code from running),
+    // and a reveal requested.
+    if let Err(msg) = gates::check_prove_request(verifier.request()) {
+        warn!("Rejecting prove request: {}", msg);
+        if let Ok(verifier) = verifier.reject(Some(&msg)).await {
+            let _ = verifier.close().await;
+        }
+        shutdown(handle, driver_task).await;
+        return Err(Rejection(msg).into());
+    }
 
     let (
         VerifierOutput {
@@ -151,36 +200,43 @@ pub async fn verifier<T: AsyncWrite + AsyncRead + Send + Unpin + 'static>(
 
     info!("verify() returned successfully");
 
+    // Recall gates after verification.
+    if !transcript_commitments.is_empty() {
+        return Err(Rejection(gates::COMMITMENTS.to_string()).into());
+    }
     let server_name =
-        server_name.ok_or_else(|| eyre!("prover should have revealed server name"))?;
+        server_name.ok_or_else(|| Rejection(gates::SERVER_IDENTITY.to_string()))?;
     let transcript =
-        transcript.ok_or_else(|| eyre!("prover should have revealed transcript data"))?;
+        transcript.ok_or_else(|| Rejection(gates::PARTIAL_REVEAL.to_string()))?;
+    gates::check_full_reveal(&transcript).map_err(Rejection)?;
 
     info!("server_name: {:?}", server_name);
     debug!("transcript: {:?}", &transcript);
 
-    let sent = transcript.sent_unsafe().to_vec();
-    let received = transcript.received_unsafe().to_vec();
-
     let ServerName::Dns(dns_name) = server_name;
     info!("Server name verified: {:?}", dns_name);
+
+    gates::check_request(transcript.sent_unsafe(), dns_name.as_str()).map_err(Rejection)?;
 
     info!("============================================");
     info!("Verification successful!");
     info!("============================================");
 
-    info!("Sent data: {:?}", bytes_to_redacted_string(&sent, "\u{2588}")?);
+    info!(
+        "Sent data: {:?}",
+        bytes_to_redacted_string(transcript.sent_unsafe(), "\u{2588}")
+    );
     info!(
         "Received data: {:?}",
-        bytes_to_redacted_string(&received, "\u{2588}")?
+        bytes_to_redacted_string(transcript.received_unsafe(), "\u{2588}")
     );
 
-    info!(
-        "Hash commitments: {} (sent+recv)",
-        transcript_commitments.len()
-    );
-
-    Ok((dns_name, transcript, transcript_commitments))
+    Ok(VerifiedSession {
+        server_name: dns_name,
+        transcript,
+        conn_time,
+        tls_version,
+    })
 }
 
 /// Compress long sequences of redacted emojis for better readability
@@ -191,8 +247,8 @@ fn compress_redacted_sequences(text: String) -> String {
 }
 
 /// Render redacted bytes as block characters.
-fn bytes_to_redacted_string(bytes: &[u8], to: &str) -> Result<String, eyre::ErrReport> {
-    Ok(String::from_utf8(bytes.to_vec())
-        .map_err(|err| eyre!("Failed to parse bytes to redacted string: {err}"))?
-        .replace('\0', to))
+///
+/// Recall: lossy, so binary bodies (PDFs) no longer fail the session.
+fn bytes_to_redacted_string(bytes: &[u8], to: &str) -> String {
+    String::from_utf8_lossy(bytes).replace('\0', to)
 }

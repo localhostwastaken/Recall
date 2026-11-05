@@ -24,6 +24,24 @@ services:
       recall:
         aliases:
           - notice.recall.test
+  # Recall witness (witness/, patched TLSNotary verifier) on :7047. Dev CA mode:
+  # trusts ONLY the fixture CA, and /proxy may dial notice.recall.test at its
+  # private Docker address. The key is Hardhat account #2: public and test-only
+  # (DEVNET_WITNESS_KEY in e2e/fixtures/keys.ts). Never put a real key here.
+  witness:
+    build: ../witness
+    ports:
+      - "7047:7047"
+    environment:
+      WITNESS_PRIVATE_KEY: "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a"
+      WITNESS_DEV_CA_DER: /certs/ca.der
+      WITNESS_DEV_ALLOW_HOSTS: notice.recall.test
+    volumes:
+      - ../fixtures/notice/.certs:/certs:ro
+    networks:
+      - recall
+    depends_on:
+      - notice
 networks:
   recall:
     name: recall

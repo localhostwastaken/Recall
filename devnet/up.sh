@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # One command for the whole local devnet: Arkiv dev node (:8545), Anvil fork of
-# Gnosis (:9545, chain 100), Bee node A (:1633) and Bee node B (:1643).
+# Gnosis (:9545, chain 100), Bee node A (:1633), Bee node B (:1643), the notice
+# fixture (:443) and the witness (:7047; the first build takes several minutes).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Three full nodes: Bee's health check ("salud") never marks a peer healthy in a
