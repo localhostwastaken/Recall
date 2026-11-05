@@ -33,6 +33,22 @@ export type CheckReport = {
   facts?: VerifiedFacts;
 };
 
+/**
+ * Request headers a capture may send (ruling R20). Anything else could change
+ * WHAT the server returns (Range, If-*, X-Original-URL, X-HTTP-Method-Override,
+ * Forwarded, cookies, auth ...) while the evidence claims the plain URL.
+ * `Accept-Encoding`, when present, must be exactly `identity`.
+ */
+export const ALLOWED_REQUEST_HEADERS = [
+  'Host',
+  'Accept',
+  'Accept-Encoding',
+  'Accept-Language',
+  'User-Agent',
+  'Connection',
+] as const;
+const ALLOWED_LOWER = new Set(ALLOWED_REQUEST_HEADERS.map((h) => h.toLowerCase()));
+
 const ok = (detail: string): CheckResult => ({ status: 'pass', detail });
 const no = (detail: string): CheckResult => ({ status: 'fail', detail });
 const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -65,8 +81,16 @@ function checkB(s: Statement, sent: Uint8Array, recv: Uint8Array): { result: Che
   } catch (e) {
     return { result: no(msg(e)) };
   }
-  const banned = req.headers.find(([n]) => /^(cookie|authorization)$/i.test(n));
-  if (banned) return { result: no(`the request carries a ${banned[0]} header`) };
+  const extra = req.headers.find(([n]) => !ALLOWED_LOWER.has(n.toLowerCase()));
+  if (extra) {
+    return {
+      result: no(
+        `the request header ${extra[0]} is not allowed (only ${ALLOWED_REQUEST_HEADERS.join(', ')})`,
+      ),
+    };
+  }
+  const enc = req.headers.find(([n, v]) => n.toLowerCase() === 'accept-encoding' && v.toLowerCase() !== 'identity');
+  if (enc) return { result: no(`the request Accept-Encoding is ${enc[1]}, it must be identity`) };
   if (req.host.toLowerCase() !== s.serverName.toLowerCase()) {
     return { result: no(`Host ${req.host} does not match the signed server name ${s.serverName}`) };
   }
@@ -81,6 +105,9 @@ function checkB(s: Statement, sent: Uint8Array, recv: Uint8Array): { result: Che
     res = parseResponse(recv);
   } catch (e) {
     return { result: no(msg(e)) };
+  }
+  if (res.status === 206 || headerValue(res.headers, 'content-range') !== undefined) {
+    return { result: no('the response is partial content (206 or Content-Range), not the whole page') };
   }
   if (!res.complete) {
     return { result: no('the response is incomplete (its length is not proven by its framing)') };
@@ -127,8 +154,9 @@ async function checkC(
 
 /**
  * Runs the offline checks on an evidence file.
- * A: transcript hashes and lengths match the statement. B: the request and
- * response are well-formed and consistent with the signed server name.
+ * A: transcript hashes and lengths match the statement. B: the request (only
+ * allowlisted headers) and response (whole, not 206) are well-formed and
+ * consistent with the signed server name.
  * C: the EIP-712 signature recovers to the stated signer, who is pinned (else
  * `warn`). D: a user-held file's hash equals the captured body's.
  * `facts` is present only if A and B pass and C is not a failure.

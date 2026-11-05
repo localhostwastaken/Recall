@@ -190,6 +190,39 @@ describe('parseResponse', () => {
     expect(parseResponse(new Uint8Array(0)).complete).toBe(false);
   });
 
+  it('a chunk extension (1a;foo=bar) and a trailer parse to the correct body', () => {
+    const head = 'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n';
+    const abc = 'abcdefghijklmnopqrstuvwxyz'; // 26 bytes = 0x1a
+    const r = parseResponse(enc.encode(`${head}1a;foo=bar\r\n${abc}\r\n5\r\nhello\r\n0\r\nX-Trailer: v\r\n\r\n`));
+    expect(r.complete).toBe(true);
+    expect(dec.decode(r.body)).toBe(`${abc}hello`);
+    // with uppercase hex and an extension on the last chunk as well
+    const r2 = parseResponse(enc.encode(`${head}1A;a=b;c\r\n${abc}\r\n0;done\r\n\r\n`));
+    expect(r2.complete).toBe(true);
+    expect(dec.decode(r2.body)).toBe(abc);
+    // a cut inside the trailer section is incomplete, not an error
+    const cut = parseResponse(enc.encode(`${head}1a;foo=bar\r\n${abc}\r\n0\r\nX-Trailer: v\r\n`));
+    expect(cut.complete).toBe(false);
+    expect(dec.decode(cut.body)).toBe(abc);
+  });
+
+  it('a real chunked capture with an extension and a trailer added still de-chunks to the same body', async () => {
+    const text = Buffer.from(chunked.recv);
+    const first = text.indexOf('\r\n\r\n') + 4;
+    const sizeEnd = text.indexOf('\r\n', first);
+    const last = text.lastIndexOf('0\r\n\r\n');
+    expect(last).toBeGreaterThan(sizeEnd);
+    const edited = Buffer.concat([
+      text.subarray(0, sizeEnd),
+      Buffer.from(';foo=bar'),
+      text.subarray(sizeEnd, last),
+      Buffer.from('0\r\nX-Trailer: v\r\n\r\n'),
+    ]);
+    const r = parseResponse(new Uint8Array(edited));
+    expect(r.complete).toBe(true);
+    expect(bytesEqual(r.body, await nodeBody('/chunked'))).toBe(true);
+  });
+
   it('trailing bytes after the response and malformed framing throw', () => {
     expect(() => parseResponse(new Uint8Array([...notice.recv, 0x41]))).toThrow();
     const head = (h: string) => enc.encode(`HTTP/1.1 200 OK\r\n${h}\r\n\r\n`);

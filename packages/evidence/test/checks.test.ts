@@ -223,6 +223,106 @@ describe('check B', () => {
   });
 });
 
+describe('check B request-header allowlist and partial content (R20)', () => {
+  const withHeaders = (extra: string[], target = '/notice'): Uint8Array =>
+    enc.encode(
+      [`GET ${target} HTTP/1.1`, `Host: ${FIXTURE_HOST}`, ...extra, 'Connection: close', '', ''].join('\r\n'),
+    );
+  const checkB = async (sent: Uint8Array) => {
+    const rec = await recordRaw(sent);
+    return runChecks(await makeEvidence(rec), { pinnedWitnesses: pinned });
+  };
+
+  it('Range header rejected', async () => {
+    const r = await checkB(withHeaders(['Range: bytes=0-9']));
+    expect(r.A.status).toBe('pass');
+    expect(r.B.status).toBe('fail');
+    expect(r.B.detail).toContain('Range');
+    expect(r.facts).toBeUndefined();
+  });
+
+  it('X-Original-URL rejected', async () => {
+    const r = await checkB(withHeaders(['X-Original-URL: /admin']));
+    expect(r.B.status).toBe('fail');
+    expect(r.B.detail).toContain('X-Original-URL');
+    expect(r.facts).toBeUndefined();
+  });
+
+  it('every other header that can change the response is rejected, case-insensitively named', async () => {
+    for (const h of [
+      'X-Rewrite-URL: /admin',
+      'X-HTTP-Method-Override: DELETE',
+      'X-Forwarded-For: 10.0.0.1',
+      'X-Forwarded-Host: evil.example',
+      'Forwarded: for=10.0.0.1',
+      'If-None-Match: "x"',
+      'If-Modified-Since: Sat, 01 Jan 2000 00:00:00 GMT',
+      'If-Range: "x"',
+      'Cookie: a=1',
+      'authorization: Bearer x',
+      'Referer: https://evil.example/',
+      'Origin: https://evil.example',
+      'Upgrade: websocket',
+      'Content-Length: 0',
+      'rAnGe: bytes=5-',
+    ]) {
+      const r = await checkB(withHeaders([h]));
+      expect(r.B.status, h).toBe('fail');
+      expect(r.B.detail.toLowerCase(), h).toContain(h.split(':')[0].toLowerCase());
+      expect(r.facts, h).toBeUndefined();
+    }
+  });
+
+  it('Accept-Encoding gzip rejected', async () => {
+    for (const v of ['gzip', 'gzip, identity', 'br', '*']) {
+      const r = await checkB(withHeaders([`Accept-Encoding: ${v}`]));
+      expect(r.B.status, v).toBe('fail');
+      expect(r.B.detail, v).toContain('Accept-Encoding');
+    }
+  });
+
+  it('allowlisted headers accepted', async () => {
+    const r = await checkB(
+      enc.encode(
+        [
+          'GET /notice HTTP/1.1',
+          `Host: ${FIXTURE_HOST}`,
+          'Accept: text/html,*/*;q=0.8',
+          'accept-language: en-US,en;q=0.9',
+          'User-Agent: Mozilla/5.0 (Recall test)',
+          'Accept-Encoding: identity',
+          'Connection: close',
+          '',
+          '',
+        ].join('\r\n'),
+      ),
+    );
+    expect(r.B.status).toBe('pass');
+    expect(r.facts).toBeDefined();
+    expect(r.facts!.canonicalUrl).toBe('https://notice.recall.test/notice');
+  });
+
+  it('206 response fails B', async () => {
+    // a real capture with its status line changed to 206, then signed
+    const partial = replaceAscii(notice, 'HTTP/1.1 200 OK', 'HTTP/1.1 206 Partial Content');
+    const r = await runChecks(await makeEvidence(partial), { pinnedWitnesses: pinned });
+    expect(r.A.status).toBe('pass');
+    expect(r.B.status).toBe('fail');
+    expect(r.B.detail).toMatch(/206|partial/i);
+    expect(r.facts).toBeUndefined();
+  });
+
+  it('Content-Range fails B', async () => {
+    // a real capture with a Content-Range header inserted (status stays 200), then signed
+    const ranged = replaceAscii(notice, 'HTTP/1.1 200 OK\r\n', 'HTTP/1.1 200 OK\r\nContent-Range: bytes 0-9/100\r\n');
+    const r = await runChecks(await makeEvidence(ranged), { pinnedWitnesses: pinned });
+    expect(r.A.status).toBe('pass');
+    expect(r.B.status).toBe('fail');
+    expect(r.B.detail).toMatch(/Content-Range|partial/i);
+    expect(r.facts).toBeUndefined();
+  });
+});
+
 describe('check C', () => {
   it('warns for a valid signature from an unpinned witness, keeping facts', async () => {
     const e = await makeEvidence(notice, { key: generatePrivateKey() });
