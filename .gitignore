@@ -1,0 +1,8 @@
+node_modules
+.env*
+!.env.example
+dist
+fixtures/notice/.certs
+test-results
+target
+.superpowers/

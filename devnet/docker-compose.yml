@@ -1,0 +1,5 @@
+services:
+  arkiv:
+    image: ghcr.io/arkiv-network/arkiv-reth-dev:v1.0.1
+    ports:
+      - "8545:8545"
