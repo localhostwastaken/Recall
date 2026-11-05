@@ -1,6 +1,6 @@
 import { createPublicClient, createWalletClient, ExpirationTime } from '@arkiv-network/sdk';
 import { localhost, rabdi } from '@arkiv-network/sdk/chains';
-import { asc, eq } from '@arkiv-network/sdk/query';
+import { and, asc, eq, gt } from '@arkiv-network/sdk/query';
 import { addr, bytes, defineSchema, i32, key, str, u64 } from '@arkiv-network/sdk/schema';
 import type { Account, Address, Hex, Transport } from 'viem';
 import { bytesToString, http, stringToBytes } from 'viem';
@@ -132,61 +132,69 @@ export type Listed = (({ kind: 'capture' } & CaptureRow) | ({ kind: 'confirmatio
   expiresAtBlock: bigint;
 };
 
+export type ListResult = { rows: Listed[]; truncated: boolean };
+
 export async function listByUrl(
   pub: ArkivPublic,
   urlHash: Hex,
   opts: { pageSize?: number; maxRows?: number } = {},
-): Promise<Listed[]> {
+): Promise<ListResult> {
   const pageSize = opts.pageSize ?? 100;
   const maxRows = opts.maxRows ?? 2000;
-  let remaining = maxRows;
-  let truncated = false;
 
-  // Anyone can write rows with our schema tag, so a single page could hide genuine records.
-  async function collect<E>(
-    fetchPage: (limit: number, offset: number) => Promise<{ entities: readonly E[] }>,
-  ): Promise<E[]> {
+  // Anyone can write rows with our schema tag, so each kind gets its own budget and the
+  // caller is told when a budget was exceeded. Paging is keyset ($key > last seen key),
+  // which stays stable while new rows are written. One row past the cap tells us whether
+  // more existed.
+  async function collect<E extends { $key: Hex }>(
+    fetchPage: (after: Hex | undefined, limit: number) => Promise<{ entities: readonly E[] }>,
+  ): Promise<{ entities: E[]; truncated: boolean }> {
+    const seen = new Set<Hex>();
     const all: E[] = [];
-    while (true) {
-      if (remaining <= 0) {
-        truncated = true;
-        break;
+    let after: Hex | undefined;
+    while (all.length <= maxRows) {
+      const limit = Math.min(pageSize, maxRows + 1 - all.length);
+      const page = (await fetchPage(after, limit)).entities;
+      for (const e of page) {
+        if (!seen.has(e.$key)) {
+          seen.add(e.$key);
+          all.push(e);
+        }
       }
-      const page = (await fetchPage(pageSize, all.length)).entities;
-      const take = page.slice(0, remaining);
-      all.push(...take);
-      remaining -= take.length;
-      if (page.length < pageSize) break;
+      if (page.length < limit) break;
+      after = page[page.length - 1]!.$key;
     }
-    return all;
+    const truncated = all.length > maxRows;
+    return { entities: all.slice(0, maxRows), truncated };
   }
 
-  const captures = {
-    entities: await collect((limit, offset) =>
-      pub
-        .select()
-        .from(CaptureSchema)
-        .where(eq('urlHash', key(urlHash)))
-        .orderBy(asc('$key'))
-        .limit(limit)
-        .offset(offset)
-        .fetch(),
-    ),
-  };
-  const confirmations = {
-    entities: await collect((limit, offset) =>
-      pub
-        .select()
-        .from(ConfirmationSchema)
-        .where(eq('urlHash', key(urlHash)))
-        .orderBy(asc('$key'))
-        .limit(limit)
-        .offset(offset)
-        .fetch(),
-    ),
-  };
-  if (remaining <= 0) truncated = true;
-  if (truncated) console.warn(`listByUrl: truncated at ${maxRows} rows for ${urlHash}`);
+  const captures = await collect((after, limit) =>
+    pub
+      .select()
+      .from(CaptureSchema)
+      .where(
+        after
+          ? and(eq('urlHash', key(urlHash)), gt('$key', key(after)))
+          : eq('urlHash', key(urlHash)),
+      )
+      .orderBy(asc('$key'))
+      .limit(limit)
+      .fetch(),
+  );
+  const confirmations = await collect((after, limit) =>
+    pub
+      .select()
+      .from(ConfirmationSchema)
+      .where(
+        after
+          ? and(eq('urlHash', key(urlHash)), gt('$key', key(after)))
+          : eq('urlHash', key(urlHash)),
+      )
+      .orderBy(asc('$key'))
+      .limit(limit)
+      .fetch(),
+  );
+  const truncated = captures.truncated || confirmations.truncated;
   const out: Listed[] = [];
   for (const e of captures.entities) {
     out.push({
@@ -219,7 +227,7 @@ export async function listByUrl(
       evidence: hexToBytesSafe(e.evidence.value),
     });
   }
-  return out;
+  return { rows: out, truncated };
 }
 
 export async function latestWitnessUrl(pub: ArkivPublic, witness: Address): Promise<string | null> {

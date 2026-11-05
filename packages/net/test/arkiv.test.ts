@@ -50,7 +50,7 @@ describe('arkiv local round-trip', () => {
     const w = arkivWallet(LOCAL, transport, witness);
     const { entityKey } = await writeCapture(w, row);
 
-    const rows = await eventually(() => listByUrl(pub, urlHash), (r) => r.length > 0);
+    const { rows } = await eventually(() => listByUrl(pub, urlHash), (r) => r.rows.length > 0);
     expect(rows.length).toBe(1);
     const first = rows[0]!;
     if (first.kind !== 'capture') throw new Error('expected a capture row');
@@ -66,9 +66,9 @@ describe('arkiv local round-trip', () => {
     expect(tx).toMatch(/^0x[0-9a-f]{64}$/);
     const after = await eventually(
       () => listByUrl(pub, urlHash),
-      (r) => r[0]!.expiresAtBlock > first.expiresAtBlock,
+      (r) => r.rows[0]!.expiresAtBlock > first.expiresAtBlock,
     );
-    expect(after[0]!.expiresAtBlock > first.expiresAtBlock).toBe(true);
+    expect(after.rows[0]!.expiresAtBlock > first.expiresAtBlock).toBe(true);
   });
 });
 
@@ -93,7 +93,7 @@ describe('arkiv confirmation and witness profile', () => {
       signedAt: 5n,
       evidence,
     });
-    const rows = await eventually(() => listByUrl(pub, urlHash), (r) => r.length > 0);
+    const { rows } = await eventually(() => listByUrl(pub, urlHash), (r) => r.rows.length > 0);
     expect(rows).toHaveLength(1);
     const c = rows[0]!;
     if (c.kind !== 'confirmation') throw new Error('expected a confirmation row');
@@ -112,7 +112,7 @@ describe('arkiv confirmation and witness profile', () => {
 });
 
 describe('listByUrl paging', () => {
-  async function seed() {
+  async function seed(captures: number, confirmations: number) {
     const dev = privateKeyToAccount(DEV_PRIVATE_KEY);
     const acct = privateKeyToAccount(generatePrivateKey());
     const pub = arkivPublic(LOCAL);
@@ -122,7 +122,7 @@ describe('listByUrl paging', () => {
     });
     const w = arkivWallet(LOCAL, transport, acct);
     const urlHash = keccak256(stringToBytes(`https://page.recall.test/x?run=${randomUUID()}`));
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < captures; i++) {
       await writeCapture(w, {
         urlHash,
         bodySha256: ('0x' + '01'.repeat(32)) as Hex,
@@ -135,7 +135,7 @@ describe('listByUrl paging', () => {
         canonicalUrl: 'https://page.recall.test/x',
       });
     }
-    for (let i = 0; i < 2; i++) {
+    for (let i = 0; i < confirmations; i++) {
       await writeConfirmation(w, {
         captureKey: ('0x' + '04'.repeat(32)) as Hex,
         urlHash,
@@ -145,26 +145,41 @@ describe('listByUrl paging', () => {
         evidence: new Uint8Array([i]),
       });
     }
+    const total = captures + confirmations;
+    await eventually(
+      () => listByUrl(pub, urlHash),
+      (r) => r.rows.length >= total,
+    );
     return { pub, urlHash };
   }
 
   it('listByUrl paginates beyond one page', async () => {
-    const { pub, urlHash } = await seed();
-    const rows = await eventually(
-      () => listByUrl(pub, urlHash, { pageSize: 2 }),
-      (r) => r.length >= 5,
-    );
+    const { pub, urlHash } = await seed(3, 2);
+    const { rows, truncated } = await listByUrl(pub, urlHash, { pageSize: 2 });
     expect(rows).toHaveLength(5);
     expect(new Set(rows.map((r) => r.entityKey)).size).toBe(5);
+    expect(truncated).toBe(false);
   });
 
   it('listByUrl stops at maxRows', async () => {
-    const { pub, urlHash } = await seed();
-    await eventually(
-      () => listByUrl(pub, urlHash, { pageSize: 2 }),
-      (r) => r.length >= 5,
-    );
-    const rows = await listByUrl(pub, urlHash, { pageSize: 2, maxRows: 3 });
-    expect(rows).toHaveLength(3);
+    const { pub, urlHash } = await seed(3, 0);
+    const { rows, truncated } = await listByUrl(pub, urlHash, { pageSize: 2, maxRows: 2 });
+    expect(rows).toHaveLength(2);
+    expect(truncated).toBe(true);
+  });
+
+  it('separate budgets: confirmations are returned even when captures hit the cap', async () => {
+    const { pub, urlHash } = await seed(3, 2);
+    const { rows, truncated } = await listByUrl(pub, urlHash, { pageSize: 2, maxRows: 2 });
+    expect(rows.filter((r) => r.kind === 'capture')).toHaveLength(2);
+    expect(rows.filter((r) => r.kind === 'confirmation')).toHaveLength(2);
+    expect(truncated).toBe(true);
+  });
+
+  it('no spurious truncation at exact cap', async () => {
+    const { pub, urlHash } = await seed(2, 0);
+    const { rows, truncated } = await listByUrl(pub, urlHash, { pageSize: 2, maxRows: 2 });
+    expect(rows).toHaveLength(2);
+    expect(truncated).toBe(false);
   });
 });
