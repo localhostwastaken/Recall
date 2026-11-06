@@ -1,4 +1,4 @@
-import type { CheckResult } from '@recall/evidence';
+import { decodeEvidence, type CheckResult } from '@recall/evidence';
 import { isFreeBatch } from '@recall/net';
 import { ChevronDown, CircleCheck, CircleDashed, CircleX, LoaderCircle, TriangleAlert, type LucideIcon } from 'lucide-react';
 import { useEffect, useId, useState, type ReactNode } from 'react';
@@ -150,6 +150,21 @@ function rowC(report: VerifiedReport | null): RowModel {
   }
 }
 
+/** Files larger than this are never sniffed as evidence (an evidence file is a few KB). */
+const EVIDENCE_SNIFF_MAX = 2 * 1024 * 1024;
+export const EVIDENCE_IN_D =
+  "That's a Recall evidence file, not a copy of the page, so there is nothing to compare here. To check an evidence file, drop it on the Home page.";
+
+/** True when the bytes parse as a Recall evidence file. */
+export function looksLikeEvidence(bytes: Uint8Array): boolean {
+  try {
+    decodeEvidence(bytes);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function rowD(report: VerifiedReport | null, file: GivenFile | null): RowModel {
   const fileLine = file ? (
     <>
@@ -231,6 +246,18 @@ export function CheckPanel({
   onFile: (file: File) => void | Promise<void>;
   onRemoveFile: () => void;
 }) {
+  // D compares a copy of the page. A Recall evidence file dropped here (the record page offers
+  // one for download) is turned away with a pointer to where it can be checked, instead of
+  // showing a red "different" that reads as a failed capture.
+  const [evidenceDropped, setEvidenceDropped] = useState(false);
+  const compareFile = async (f: File) => {
+    if (f.size <= EVIDENCE_SNIFF_MAX && looksLikeEvidence(new Uint8Array(await f.arrayBuffer()))) {
+      setEvidenceDropped(true);
+      return;
+    }
+    setEvidenceDropped(false);
+    await onFile(f);
+  };
   const rows: [string, string, RowModel, ReactNode?][] = [
     ['A', 'Bytes match the signed hashes', rowA(report)],
     ['B', 'Request and response are well-formed', rowB(report)],
@@ -245,7 +272,14 @@ export function CheckPanel({
             <span>
               File to compare: <span className="mono">{file.name}</span> ({formatBytes(file.bytes.length)})
             </span>
-            <button type="button" className="btn btn-ghost btn-compact" onClick={onRemoveFile}>
+            <button
+              type="button"
+              className="btn btn-ghost btn-compact"
+              onClick={() => {
+                setEvidenceDropped(false);
+                onRemoveFile();
+              }}
+            >
               Remove file
             </button>
           </p>
@@ -253,10 +287,10 @@ export function CheckPanel({
         <DropZone
           compact
           title={file ? 'Compare with a different file' : 'Drop a file to compare'}
-          hint="The file stays in your browser."
+          hint="A saved copy of the page, for example its .html. The file stays in your browser."
           inputLabel="File to compare"
-          onFile={onFile}
-          error={fileError}
+          onFile={compareFile}
+          error={evidenceDropped ? EVIDENCE_IN_D : fileError}
         />
       </div>,
     ],
