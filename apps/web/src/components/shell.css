@@ -191,8 +191,12 @@ html {
     box-shadow: var(--shadow-2);
   }
 
-  /* Only the wallet chip lives in the panel at this width. */
-  .site-header .menu-link,
+  /* At this width the section links (Storage, How it works, Sponsors) move into the panel with the
+     wallet chip, so the header row never runs wider than the screen; the CTA stays in the row. */
+  .site-header .nav .nav-wide {
+    display: none;
+  }
+
   .site-header .menu-cta {
     display: none;
   }
