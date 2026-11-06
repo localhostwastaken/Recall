@@ -20,13 +20,19 @@ const isKey = (v: unknown): v is Hex => typeof v === 'string' && /^0x[0-9a-fA-F]
 // One read-or-create per storage area, so concurrent first calls share one key.
 const loading = new WeakMap<KeyArea, Promise<Hex>>();
 
-/** The stamp key: read from storage, or generated and stored on first use. */
+export const MALFORMED_STAMP_KEY =
+  'the stored stamp key is malformed; it was not replaced, so the batches it owns are not orphaned';
+
+/** The stamp key: read from storage, or generated and stored on first use (never replaced). */
 export function stampKey(area: KeyArea = defaultArea()): Promise<Hex> {
   let p = loading.get(area);
   if (!p) {
     p = (async () => {
       const stored = (await area.get(STAMP_KEY))[STAMP_KEY];
       if (isKey(stored)) return stored;
+      // Something is stored but it is not a key: never replace it silently, because the
+      // batches the old key owns would be orphaned. Storage needs fixing by hand.
+      if (stored !== undefined) throw new Error(MALFORMED_STAMP_KEY);
       const key = generatePrivateKey();
       await area.set({ [STAMP_KEY]: key });
       return key;

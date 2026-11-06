@@ -22,9 +22,9 @@ const URL_ERROR = 'Enter a full address starting with http:// or https://';
  */
 async function ensureHostPermission(url: string): Promise<boolean> {
   try {
-    const origins = [`${new URL(url).origin}/*`];
-    if (await chrome.permissions.contains({ origins })) return true;
-    return await chrome.permissions.request({ origins });
+    // Called first thing in the click, so the user gesture is still there. Chrome answers
+    // true at once, without a prompt, when the origin is already allowed.
+    return await chrome.permissions.request({ origins: [`${new URL(url).origin}/*`] });
   } catch {
     return false; // e.g. a plain http:// host other than localhost cannot be requested
   }

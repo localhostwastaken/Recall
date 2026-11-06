@@ -9,13 +9,11 @@ import { MonoValue } from '../../recall/ui/MonoValue';
 import { loadSettings } from '../../recall/settings';
 import { witnessOnline } from '../../recall/witness';
 import { CAPTURE_STATE_KEY, isLiveRunning, type CaptureState } from '../../recall/jobState';
-import { POOL_KEY, parsePool, unusedBatches } from '../../recall/poolState';
+import { POOL_KEY, parsePool, storageState, type StorageState } from '../../recall/poolState';
 import type { PopupRequest } from '../../recall/messages';
 import {
-  CAPTURE_HELPER,
-  CAPTURE_HELPER_NO_STORAGE,
-  NO_STORAGE_BODY,
-  NO_STORAGE_TITLE,
+  captureHelper,
+  storageNotice,
   checkLines,
   errorCopy,
   formatElapsed,
@@ -74,11 +72,11 @@ function useCaptureState(): CaptureState | undefined {
   return state;
 }
 
-/** How many unused batches the pool holds, kept live (undefined while loading). */
-function useUnusedBatches(): number | undefined {
-  const [count, setCount] = useState<number | undefined>(undefined);
+/** Whether the pool can take a capture (ok / expired / empty), kept live (undefined while loading). */
+function useStorageState(): StorageState | undefined {
+  const [state, setState] = useState<StorageState | undefined>(undefined);
   useEffect(() => {
-    const read = (stored: unknown) => setCount(unusedBatches(parsePool(stored)).length);
+    const read = (stored: unknown) => setState(storageState(parsePool(stored)));
     chrome.storage.local
       .get(POOL_KEY)
       .then((r) => read(r[POOL_KEY]))
@@ -89,7 +87,7 @@ function useUnusedBatches(): number | undefined {
     chrome.storage.local.onChanged.addListener(onChanged);
     return () => chrome.storage.local.onChanged.removeListener(onChanged);
   }, []);
-  return count;
+  return state;
 }
 
 /** Opens the web app's Buy storage page in a new tab. */
@@ -114,7 +112,8 @@ export function Popup() {
   const [witness, setWitness] = useState<WitnessState>('checking');
   const [copied, setCopied] = useState(false);
   const job = useCaptureState();
-  const unused = useUnusedBatches();
+  const storage = useStorageState();
+  const noStorage = storageNotice(storage);
 
   const probeWitness = useCallback(() => {
     loadSettings()
@@ -164,7 +163,7 @@ export function Popup() {
   else if (witness === 'offline')
     disabledReason = 'The witness is offline, so new captures are paused.';
   const busy = Boolean(running && mine);
-  const helper = disabledReason ?? (unused === 0 ? CAPTURE_HELPER_NO_STORAGE : CAPTURE_HELPER);
+  const helper = disabledReason ?? captureHelper(storage);
 
   return (
     <div className="popup">
@@ -213,17 +212,22 @@ export function Popup() {
             <p className="progress-text">
               {formatElapsed(now - mine.startedAt)} elapsed · usually 15–30 s
             </p>
-            <div className="popup-actions">
-              <button type="button" className="btn btn-secondary" onClick={cancel}>
-                Cancel capture
-              </button>
-            </div>
+            {mine.step < 4 ? (
+              <div className="popup-actions">
+                <button type="button" className="btn btn-secondary" onClick={cancel}>
+                  Cancel capture
+                </button>
+              </div>
+            ) : (
+              // Stamped chunks cannot be taken back, so the upload always runs to the end.
+              <p className="popup-note muted">The upload can't be cancelled once it starts.</p>
+            )}
             <p className="popup-note muted">You can close this popup. The capture keeps running.</p>
           </section>
         ) : mine?.status === 'done' ? (
           <CaptureResult
             job={mine}
-            hasStorage={(unused ?? 0) > 0}
+            storage={storage ?? 'empty'}
             copied={copied}
             openSettings={openSettings}
             onBuyStorage={buyStorage}
@@ -287,21 +291,21 @@ export function Popup() {
               verified by anyone.
             </Notice>
           </section>
-        ) : unused === 0 ? (
+        ) : noStorage ? (
           <section aria-labelledby="capture-result">
             <h2 id="capture-result" className="section-label">
               Storage
             </h2>
             <Notice
               kind="warn"
-              title={NO_STORAGE_TITLE}
+              title={noStorage.title}
               actions={
                 <button type="button" className="btn btn-secondary" onClick={buyStorage}>
                   Buy storage
                 </button>
               }
             >
-              {NO_STORAGE_BODY}
+              {noStorage.body}
             </Notice>
           </section>
         ) : (
@@ -343,7 +347,7 @@ export function Popup() {
 
 function CaptureResult({
   job,
-  hasStorage,
+  storage,
   copied,
   openSettings,
   onBuyStorage,
@@ -351,7 +355,7 @@ function CaptureResult({
   onCopy,
 }: {
   job: Extract<CaptureState, { status: 'done' }>;
-  hasStorage: boolean;
+  storage: StorageState;
   copied: boolean;
   openSettings: () => void;
   onBuyStorage: () => void;
@@ -360,7 +364,7 @@ function CaptureResult({
 }) {
   const lines = checkLines(job.checks, job.evidence);
   const v = verdict(lines, job.checks);
-  const up = job.upload ? uploadCopy(job.upload, hasStorage) : null;
+  const up = job.upload ? uploadCopy(job.upload, storage) : null;
   const upActions = {
     buyStorage: (
       <button key="buy" type="button" className="btn btn-secondary" onClick={onBuyStorage}>

@@ -62,7 +62,7 @@ let uploads: Promise<unknown> = Promise.resolve();
 function upload(req: OffscreenUpload): void {
   const ctl = new AbortController();
   running.set(req.id, ctl);
-  uploads = uploads.then(async () => {
+  const run = async () => {
     let outcome: UploadOutcome;
     try {
       outcome = await uploadEvidence(req, {}, ctl.signal);
@@ -71,12 +71,16 @@ function upload(req: OffscreenUpload): void {
         ok: false,
         code: 'failed',
         error: err instanceof Error ? err.message : String(err),
+        updates: [],
       };
     } finally {
       running.delete(req.id);
     }
     send({ type: 'recall.upload.result', id: req.id, outcome });
-  });
+  };
+  // Runs after the previous upload whether it resolved or rejected, so one failure can
+  // never stall the uploads queued behind it.
+  uploads = uploads.then(run, run);
 }
 
 // Registered at load (not in a framework effect), so the first message is never missed.

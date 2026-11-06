@@ -1,11 +1,18 @@
 // Offscreen document: stamps the evidence file with the stamp key (client-side postage,
 // bee-js Stamper) and uploads it chunk by chunk to the Swarm upload URL. Kept out of the
 // service worker, so bee-js never lands in the worker bundle.
-import { createPublicClient, http, type Hex } from 'viem';
+import { createPublicClient, http, type Hex, type PublicClient } from 'viem';
 import { encodeEvidence } from '@recall/evidence';
 import { Stamper, uploadStamped } from '@recall/net/swarm';
 import { withTimeout } from './captureParts';
-import { decodeStamperState, encodeStamperState } from './poolState';
+import { formatTtl, lastPrice, ttlSeconds } from './batchChain';
+import {
+  MIN_BATCH_TTL_SECONDS,
+  decodeStamperState,
+  encodeStamperState,
+  type BatchUpdate,
+  type StamperState,
+} from './poolState';
 import {
   UPLOAD_TIMEOUT_MS,
   type OffscreenUpload,
@@ -21,6 +28,8 @@ export type UploadDeps = {
   fetch: typeof fetch;
   /** Current Gnosis block, for the chain fallback when Bee hides /batches. */
   blockNumber: () => Promise<bigint>;
+  /** Seconds of storage a batch has left, read on Gnosis; null when expired or unknown. */
+  batchTtl: (batchId: Hex) => Promise<bigint | null>;
   upload: typeof uploadStamped;
   sleep: (ms: number) => Promise<void>;
   now: () => number;
@@ -55,39 +64,167 @@ async function beeView(uploadUrl: string, f: typeof fetch): Promise<BeeView | nu
   }
 }
 
+/** Lifetimes read during one attempt (they do not change in two minutes). */
+export type TtlCache = Map<Hex, bigint | null>;
+
+export type PickResult = {
+  /** The first live candidate the node accepts stamps for now, if any. */
+  pick: UploadCandidate | null;
+  /** Candidates that must never take an upload again, and why. */
+  dead: { batchId: Hex; reason: string }[];
+  /** Candidates whose lifetime could not be read this round (RPC trouble). */
+  unreadable: number;
+};
+
 /**
- * The first candidate the upload node accepts stamps for now. Bee's view decides when it
- * shares one; otherwise (public gateways) the chain does: 12 blocks after the batch's start.
+ * Re-checks each candidate on Gnosis first: a batch that has expired, or has less than
+ * MIN_BATCH_TTL_SECONDS left, is reported dead and skipped. Of the rest, the first one the
+ * upload node accepts stamps for wins. Bee's view decides when the node shares one;
+ * otherwise (public gateways) the chain does: 12 blocks after the batch's start.
  */
 export async function pickUsable(
   candidates: UploadCandidate[],
   uploadUrl: string,
-  d: Pick<UploadDeps, 'fetch' | 'blockNumber'>,
-): Promise<UploadCandidate | null> {
+  d: Pick<UploadDeps, 'fetch' | 'blockNumber' | 'batchTtl'>,
+  ttls: TtlCache = new Map(),
+): Promise<PickResult> {
+  const out: PickResult = { pick: null, dead: [], unreadable: 0 };
+  const live: UploadCandidate[] = [];
+  for (const c of candidates) {
+    if (!ttls.has(c.batchId)) {
+      try {
+        ttls.set(c.batchId, await d.batchTtl(c.batchId));
+      } catch {
+        out.unreadable++;
+        continue; // read again next round
+      }
+    }
+    const ttl = ttls.get(c.batchId) ?? null;
+    if (ttl === null) out.dead.push({ batchId: c.batchId, reason: 'batch expired' });
+    else if (ttl < MIN_BATCH_TTL_SECONDS) {
+      out.dead.push({
+        batchId: c.batchId,
+        reason: `only ${formatTtl(ttl)} of storage left; needs at least 2 days`,
+      });
+    } else live.push(c);
+  }
+  if (live.length === 0) return out;
+
   const view = await beeView(uploadUrl, d.fetch);
   let block: bigint | null = null;
-  for (const c of candidates) {
+  for (const c of live) {
     if (view) {
       const start = view.starts.get(c.batchId.replace(/^0x/, '').toLowerCase());
-      if (start !== undefined && view.block >= start + USABLE_AFTER_BLOCKS) return c;
+      if (start !== undefined && view.block >= start + USABLE_AFTER_BLOCKS) {
+        out.pick = c;
+        return out;
+      }
       continue;
     }
     try {
       block ??= await d.blockNumber();
     } catch {
-      return null;
+      return out;
     }
-    if (block >= BigInt(c.startBlock) + BigInt(USABLE_AFTER_BLOCKS)) return c;
+    if (block >= BigInt(c.startBlock) + BigInt(USABLE_AFTER_BLOCKS)) {
+      out.pick = c;
+      return out;
+    }
   }
-  return null;
+  return out;
+}
+
+/**
+ * How a failed upload relates to its batch:
+ * - bucket_full: the Stamper ran out of slots in a bucket; the batch is finished.
+ * - rejected: the node refused it (a 4xx other than 408/429), so try another batch now.
+ * - transient: network, 5xx, timeout; try other batches first next time.
+ */
+export function failureKind(err: unknown): 'bucket_full' | 'rejected' | 'transient' {
+  const text = err instanceof Error ? err.message : String(err);
+  if (/bucket is full/i.test(text)) return 'bucket_full';
+  const e = err as { status?: unknown; response?: { status?: unknown } } | null;
+  const status =
+    typeof e?.status === 'number'
+      ? e.status
+      : typeof e?.response?.status === 'number'
+        ? e.response.status
+        : undefined;
+  if (status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 429) {
+    return 'rejected';
+  }
+  return 'transient';
 }
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e)).split('\n')[0];
 
 /**
- * Picks a usable batch (waiting up to `req.waitMs` for fresh ones), stamps and uploads
- * `encodeEvidence(req.evidence)`. Returns the Swarm reference and the batch's new bucket
- * heights; on failure, the heights too (stamped slots must not be reused). Never throws.
+ * Stamps and uploads with one batch. The Stamper is wrapped so that once the attempt
+ * has ended (timeout, cancel, failure), no further chunk is stamped: the heights it
+ * returns are final, and a late chunk can never take a slot behind our back.
+ */
+async function stampAndUpload(
+  c: UploadCandidate,
+  bytes: Uint8Array,
+  req: OffscreenUpload,
+  d: UploadDeps,
+  signal?: AbortSignal,
+): Promise<
+  | { ok: true; ref: Hex; stamper: StamperState }
+  | { ok: false; error: unknown; stamper: StamperState }
+> {
+  let real: Stamper;
+  try {
+    real = c.stamper?.length
+      ? Stamper.fromState(req.stampKey, c.batchId, decodeStamperState(c.stamper), c.depth)
+      : Stamper.fromBlank(req.stampKey, c.batchId, c.depth);
+  } catch (error) {
+    return { ok: false, error, stamper: c.stamper ?? [] };
+  }
+  let stopped = false;
+  const guard = {
+    stamp(address: Uint8Array, timestampMs?: number) {
+      if (stopped || signal?.aborted) throw new Error('upload stopped');
+      return real.stamp(address, timestampMs);
+    },
+  } as unknown as Stamper;
+  try {
+    const ref = await withTimeout(
+      d.upload(bytes, { uploadUrl: req.uploadUrl, stamper: guard }),
+      UPLOAD_TIMEOUT_MS,
+      `the upload did not finish within ${UPLOAD_TIMEOUT_MS / 1000} s`,
+    );
+    stopped = true;
+    return {
+      ok: true,
+      ref: ref.toLowerCase() as Hex,
+      stamper: encodeStamperState(real.getState()),
+    };
+  } catch (error) {
+    stopped = true;
+    return { ok: false, error, stamper: encodeStamperState(real.getState()) };
+  }
+}
+
+function defaultTtlReader(gnosisRpcUrl: string): (batchId: Hex) => Promise<bigint | null> {
+  const pub = createPublicClient({ transport: http(gnosisRpcUrl) }) as PublicClient;
+  let price: Promise<bigint> | undefined;
+  return async (batchId) => {
+    price ??= lastPrice(pub).catch((err) => {
+      price = undefined;
+      throw err;
+    });
+    return ttlSeconds(pub, batchId, await price);
+  };
+}
+
+/**
+ * One upload attempt. Works through the candidates in queue order: re-checks each one's
+ * lifetime on Gnosis, waits (up to `req.waitMs`) for a fresh one to become usable, then
+ * stamps and uploads `encodeEvidence(req.evidence)`. A batch-tied failure (bucket full,
+ * the node refusing the batch) falls through to the next candidate at once; a passing
+ * failure ends the attempt and sends that batch to the back of the queue. Every batch
+ * touched is reported in `updates`. Never throws.
  */
 export async function uploadEvidence(
   req: OffscreenUpload,
@@ -99,64 +236,82 @@ export async function uploadEvidence(
     blockNumber:
       deps.blockNumber ??
       (() => createPublicClient({ transport: http(req.gnosisRpcUrl) }).getBlockNumber()),
+    batchTtl: deps.batchTtl ?? defaultTtlReader(req.gnosisRpcUrl),
     upload: deps.upload ?? uploadStamped,
     sleep: deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))),
     now: deps.now ?? Date.now,
   };
+  const updates = new Map<Hex, BatchUpdate>();
+  const note = (u: BatchUpdate) =>
+    updates.set(u.batchId, { ...(updates.get(u.batchId) ?? {}), ...u });
+  const fail = (code: 'not_ready' | 'no_storage' | 'failed', error: string): UploadOutcome => ({
+    ok: false,
+    code,
+    error,
+    updates: [...updates.values()],
+  });
+
   let bytes: Uint8Array;
   try {
     bytes = encodeEvidence(req.evidence);
   } catch (err) {
-    return {
-      ok: false,
-      code: 'failed',
-      error: `the evidence could not be encoded: ${message(err)}`,
-    };
+    return fail('failed', `the evidence could not be encoded: ${message(err)}`);
   }
 
   const deadline = d.now() + req.waitMs;
-  let chosen: UploadCandidate | null = null;
-  for (;;) {
-    chosen = await pickUsable(req.candidates, req.uploadUrl, d);
-    if (chosen || signal?.aborted || d.now() >= deadline) break;
-    await d.sleep(POLL_MS);
-  }
-  if (signal?.aborted) return { ok: false, code: 'failed', error: 'upload cancelled' };
-  if (!chosen) {
-    return {
-      ok: false,
-      code: 'not_ready',
-      error: 'the storage batches are not usable yet (new storage takes about 1-2 minutes)',
-    };
+  const ttls: TtlCache = new Map();
+  let queue = [...req.candidates];
+  let lastError = '';
+  while (queue.length > 0) {
+    if (signal?.aborted) return fail('failed', 'upload cancelled');
+    const { pick, dead, unreadable } = await pickUsable(queue, req.uploadUrl, d, ttls);
+    for (const x of dead) note({ batchId: x.batchId, dead: x.reason });
+    queue = queue.filter((c) => !dead.some((x) => x.batchId === c.batchId));
+    if (!pick) {
+      if (queue.length === 0) break;
+      if (unreadable === queue.length && d.now() >= deadline) {
+        return fail('failed', 'the storage batches could not be checked on Gnosis');
+      }
+      if (d.now() >= deadline) {
+        return fail(
+          'not_ready',
+          'the storage batches are not usable yet (new storage takes about 1-2 minutes)',
+        );
+      }
+      await d.sleep(POLL_MS);
+      continue;
+    }
+
+    const r = await stampAndUpload(pick, bytes, req, d, signal);
+    note({ batchId: pick.batchId, stamper: r.stamper });
+    if (r.ok) {
+      note({ batchId: pick.batchId, used: true });
+      return {
+        ok: true,
+        batchId: pick.batchId,
+        evidenceRef: r.ref,
+        updates: [...updates.values()],
+      };
+    }
+    if (signal?.aborted) return fail('failed', 'upload cancelled');
+    lastError = message(r.error);
+    queue = queue.filter((c) => c.batchId !== pick.batchId);
+    const kind = failureKind(r.error);
+    if (kind === 'bucket_full') {
+      note({ batchId: pick.batchId, dead: 'a bucket of this batch is full' });
+      continue;
+    }
+    note({ batchId: pick.batchId, demote: true });
+    if (kind === 'rejected') continue;
+    return fail('failed', `the upload to Swarm failed: ${lastError}`);
   }
 
-  const stamper = chosen.stamper?.length
-    ? Stamper.fromState(
-        req.stampKey,
-        chosen.batchId,
-        decodeStamperState(chosen.stamper),
-        chosen.depth,
-      )
-    : Stamper.fromBlank(req.stampKey, chosen.batchId, chosen.depth);
-  try {
-    const evidenceRef: Hex = await withTimeout(
-      d.upload(bytes, { uploadUrl: req.uploadUrl, stamper }),
-      UPLOAD_TIMEOUT_MS,
-      `the upload did not finish within ${UPLOAD_TIMEOUT_MS / 1000} s`,
-    );
-    return {
-      ok: true,
-      batchId: chosen.batchId,
-      evidenceRef: evidenceRef.toLowerCase() as Hex,
-      stamper: encodeStamperState(stamper.getState()),
-    };
-  } catch (err) {
-    return {
-      ok: false,
-      code: 'failed',
-      error: `the upload to Swarm failed: ${message(err)}`,
-      batchId: chosen.batchId,
-      stamper: encodeStamperState(stamper.getState()),
-    };
-  }
+  const allDead = req.candidates.every((c) => updates.get(c.batchId)?.dead);
+  if (allDead) return fail('no_storage', 'no storage batch has enough time left');
+  return fail(
+    'failed',
+    lastError
+      ? `the upload to Swarm failed: ${lastError}`
+      : 'no storage batch could take the upload',
+  );
 }

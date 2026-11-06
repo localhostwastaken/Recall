@@ -6,7 +6,7 @@ import { runChecks, type CheckReport, type EvidenceFile } from '@recall/evidence
 import { RECALL_DEV } from './build';
 import { loadSettings, netConfigFor } from './settings';
 import { ensureOffscreen } from './offscreen';
-import { loadPool, recordUpload } from './pool';
+import { applyBatchUpdates, loadPool } from './pool';
 import { unusedBatches } from './poolState';
 import { stampKey } from './stamp';
 import { newCaptureId, savePending } from './pending';
@@ -180,12 +180,15 @@ export function onCaptureResult(id: string, outcome: CaptureOutcome): Promise<vo
       await area().set({
         [CAPTURE_STATE_KEY]: { ...s, step: 3, stepAt: Date.now() } satisfies CaptureState,
       });
+      // The canonical form is what gets checked, uploaded and kept (see canonicalEvidence).
+      let evidence: EvidenceFile;
       let checks: CheckSummary;
       try {
+        evidence = canonicalEvidence(outcome.evidence);
         const { pinnedWitnesses } = await loadSettings();
         // Bounded: a hung check must not leave the job "running" and block later captures.
         const report = await withTimeout(
-          runChecks(outcome.evidence, { pinnedWitnesses }),
+          runChecks(evidence, { pinnedWitnesses }),
           CHECKS_TIMEOUT_MS,
           `the checks did not finish within ${CHECKS_TIMEOUT_MS / 1000} s`,
         );
@@ -197,12 +200,9 @@ export function onCaptureResult(id: string, outcome: CaptureOutcome): Promise<vo
       }
       const gate = uploadGate(checks, base.url);
       if (!gate.ok) {
-        await finishDone(base, outcome.evidence, checks, {
-          status: 'skipped',
-          reason: gate.reason,
-        });
+        await finishDone(base, evidence, checks, { status: 'skipped', reason: gate.reason });
       } else {
-        await beginUpload(base, outcome.evidence, checks);
+        await beginUpload(base, evidence, checks);
       }
     } else if (outcome.code === 'cancelled') {
       await finish({ ...base, status: 'cancelled', finishedAt: Date.now() });
@@ -255,6 +255,8 @@ async function beginUpload(
     const msg: OffscreenUpload = {
       type: 'recall.offscreen.upload',
       id: base.id,
+      // Already canonical after the checks; a retry reads it back from session storage,
+      // whose objects come back with sorted keys, so it is put in canonical form again.
       evidence: canonicalEvidence(evidence),
       stampKey: await stampKey(),
       candidates: candidates.map((b) => ({
@@ -275,20 +277,37 @@ async function beginUpload(
 }
 
 /**
- * Offscreen upload result. The pool is updated whatever became of the job (a stamped
- * slot must never be stamped again); the job finishes only if it is still this upload.
+ * Offscreen upload result. What the attempt learned about each batch is stored whatever
+ * became of the job (a stamped slot must never be stamped again); the job finishes only
+ * if it is still this upload. Nothing here may leave the job stuck at step 4.
  */
 export function onUploadResult(id: string, outcome: UploadOutcome): Promise<void> {
   return update(async () => {
-    if (outcome.ok) {
-      await recordUpload(outcome.batchId, { stamper: outcome.stamper, used: true });
-    } else if (outcome.batchId) {
-      await recordUpload(outcome.batchId, { stamper: outcome.stamper, used: false });
+    try {
+      await applyBatchUpdates(outcome.updates ?? []);
+    } catch (err) {
+      console.error('[recall] pool update failed', errorText(err));
     }
     const s = await readCaptureState();
     if (s?.status !== 'running' || s.id !== id || s.step !== 4 || !s.evidence || !s.checks) return;
     const base: Base = { id: s.id, url: s.url, startedAt: s.startedAt };
-    if (outcome.ok && s.checks.facts) {
+    if (!outcome.ok) {
+      await finishDone(
+        base,
+        s.evidence,
+        s.checks,
+        outcome.code === 'no_storage'
+          ? { status: 'no_storage' }
+          : {
+              status: 'failed',
+              error: outcome.error,
+              ...(outcome.code === 'not_ready' ? { code: 'not_ready' as const } : {}),
+            },
+      );
+      return;
+    }
+    try {
+      if (!s.checks.facts) throw new Error('the checks gave no verified facts');
       const captureId = newCaptureId();
       await savePending({
         captureId,
@@ -306,12 +325,10 @@ export function onUploadResult(id: string, outcome: UploadOutcome): Promise<void
         evidenceRef: outcome.evidenceRef,
         batchId: outcome.batchId,
       });
-    } else {
-      const error = outcome.ok ? 'the checks gave no verified facts' : outcome.error;
+    } catch (err) {
       await finishDone(base, s.evidence, s.checks, {
         status: 'failed',
-        error,
-        ...(!outcome.ok && outcome.code === 'not_ready' ? { code: 'not_ready' as const } : {}),
+        error: `the evidence is on Swarm, but the capture could not be kept for publishing: ${errorText(err)}`,
       });
     }
   });
@@ -336,7 +353,8 @@ export function retryUpload(): Promise<{ ok: true } | { error: string }> {
 export function cancelCapture(): Promise<void> {
   return update(async () => {
     const s = await readCaptureState();
-    if (s?.status !== 'running') return;
+    // Once the upload has started it runs to the end: stamped chunks cannot be taken back.
+    if (s?.status !== 'running' || s.step === 4) return;
     await finish({
       id: s.id,
       url: s.url,

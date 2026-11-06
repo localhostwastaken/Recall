@@ -3,7 +3,7 @@ import type { Hex } from 'viem';
 import { canonicalUrl, decodeEvidence, encodeEvidence, type EvidenceFile } from '@recall/evidence';
 import { captureTarget } from './captureParts';
 import type { CheckSummary } from './jobState';
-import type { StamperState } from './poolState';
+import type { BatchUpdate, StamperState } from './poolState';
 
 /** How long an upload waits for a fresh batch to become usable (bought ~1-2 min ago). */
 export const USABLE_WAIT_MS = 120_000;
@@ -67,15 +67,19 @@ export type OffscreenUpload = {
   waitMs: number;
 };
 
+/**
+ * One upload attempt's result. `updates` says what the attempt learned about each batch
+ * it touched (bucket heights, used, dead, demoted); the service worker stores them
+ * whatever became of the job.
+ */
 export type UploadOutcome =
-  | { ok: true; batchId: Hex; evidenceRef: Hex; stamper: StamperState }
+  | { ok: true; batchId: Hex; evidenceRef: Hex; updates: BatchUpdate[] }
   | {
       ok: false;
-      code: 'not_ready' | 'failed';
+      /** not_ready: no live batch became usable in time; no_storage: every batch is dead. */
+      code: 'not_ready' | 'no_storage' | 'failed';
       error: string;
-      /** The batch that was tried, with its bucket heights (slots stamped stay used). */
-      batchId?: Hex;
-      stamper?: StamperState;
+      updates: BatchUpdate[];
     };
 
 /** Offscreen -> service worker: the upload finished. */

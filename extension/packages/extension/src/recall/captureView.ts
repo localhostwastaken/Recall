@@ -6,6 +6,7 @@ import type { NoticeKind } from './ui/Notice';
 import { middle } from './ui/MonoValue';
 import { captureTarget, formatSize, type CaptureErrorCode } from './captureParts';
 import type { CheckSummary, UploadState } from './jobState';
+import type { StorageState } from './poolState';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -37,6 +38,18 @@ export const CAPTURE_HELPER = 'Takes about 30 s and about 80 MB of data. Pages u
 /** The helper when the pool is empty: the capture still runs, but is not uploaded. */
 export const CAPTURE_HELPER_NO_STORAGE =
   'No storage left: the page will be checked but not uploaded. Pages up to 64 KB.';
+
+/** The helper when only expired batches are left. */
+export const CAPTURE_HELPER_EXPIRED =
+  'Storage expired: the page will be checked but not uploaded. Pages up to 64 KB.';
+
+/** The footer helper for a capture that can start, by storage state. */
+export const captureHelper = (storage: StorageState | undefined): string =>
+  storage === 'empty'
+    ? CAPTURE_HELPER_NO_STORAGE
+    : storage === 'expired'
+      ? CAPTURE_HELPER_EXPIRED
+      : CAPTURE_HELPER;
 
 /** The steps a job shows: the capture's three, plus the upload when one is planned. */
 export function jobSteps(uploadPlanned: boolean | undefined, step: number): string[] {
@@ -211,6 +224,19 @@ export type { CheckResult };
 export const NO_STORAGE_TITLE = 'No storage left';
 export const NO_STORAGE_BODY = 'Your prepaid storage is used up. Buy more to keep capturing.';
 
+/** Only batches that expired (or ran too short) are left. */
+export const STORAGE_EXPIRED_TITLE = 'Storage expired';
+export const STORAGE_EXPIRED_BODY = 'Buy more in the Recall app.';
+
+/** The idle storage notice, or null when a capture can be uploaded. */
+export function storageNotice(
+  storage: StorageState | undefined,
+): { title: string; body: string } | null {
+  if (storage === 'empty') return { title: NO_STORAGE_TITLE, body: NO_STORAGE_BODY };
+  if (storage === 'expired') return { title: STORAGE_EXPIRED_TITLE, body: STORAGE_EXPIRED_BODY };
+  return null;
+}
+
 export type UploadCopy = {
   kind: NoticeKind;
   title: string;
@@ -225,9 +251,9 @@ const sentence = (s: string) => {
 
 /**
  * The notice under a finished capture's checks: what happened to its evidence.
- * `hasStorage`: the pool has an unused batch now (so a no-storage capture can upload).
+ * `storage`: the pool now ('ok' means a no-storage capture can be uploaded after all).
  */
-export function uploadCopy(upload: UploadState, hasStorage: boolean): UploadCopy {
+export function uploadCopy(upload: UploadState, storage: StorageState): UploadCopy {
   switch (upload.status) {
     case 'uploaded':
       return {
@@ -237,7 +263,15 @@ export function uploadCopy(upload: UploadState, hasStorage: boolean): UploadCopy
         actions: [],
       };
     case 'no_storage':
-      return hasStorage
+      if (storage === 'expired') {
+        return {
+          kind: 'error',
+          title: STORAGE_EXPIRED_TITLE,
+          body: `${STORAGE_EXPIRED_BODY} ${NOTHING}`,
+          actions: ['buyStorage'],
+        };
+      }
+      return storage === 'ok'
         ? {
             kind: 'info',
             title: 'Not uploaded yet',

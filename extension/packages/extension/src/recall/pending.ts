@@ -29,10 +29,19 @@ export type EntitySummary =
   | { kind: 'confirmation'; bodySha256: Hex; captureKey: Hex };
 
 export type PendingArea = {
-  get(key: string): Promise<Record<string, unknown>>;
+  /** `null` reads everything (used only to prune old records). */
+  get(key: string | null): Promise<Record<string, unknown>>;
   set(items: Record<string, unknown>): Promise<void>;
-  remove(key: string): Promise<void>;
+  remove(key: string | string[]): Promise<void>;
 };
+
+/** Pending records and tombstones older than this are dropped. */
+export const PENDING_MAX_AGE_MS = 7 * 86_400_000;
+/** At most this many pending records are kept (the newest). */
+export const PENDING_MAX = 20;
+
+/** A published capture: the record key it was published under, and when. */
+type Tombstone = { entityKey: string; at: number };
 
 const defaultArea = (): PendingArea => chrome.storage.local as unknown as PendingArea;
 
@@ -54,6 +63,36 @@ export async function savePending(
   area: PendingArea = defaultArea(),
 ): Promise<void> {
   await area.set({ [PENDING_PREFIX + rec.captureId]: JSON.stringify(rec) });
+  await prunePending(area, rec.createdAt);
+}
+
+/**
+ * Drops pending records and tombstones older than 7 days, and all but the newest 20
+ * pending records. An unpublished capture's evidence stays on Swarm; only the
+ * extension's hand-over copy goes.
+ */
+export async function prunePending(area: PendingArea, now = Date.now()): Promise<void> {
+  const all = await area.get(null);
+  const pending: { key: string; at: number }[] = [];
+  const drop: string[] = [];
+  for (const [key, value] of Object.entries(all)) {
+    if (key.startsWith(PENDING_PREFIX)) {
+      let at = 0;
+      try {
+        at = Number((JSON.parse(String(value)) as PendingRecord).createdAt) || 0;
+      } catch {
+        /* unreadable: oldest, so dropped first */
+      }
+      if (now - at > PENDING_MAX_AGE_MS) drop.push(key);
+      else pending.push({ key, at });
+    } else if (key.startsWith(PUBLISHED_PREFIX)) {
+      const at = (value as Partial<Tombstone> | null)?.at;
+      if (typeof at !== 'number' || now - at > PENDING_MAX_AGE_MS) drop.push(key);
+    }
+  }
+  pending.sort((a, b) => b.at - a.at);
+  drop.push(...pending.slice(PENDING_MAX).map((p) => p.key));
+  if (drop.length) await area.remove(drop);
 }
 
 /** The pending record for exactly this captureId, or null (malformed ids never reach storage). */
@@ -102,8 +141,10 @@ export async function markPublished(
   if (!isEntityKey(entityKey)) return { error: 'entityKey must be 0x + 64 hex' };
   const rec = await readPending(captureId, area);
   if (!rec) {
-    const done = (await area.get(PUBLISHED_PREFIX + captureId))[PUBLISHED_PREFIX + captureId];
-    return same(done as string | undefined, entityKey)
+    const done = (await area.get(PUBLISHED_PREFIX + captureId))[PUBLISHED_PREFIX + captureId] as
+      | Partial<Tombstone>
+      | undefined;
+    return same(done?.entityKey, entityKey)
       ? { ok: true }
       : { error: 'no pending capture with this id' };
   }
@@ -111,7 +152,8 @@ export async function markPublished(
   if ('error' in entity) return { error: `the Arkiv record could not be read: ${entity.error}` };
   const mismatch = entityMismatch(rec, entity);
   if (mismatch) return { error: `the Arkiv record does not match this capture: ${mismatch}` };
-  await area.set({ [PUBLISHED_PREFIX + captureId]: entityKey.toLowerCase() });
+  const tombstone: Tombstone = { entityKey: entityKey.toLowerCase(), at: Date.now() };
+  await area.set({ [PUBLISHED_PREFIX + captureId]: tombstone });
   await area.remove(PENDING_PREFIX + captureId);
   return { ok: true };
 }

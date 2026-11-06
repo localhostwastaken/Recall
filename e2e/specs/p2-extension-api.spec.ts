@@ -41,10 +41,11 @@ const gnosisPayer = createWalletClient({
 });
 
 /** Other suites use the same faucet key; a nonce race is retried. */
-async function buy(owner: Address): Promise<Hex> {
+/** Batches need at least 2 days left to join the pool, so tests buy 3 unless told otherwise. */
+async function buy(owner: Address, days = 3): Promise<Hex> {
   for (let attempt = 0; ; attempt++) {
     try {
-      return (await buyBatch(gnosisPayer, { owner, depth: 17, days: 1 })).batchId;
+      return (await buyBatch(gnosisPayer, { owner, depth: 17, days })).batchId;
     } catch (err) {
       if (attempt >= 3 || !/nonce|underpriced|already known/i.test(String(err))) throw err;
       await new Promise((r) => setTimeout(r, 2_000));
@@ -88,6 +89,19 @@ async function storageLocal(key: string): Promise<unknown> {
       .chrome.storage.local;
     return k === '*' ? s.get(null) : (await s.get(k))[k];
   }, key);
+}
+
+/** Writes (or, with undefined, removes) one chrome.storage.local key in the extension. */
+async function setLocal(key: string, value: unknown): Promise<void> {
+  await sw().evaluate(
+    async ([k, v]) => {
+      const s = (globalThis as unknown as {
+        chrome: { storage: { local: { set(i: object): Promise<void>; remove(k: string): Promise<void> } } };
+      }).chrome.storage.local;
+      await (v === undefined ? s.remove(k) : s.set({ [k]: v }));
+    },
+    [key, value] as const,
+  );
 }
 
 const pool = async () => ((await storageLocal('recall.pool')) as Pool | undefined) ?? [];
@@ -180,6 +194,25 @@ test.describe('@p2 extension api', () => {
       const storagePage = await opened;
       await expect.poll(() => storagePage.url()).toBe(`${APP}/#/storage`);
       await storagePage.close();
+
+      // Only an expired batch left: a distinct notice (the popup follows the pool live).
+      await setLocal('recall.pool', [
+        {
+          batchId: `0x${'ee'.repeat(32)}`,
+          depth: 17,
+          used: false,
+          usable: false,
+          startBlock: '1',
+          addedAt: 1,
+          dead: 'batch expired',
+        },
+      ]);
+      await expect(popup.getByRole('heading', { name: 'Storage expired' })).toBeVisible();
+      await expect(popup.getByText('Buy more in the Recall app.')).toBeVisible();
+      await expect(popup.getByText(/^Storage expired: the page will be checked but not uploaded/)).toBeVisible();
+      await expect(popup.getByRole('button', { name: 'Buy storage' })).toBeVisible();
+      await setLocal('recall.pool', undefined);
+      await expect(popup.getByRole('heading', { name: 'No storage left' })).toBeVisible();
     } finally {
       await popup.close();
       await tab.close();
@@ -221,6 +254,20 @@ test.describe('@p2 extension api', () => {
     // Malformed requests are refused before any chain read.
     expect((await api<{ error?: string }>({ type: 'recall.addBatches', batchIds: ['0x1234'] })).error).toMatch(/batch id/i);
     expect((await api<{ error?: string }>({ type: 'recall.addBatches', batchIds: 'nope' })).error).toMatch(/batch id/i);
+  });
+
+  test('addBatches rejects a batch with less than 2 days left', async () => {
+    // Owned by the stamp key and paid for, but only for one day.
+    const short = await buy(stampAddress, 1);
+    const res = await api<{ error?: string; rejected?: { batchId: Hex; reason: string }[] }>({
+      type: 'recall.addBatches',
+      batchIds: [short],
+    });
+    expect(res.error, JSON.stringify(res)).toBeTruthy();
+    expect(res.rejected).toEqual([
+      { batchId: short.toLowerCase(), reason: expect.stringMatching(/storage left; needs at least 2 days/) },
+    ]);
+    expect(await pool()).toEqual([]);
   });
 
   let captureId: string;
