@@ -2,6 +2,7 @@ import type { VerifiedFacts } from '@recall/evidence';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { formatBytes } from '../format';
 import { contentKind, decodeBody } from '../timeline/content';
+import { Notice } from '../ui/Notice';
 import { previewDocument } from './previewDoc';
 
 /** Bigger bodies are not drawn: a hostile file must not be able to make the page struggle. */
@@ -51,9 +52,16 @@ function PdfDownload({ facts }: { facts: VerifiedFacts }) {
 /**
  * The captured bytes, drawn safely (design brief 4.5). HTML and text go into
  * `<iframe sandbox="" srcdoc>` (an empty sandbox: no scripts, no same-origin, no forms, no
- * popups) with outside resources blocked. The captured page is never put into the app's own
- * DOM. `facts` are the verified facts, so this only ever shows bytes whose checks passed.
+ * popups) with outside resources blocked and every link and redirect taken out (see
+ * `previewDoc`). The captured page is never put into the app's own DOM.
+ *
+ * `facts` exist when checks A and B passed and the signature is not invalid, so they can also
+ * belong to a witness the person has not trusted (check C warns) or to an HTTP error page; the
+ * verdict above says so. This shows what the witness signed, not that the page was trustworthy.
  * `fallback` is an action (the evidence download) offered when there is no preview.
+ *
+ * Backstop: a preview loads once. If the frame loads a second time something navigated it, so
+ * it is replaced by a notice.
  */
 export function Preview({ facts, fallback }: { facts: VerifiedFacts; fallback?: ReactNode }) {
   const kind = contentKind(facts.contentType);
@@ -63,8 +71,16 @@ export function Preview({ facts, fallback }: { facts: VerifiedFacts; fallback?: 
     [facts.body, facts.contentType, kind, tooBig],
   );
 
+  const [loads, setLoads] = useState(0);
+  useEffect(() => setLoads(0), [doc]); // a different document is a fresh frame
   let content: ReactNode;
-  if (kind === 'pdf') content = <PdfDownload facts={facts} />;
+  if (loads > 1) {
+    content = (
+      <Notice kind="warn" title="The preview was stopped.">
+        The captured page tried to load something else in its frame, so it is not shown.
+      </Notice>
+    );
+  } else if (kind === 'pdf') content = <PdfDownload facts={facts} />;
   else if (doc !== null) {
     content = (
       <iframe
@@ -73,6 +89,7 @@ export function Preview({ facts, fallback }: { facts: VerifiedFacts; fallback?: 
         sandbox=""
         srcDoc={doc}
         referrerPolicy="no-referrer"
+        onLoad={() => setLoads((n) => n + 1)}
       />
     );
   } else if (tooBig && (kind === 'html' || kind === 'text')) {

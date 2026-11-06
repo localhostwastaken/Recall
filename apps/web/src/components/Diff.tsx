@@ -65,8 +65,10 @@ export function Diff({ versions }: { versions: Version[] }) {
     const a = comparableText(from.facts.body, from.facts.contentType);
     const b = comparableText(to.facts.body, to.facts.contentType);
     if (a === null || b === null) return { kind: 'unsupported' as const };
-    return { kind: 'diff' as const, parts: withContext(wordDiff(a, b)) };
-  }, [from, to]);
+    const parts = wordDiff(a, b);
+    return parts === null ? { kind: 'toolarge' as const } : { kind: 'diff' as const, parts: withContext(parts) };
+    // The facts objects are stable while later records are still being checked.
+  }, [from.facts, to.facts, from.entityKey, to.entityKey]);
 
   return (
     <section aria-labelledby="diff-title" className="diff-block">
@@ -89,6 +91,11 @@ export function Diff({ versions }: { versions: Version[] }) {
       <p className="muted diff-caption">Text only. HTML tags and whitespace-only changes are ignored.</p>
       {same ? (
         <Notice kind="info" title="Choose two different versions to compare." />
+      ) : result?.kind === 'toolarge' ? (
+        <Notice kind="info" title="Too different or too large to compare here.">
+          These versions are too different, or too long, to compare word by word in the browser. Open each version
+          to read it.
+        </Notice>
       ) : result?.kind === 'unsupported' ? (
         <Notice kind="info" title="No text comparison for this file type.">
           Only HTML and text pages can be compared word by word.

@@ -986,3 +986,7 @@ a.btn-secondary:hover {
   justify-items: start;
   max-width: var(--measure);
 }
+
+.tl-more {
+  list-style: none;
+}

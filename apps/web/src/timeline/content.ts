@@ -77,9 +77,20 @@ export function comparableText(bytes: Uint8Array, contentType: string | undefine
 
 export type DiffPart = { kind: 'same' | 'removed' | 'added'; text: string };
 
-/** A word diff of two texts (whitespace differences are not changes). */
-export function wordDiff(before: string, after: string): DiffPart[] {
-  return diffWords(before, after).map((c: Change) => ({
+/** Texts longer than this (in characters) are not compared: the diff is for pages, not data dumps. */
+export const MAX_DIFF_CHARS = 200_000;
+/** Time and edit budget for one diff, so two very different texts cannot freeze the tab. */
+const DIFF_LIMITS = { timeout: 500, maxEditLength: 2000 } as const;
+
+/**
+ * A word diff of two texts (whitespace differences are not changes), or null when the texts
+ * are too long or too different to compare within a small time and edit budget.
+ */
+export function wordDiff(before: string, after: string): DiffPart[] | null {
+  if (before.length > MAX_DIFF_CHARS || after.length > MAX_DIFF_CHARS) return null;
+  const changes = diffWords(before, after, DIFF_LIMITS);
+  if (changes === undefined) return null;
+  return changes.map((c: Change) => ({
     kind: c.added ? 'added' : c.removed ? 'removed' : 'same',
     text: c.value,
   }));

@@ -37,6 +37,7 @@ export function classify(report: VerifiedReport, urlHash: Hex): Checked {
   if (C.status === 'warn') return no('Unknown witness', 'warn');
   if (B.status === 'warn') return no(`HTTP ${B.detail}, not a normal page`, 'warn');
   if (C.status === 'unavailable' || B.status === 'unavailable') return no("Signature couldn't be checked", 'unavailable');
+  // Everything passed but the time: the witness signed a moment that is not a date.
   if (report.facts && safeDate(report.facts.signedAt) === null) return no('Impossible capture time', 'fail');
   return no("Couldn't be verified", 'unavailable');
 }
@@ -56,7 +57,10 @@ export type Pending = { entityKey: Hex; kind: 'capture' | 'confirmation' };
 export type Timeline = {
   versions: Version[];
   unverified: Unverified[];
+  /** Being checked right now. */
   pending: Pending[];
+  /** Not checked yet (the budget of automatic checks was used up). Never shown as verified. */
+  unchecked: Pending[];
 };
 
 const lower = (h: string): string => h.toLowerCase();
@@ -65,35 +69,47 @@ const observation = (f: VerifiedFacts): string => `${lower(f.urlHash)}|${lower(f
 const byTime = (a: VerifiedFacts, b: VerifiedFacts): number => (a.signedAt === b.signedAt ? 0 : a.signedAt < b.signedAt ? -1 : 1);
 
 /**
- * Builds the timeline from the records and their check results (a record without a result is
- * still being checked).
+ * Builds the timeline from the records and their check results. A record without a result is
+ * either being checked (`pending`) or, when listed in `notStarted`, not checked yet
+ * (`unchecked`).
  *
  * - Verified captures are ordered by their signed time (not by an index field) and numbered.
  *   Records that carry the same verified observation collapse into one, so anyone re-publishing
  *   a real capture cannot add a second version.
  * - A confirmation sits under the capture it names once its own evidence verified (A to C), it
- *   is signed after that capture, and its bytes are the capture's bytes.
+ *   is signed after that capture and before any newer version, and its bytes are the capture's
+ *   bytes.
  */
-export function buildTimeline(rows: readonly Listed[], checked: ReadonlyMap<Hex, Checked>): Timeline {
-  const get = (key: Hex) => checked.get(key);
-  const pending: Pending[] = [];
-  const unverified: Unverified[] = [];
+export function buildTimeline(
+  rows: readonly Listed[],
+  checked: ReadonlyMap<Hex, Checked>,
+  notStarted: ReadonlySet<Hex> = new Set(),
+): Timeline {
+  // Keys in an index can be written in any case; a confirmation's `captureKey` must still find its capture.
+  const results = new Map<string, Checked>();
+  for (const [k, v] of checked) results.set(lower(k), v);
+  const idle = new Set<string>();
+  for (const k of notStarted) idle.add(lower(k));
+  const get = (key: Hex) => results.get(lower(key));
 
-  type VCap = { entityKey: Hex; facts: VerifiedFacts; alias: Hex[] };
+  const pending: Pending[] = [];
+  const unchecked: Pending[] = [];
+  const unverified: Unverified[] = [];
+  const wait = (r: Listed) => (idle.has(lower(r.entityKey)) ? unchecked : pending).push({ entityKey: r.entityKey, kind: r.kind });
+
+  type VCap = { entityKey: Hex; facts: VerifiedFacts };
   const caps = new Map<string, VCap>(); // observation -> capture
   const capByKey = new Map<string, VCap>(); // any record key of a verified capture -> capture
-  const capRowKeys = new Set<string>();
-  const capRows = rows.filter((r) => r.kind === 'capture');
-  for (const r of capRows) {
-    capRowKeys.add(lower(r.entityKey));
+  const capRows = new Set<string>();
+  for (const r of rows) {
+    if (r.kind !== 'capture') continue;
+    capRows.add(lower(r.entityKey));
     const c = get(r.entityKey);
-    if (!c) pending.push({ entityKey: r.entityKey, kind: 'capture' });
+    if (!c) wait(r);
     else if (c.state === 'unverified') unverified.push({ entityKey: r.entityKey, kind: 'capture', reason: c.reason, status: c.status });
     else {
       const k = observation(c.facts);
-      const known = caps.get(k);
-      if (known) known.alias.push(r.entityKey);
-      else caps.set(k, { entityKey: r.entityKey, facts: c.facts, alias: [r.entityKey] });
+      if (!caps.has(k)) caps.set(k, { entityKey: r.entityKey, facts: c.facts });
       capByKey.set(lower(r.entityKey), caps.get(k)!);
     }
   }
@@ -103,37 +119,41 @@ export function buildTimeline(rows: readonly Listed[], checked: ReadonlyMap<Hex,
   const versionOf = new Map(versions.map((v, i) => [ordered[i], v] as const));
 
   const seenConfirmations = new Set<string>();
+  const reject = (r: Listed, reason: string, status: Unverified['status']) =>
+    unverified.push({ entityKey: r.entityKey, kind: 'confirmation', reason, status });
   for (const r of rows) {
     if (r.kind !== 'confirmation') continue;
     const c = get(r.entityKey);
     if (!c) {
-      pending.push({ entityKey: r.entityKey, kind: 'confirmation' });
+      wait(r);
       continue;
     }
     if (c.state === 'unverified') {
-      unverified.push({ entityKey: r.entityKey, kind: 'confirmation', reason: c.reason, status: c.status });
+      reject(r, c.reason, c.status);
       continue;
     }
     const target = capByKey.get(lower(r.captureKey));
     if (!target) {
-      // The capture it names is still being checked, or is not shown (unverified, expired, hidden).
-      if (capRowKeys.has(lower(r.captureKey)) && !get(r.captureKey)) pending.push({ entityKey: r.entityKey, kind: 'confirmation' });
-      else unverified.push({ entityKey: r.entityKey, kind: 'confirmation', reason: "The capture it confirms isn't shown", status: 'unavailable' });
+      // Still being checked, not checked yet, or not shown at all (unverified, expired, hidden).
+      const named = lower(r.captureKey);
+      if (capRows.has(named) && !results.has(named)) {
+        (idle.has(named) ? unchecked : pending).push({ entityKey: r.entityKey, kind: 'confirmation' });
+      } else reject(r, "The capture it confirms isn't shown", 'unavailable');
       continue;
     }
     if (lower(c.facts.bodySha256) !== lower(target.facts.bodySha256)) {
-      unverified.push({ entityKey: r.entityKey, kind: 'confirmation', reason: "Doesn't match the capture it confirms", status: 'fail' });
+      reject(r, "Doesn't match the capture it confirms", 'fail');
       continue;
     }
     if (c.facts.signedAt <= target.facts.signedAt) {
-      unverified.push({ entityKey: r.entityKey, kind: 'confirmation', reason: 'Dated before the capture it confirms', status: 'fail' });
+      reject(r, 'Dated before the capture it confirms', 'fail');
       continue;
     }
     const version = versionOf.get(target)!;
     const newer = versions[version.n]; // the next version, if there is one
     if (newer && c.facts.signedAt > newer.facts.signedAt) {
       // "Unchanged" cannot hold across a newer version, even if the page later went back.
-      unverified.push({ entityKey: r.entityKey, kind: 'confirmation', reason: 'Dated after a newer version', status: 'fail' });
+      reject(r, 'Dated after a newer version', 'fail');
       continue;
     }
     const k = observation(c.facts);
@@ -142,5 +162,5 @@ export function buildTimeline(rows: readonly Listed[], checked: ReadonlyMap<Hex,
     version.confirmations.push({ entityKey: r.entityKey, facts: c.facts });
   }
   for (const v of versions) v.confirmations.sort((a, b) => byTime(a.facts, b.facts));
-  return { versions, unverified, pending };
+  return { versions, unverified, pending, unchecked };
 }

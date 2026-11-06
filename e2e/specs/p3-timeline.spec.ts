@@ -8,11 +8,11 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createWalletClient, http as viemHttp, parseEther, sha256, type Hex } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
-import { canonicalUrl, encodeEvidence, parseResponse, urlHash as hashUrl } from '../../packages/evidence/src/index';
+import { canonicalUrl, encodeEvidence, parseResponse, urlHash as hashUrl, type EvidenceFile } from '../../packages/evidence/src/index';
 import { LOCAL, arkivPublic, arkivWallet, writeConfirmation, type CaptureRow } from '../../packages/net/src/index';
 import { DEVNET_WITNESS_ADDRESS, DEV_PRIVATE_KEY } from '../fixtures/keys';
 import { allowLocalArkiv } from '../fixtures/localCors';
-import { NOTICE_HOST, Rig, record, requestBytes, signEvidence } from '../fixtures/verifyRig';
+import { NOTICE_HOST, Rig, record, requestBytes, signEvidence, tamperEvidence } from '../fixtures/verifyRig';
 
 // The browse UI of the web app (apps/web on :5173): the per-address timeline, the "it said X,
 // now says Y" diff, the sandboxed preview and the evidence download. Everything runs against the
@@ -68,10 +68,10 @@ function setNoticeVersion(v: 1 | 2): Promise<void> {
 type Captured = Awaited<ReturnType<typeof captureAt>>;
 
 /** Records `target` from the notice fixture over TLS 1.2 and witness-signs it. */
-async function captureAt(target: string, rec?: Awaited<ReturnType<typeof record>>) {
+async function captureAt(target: string, rec?: Awaited<ReturnType<typeof record>>, witnessKey?: Hex) {
   const recording = rec ?? (await record(target));
   const url = canonicalUrl(`https://${NOTICE_HOST}${target}`);
-  const { evidence, signer, signedAt } = await signEvidence(recording, { capturedUrl: url });
+  const { evidence, signer, signedAt } = await signEvidence(recording, { capturedUrl: url, key: witnessKey });
   const body = parseResponse(recording.recv).body;
   return { url, urlHash: hashUrl(url), evidence, evidenceBytes: encodeEvidence(evidence), body, bodySha256: sha256(body), signer, signedAt };
 }
@@ -138,8 +138,15 @@ const targetC = `/notice?tlc=${run}`; // a capture plus a "confirmation" of diff
 const targetD = `/notice?tld=${run}`; // more junk rows than a small row budget
 const targetS = `/script?tls=${run}`; // a page with a script
 const targetP = `/notice.pdf?tlp=${run}`; // a PDF
+const targetE = `/notice?tle=${run}`; // one real capture plus four that must never be listed
+const targetW = `/words?tlw=${run}`; // two versions that share almost no words
 let a1: Captured, a1c: Captured, a2: Captured, b: Captured, c1: Captured, s: Captured, pdf: Captured, hostile: Captured;
+let e0: Captured, w1: Captured, w2: Captured;
+let keyW1: Hex, keyE0: Hex;
 let keyA1: Hex, keyA2: Hex, keyB: Hex, keyC1: Hex, keyS: Hex, keyPdf: Hex, keyHostile: Hex;
+
+/** n random 5-letter words: two such texts have almost nothing in common. */
+const randomWords = (n: number) => Array.from({ length: n }, () => randomBytes(4).toString('hex').slice(0, 5)).join(' ');
 const junkRef = (): Hex => `0x${randomBytes(32).toString('hex')}` as Hex;
 
 /** Where the hostile page's requests would go (the test listens there). */
@@ -147,11 +154,21 @@ const OUTSIDE_PORT = 15174;
 const HOSTILE = `<!doctype html><html><head><meta charset="utf-8">
 <meta http-equiv="refresh" content="0;url=http://localhost:15174/away">
 <link rel="stylesheet" href="http://localhost:15174/evil.css">
+<link rel="preconnect" href="http://localhost:15174"><link rel="dns-prefetch" href="http://localhost:15174">
 <script>window.__ran = 1; fetch('http://localhost:15174/script-fetch');</script></head>
 <body><p>hostile page</p>
 <img src="http://localhost:15174/pixel.png" onerror="window.__ran = 2">
 <iframe src="http://localhost:15174/frame.html"></iframe>
-<a href="http://localhost:15174/click">a link</a></body></html>`;
+<iframe srcdoc="<a href='http://localhost:15174/nested' target='_self'>nested</a>"></iframe>
+<a href="http://localhost:15174/click">a link</a>
+<a id="self" target="_self" href="http://localhost:15174/self">self link</a>
+<a target="_top" href="http://localhost:15174/top">top link</a>
+<svg width="320" height="40" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<a target="_self" xlink:href="http://localhost:15174/svg-xlink"><text x="5" y="25">svg xlink link</text></a>
+<a target="_self" href="http://localhost:15174/svg-href"><text x="150" y="25">svg href link</text></a></svg>
+<map name="m"><area shape="rect" coords="0,0,60,60" href="http://localhost:15174/area" target="_self"></map>
+<img usemap="#m" width="60" height="60" alt="area map" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">
+<form action="http://localhost:15174/form"><button type="submit">submit</button></form></body></html>`;
 
 test.beforeAll(async () => {
   test.setTimeout(420_000);
@@ -185,6 +202,11 @@ test.beforeAll(async () => {
     await setNoticeVersion(1);
   }
   hostile = await captureHtml(`/hostile?tlh=${run}`, HOSTILE);
+  w1 = await captureHtml(targetW, `<!doctype html><html><body><p>${randomWords(6000)}</p></body></html>`);
+  await sleep(1_100);
+  w2 = await captureHtml(targetW, `<!doctype html><html><body><p>${randomWords(6000)}</p></body></html>`);
+  expect(w2.signedAt).toBeGreaterThan(w1.signedAt);
+  e0 = await captureAt(targetE);
   expect(a1.bodySha256).toBe(a1c.bodySha256);
   expect(a1.bodySha256).not.toBe(a2.bodySha256);
   expect(a1c.signedAt).toBeGreaterThan(a1.signedAt);
@@ -207,6 +229,21 @@ test.beforeAll(async () => {
   // targetD: three junk rows, more than the budget of 2 the spec gives the page.
   const d = await captureAt(targetD, await record(targetD));
   for (let i = 0; i < 3; i++) await rig.write({ ...(await rowOf(d)), evidenceRef: junkRef() });
+
+  keyW1 = await publish(w1);
+  await publish(w2);
+
+  // targetE: one real capture, plus four records that look like captures but must never be listed.
+  keyE0 = await publish(e0);
+  const other = (key?: Hex) => captureAt(targetE, undefined, key);
+  const stranger = await other(`0x${randomBytes(32).toString('hex')}`); // signed by a witness nobody trusts
+  await publish(stranger);
+  const forged = await other(); // a good statement under the signature of a different one
+  await publish({ ...forged, evidenceBytes: encodeEvidence({ ...forged.evidence, signature: e0.evidence.signature } satisfies EvidenceFile) });
+  const tampered = await other(); // bytes changed after signing
+  await publish({ ...tampered, evidenceBytes: tamperEvidence(tampered.evidence) });
+  const lying = await other(); // genuine evidence under a record that says something else
+  await publish(lying, { bodySha256: `0x${'ab'.repeat(32)}` });
 
   // The fixture itself must be sound, or every test below would prove nothing.
   expect([keyA1, keyA2, keyB, keyC1, keyS, keyPdf, keyHostile].every((k) => /^0x[0-9a-f]{64}$/.test(k))).toBe(true);
@@ -268,13 +305,13 @@ test('@p3 timeline shows v1, confirmation and v2 in order', async ({ page }) => 
   await expect(v2.getByRole('link').first()).toHaveAttribute('href', `#/c/${keyA2}`);
   // The confirmation sits under the capture it confirms, and says only what was checked.
   const conf = v1.locator('[data-kind="confirmation"]');
-  await expect(conf).toHaveText(new RegExp(`Confirmed unchanged on ${utc(a1c.signedAt).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  await expect(conf).toHaveText(new RegExp(`Still unchanged on ${utc(a1c.signedAt).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
   await expect(v2.locator('[data-kind="confirmation"]')).toHaveCount(0);
   // Totals count verified items only, and the first captured time is the witness's.
   await expect(page.locator('[data-summary]')).toHaveText(`2 versions · 1 confirmation · first captured ${utc(a1.signedAt)}`);
   await expect(unverifiedSwitch(page)).toHaveCount(0);
   await expect(page.getByText(/Too many records/)).toHaveCount(0);
-  await expect(page.getByText(/never changed|tamper-proof|authentic/i)).toHaveCount(0);
+  await expect(page.getByText(/never changed|Confirmed unchanged|tamper-proof|authentic/i)).toHaveCount(0);
 
   // The capture detail knows its way back to the timeline.
   await v2.getByRole('link').first().click();
@@ -315,9 +352,9 @@ test('@p3 timeline diff shows 15 December removed and 12 December added', async 
   // Inline word diff: the date that changed is struck out and the new one added.
   await expect(diff.locator('del')).toHaveCount(1);
   await expect(diff.locator('ins')).toHaveCount(1);
-  await expect(diff.locator('del')).toContainText('15');
-  await expect(diff.locator('ins')).toContainText('12');
-  await expect(diff.locator('del')).not.toContainText('12');
+  // Exactly the changed words (a hidden "removed:" / "added:" label comes first), nothing around them.
+  await expect(diff.locator('del')).toHaveText('removed: 15');
+  await expect(diff.locator('ins')).toHaveText('added: 12');
   await expect(diff.locator('del .visually-hidden')).toHaveText('removed: ');
   await expect(diff.locator('ins .visually-hidden')).toHaveText('added: ');
   await expect(diff).toContainText('Deadline:');
@@ -376,15 +413,18 @@ test('@p3 timeline preview iframe is sandboxed and scripts do not run', async ({
   expect(errors).toEqual([]);
 });
 
-test('@p3 timeline preview blocks scripts, outside resources, redirects and clicks of a hostile page', async ({ page }) => {
+test('@p3 timeline preview blocks scripts, outside resources, redirects, links and forms of a hostile page', async ({ page }) => {
   // A real server stands in for "the rest of the internet". Whatever the captured page asks of it
-  // (an image, a stylesheet, a frame, a fetch, a redirect, a click) would be counted here. (The
-  // browser's own request events do not report a sandboxed frame's requests, so they cannot be used.)
+  // (an image, a stylesheet, a frame, a fetch, a redirect, a preconnect, a link of any kind) would be
+  // counted here: requests, and also bare connections. (The browser's own request events do not
+  // report a sandboxed frame's requests, so they cannot be used.)
   const hits: string[] = [];
+  let connections = 0;
   const outside = http.createServer((req, res) => {
     hits.push(`${req.method} ${req.url}`);
     res.writeHead(200, { 'content-type': 'text/html' }).end('outside');
   });
+  outside.on('connection', () => connections++);
   await new Promise<void>((done, fail) => {
     outside.once('error', fail); // e.g. the port is taken: fail now instead of hanging
     outside.listen(OUTSIDE_PORT, done);
@@ -392,23 +432,64 @@ test('@p3 timeline preview blocks scripts, outside resources, redirects and clic
   try {
     await page.goto(capturePage(keyHostile));
     await expect(verdict(page)).toHaveAttribute('data-verdict', 'pass');
-    const frame = await (await preview(page).elementHandle())!.contentFrame();
+    const frameEl = preview(page);
+    const frame = await (await frameEl.elementHandle())!.contentFrame();
     await expect.poll(() => frame!.evaluate(() => document.body?.textContent ?? '')).toContain('hostile page');
     await page.waitForTimeout(1_500); // a meta refresh or a late request would have fired by now
-    expect(hits).toEqual([]);
-    expect(await frame!.evaluate(() => location.href)).toBe('about:srcdoc');
+    const quiet = async (what: string) => {
+      expect(hits, what).toEqual([]);
+      expect(connections, `${what}: connections`).toBe(0);
+      expect(await frame!.evaluate(() => location.href), what).toBe('about:srcdoc');
+      expect(page.context().pages(), `${what}: popup`).toHaveLength(1);
+      await expect(page).toHaveURL(capturePage(keyHostile));
+    };
+    await quiet('after load');
     expect(await frame!.evaluate(() => (window as unknown as { __ran?: number }).__ran)).toBeUndefined();
-    // Clicking a link in the preview goes nowhere (no popups, no top navigation).
-    await frame!.getByText('a link').click({ force: true });
-    await page.waitForTimeout(500);
-    expect(hits).toEqual([]);
-    expect(await frame!.evaluate(() => location.href)).toBe('about:srcdoc');
-    await expect(page).toHaveURL(capturePage(keyHostile));
-    expect(page.context().pages()).toHaveLength(1); // no popup
+
+    // Nothing in the document can navigate: no href is left on any link, whatever its target.
+    expect(await frame!.evaluate(() => [...document.querySelectorAll('a, area')].filter((a) => a.hasAttribute('href') || a.hasAttributeNS('http://www.w3.org/1999/xlink', 'href')).length)).toBe(0);
+    expect(await frame!.evaluate(() => document.querySelectorAll('link, iframe, meta[http-equiv="refresh"], base[href]').length)).toBe(0);
+
+    // Clicks: a plain link, target=_self, target=_top, SVG links (xlink:href and href), an image map, a form.
+    for (const target of ['a link', 'self link', 'top link', 'svg xlink link', 'svg href link']) {
+      await frame!.getByText(target, { exact: true }).click({ force: true });
+      await page.waitForTimeout(250);
+      await quiet(`click "${target}"`);
+    }
+    await frame!.locator('area').click({ force: true, position: { x: 10, y: 10 } }).catch(() => undefined); // an area has no box
+    await frame!.locator('img[usemap]').click({ position: { x: 10, y: 10 } });
+    await frame!.getByRole('button', { name: 'submit' }).click();
+    await page.waitForTimeout(300);
+    await quiet('image map and form');
+
+    // Keyboard: Enter on a focused link (any kind, any target) goes nowhere. Focus is set inside the frame
+    // itself; a link that cannot take focus (no href) simply leaves focus where it was.
+    for (const sel of ['#self', 'a', 'svg a', 'area']) {
+      await frame!.locator(sel).first().evaluate((el) => (el as HTMLElement | SVGElement).focus());
+      await page.keyboard.press('Enter');
+      await page.waitForTimeout(150);
+    }
+    await page.waitForTimeout(300);
+    await quiet('keyboard');
+    // The preview is still there and was never replaced by the "stopped" notice.
+    await expect(frameEl).toHaveCount(1);
+    await expect(page.getByText('The preview was stopped.')).toHaveCount(0);
   } finally {
     outside.closeAllConnections();
     await new Promise((done) => outside.close(done));
   }
+});
+
+test('@p3 timeline a preview that loads twice is stopped', async ({ page }) => {
+  // The backstop: if anything ever made the frame load another document, it is not left on screen.
+  await page.goto(capturePage(keyS));
+  await expect(preview(page)).toHaveCount(1);
+  await expect.poll(async () => (await (await preview(page).elementHandle())!.contentFrame())!.evaluate(() => document.body?.textContent ?? '')).toContain('script page');
+  await preview(page).evaluate((el) => {
+    (el as HTMLIFrameElement).srcdoc += '<!-- reloaded -->'; // a second load of the same frame
+  });
+  await expect(page.getByText('The preview was stopped.')).toBeVisible();
+  await expect(preview(page)).toHaveCount(0);
 });
 
 test('@p3 timeline a PDF capture is offered for download, not drawn in the sandbox', async ({ page }) => {
@@ -488,7 +569,7 @@ test('@p3 timeline a confirmation of different bytes is not shown as a confirmat
   await page.goto(timeline(c1.urlHash));
   await expect(items(page, 'version')).toHaveCount(1);
   await expect(items(page, 'confirmation')).toHaveCount(0);
-  await expect(page.getByText(/Confirmed unchanged/)).toHaveCount(0);
+  await expect(page.getByText(/Still unchanged/)).toHaveCount(0);
   await expect(unverifiedSwitch(page)).toHaveText('Show unverified (1)');
   await unverifiedSwitch(page).click();
   await expect(items(page, 'unverified')).toHaveCount(1);
@@ -536,6 +617,79 @@ test('@p3 timeline unreachable Arkiv shows an error with Retry', async ({ page }
   await expect(items(page, 'version')).toHaveCount(2);
 });
 
+test('@p3 timeline records that are not a pass never become a version', async ({ page }) => {
+  // One real capture of the address, and four records that look like captures: an unknown witness,
+  // a signature that does not belong to the statement, bytes changed after signing, and a record
+  // that says something other than its evidence. Each must be hidden, with its own reason.
+  await page.goto(timeline(e0.urlHash));
+  await expect(items(page, 'version')).toHaveCount(1);
+  await expect(items(page, 'version')).toContainText(`Version 1 · ${utc(e0.signedAt)}`);
+  await expect(items(page, 'pending')).toHaveCount(0);
+  await expect(page.locator('[data-summary]')).toContainText('1 version · 0 confirmations');
+  const sw = unverifiedSwitch(page);
+  await expect(sw).toHaveText('Show unverified (4)');
+  await expect(items(page, 'unverified')).toHaveCount(0);
+  await sw.click();
+  const rows = items(page, 'unverified');
+  await expect(rows).toHaveCount(4);
+  const reasons: [string, string][] = [
+    ['Unknown witness', 'warn'],
+    ['Signature invalid', 'fail'],
+    ["Bytes don't match", 'fail'],
+    ["Record doesn't match its evidence", 'fail'],
+  ];
+  for (const [reason, kind] of reasons) {
+    const row = rows.filter({ hasText: reason });
+    await expect(row, reason).toHaveCount(1);
+    await expect(row.locator('[data-status]'), reason).toHaveAttribute('data-status', kind);
+  }
+  // None of them is green, and none became a version or changed the totals.
+  await expect(rows.locator('[data-status="pass"]')).toHaveCount(0);
+  await expect(items(page, 'version')).toHaveCount(1);
+  await expect(page.locator('[data-summary]')).toContainText('1 version · 0 confirmations');
+});
+
+test('@p3 timeline the diff gives up on two very different versions instead of freezing the tab', async ({ page }) => {
+  await page.goto(timeline(w1.urlHash));
+  await expect(items(page, 'version')).toHaveCount(2);
+  const started = Date.now();
+  await expect(page.getByText('Too different or too large to compare here.')).toBeVisible();
+  expect(Date.now() - started).toBeLessThan(5_000);
+  await expect(page.locator('[data-diff] del, [data-diff] ins')).toHaveCount(0);
+  // The page still answers: switching the view and following a link work straight away.
+  await page.getByRole('radio', { name: 'Side by side' }).check({ force: true });
+  expect(await page.evaluate(() => 1 + 1)).toBe(2);
+  await items(page, 'version').first().getByRole('link').first().click();
+  await expect(page).toHaveURL(capturePage(keyW1));
+});
+
+test('@p3 timeline only the first batch is checked automatically; the rest is Not checked until asked', async ({ page }) => {
+  // The dev-server hook ?batch=2 stands in for the production 100; the address has 3 junk rows.
+  const hash = hashUrl(canonicalUrl(`https://${NOTICE_HOST}${targetD}`));
+  await page.goto(`${APP}/?batch=2#/u/${hash}`);
+  await expect(page.getByText('1 record not checked yet')).toBeVisible();
+  await expect(page.getByText('Checked 2 of 3 records so far.')).toBeVisible();
+  await expect(unverifiedSwitch(page)).toHaveText('Show unverified (2)'); // the unchecked one is not counted as anything
+  await expect(items(page, 'version')).toHaveCount(0);
+  await expect(page.locator('[data-status="pass"]')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Check the next 1' }).click();
+  await expect(unverifiedSwitch(page)).toHaveText('Show unverified (3)');
+  await expect(page.getByText(/not checked yet/)).toHaveCount(0);
+});
+
+test('@p3 timeline long lists are cut with Show more', async ({ page }) => {
+  // The dev-server hook ?page=2 stands in for the production 50 rows per list.
+  const hash = hashUrl(canonicalUrl(`https://${NOTICE_HOST}${targetD}`));
+  await page.goto(`${APP}/?page=2#/u/${hash}`);
+  await unverifiedSwitch(page).click();
+  await expect(items(page, 'unverified')).toHaveCount(2);
+  const more = page.getByRole('button', { name: 'Show more (1 more)' });
+  await expect(more).toBeVisible();
+  await more.click();
+  await expect(items(page, 'unverified')).toHaveCount(3);
+  await expect(page.getByRole('button', { name: /Show more/ })).toHaveCount(0);
+});
+
 test.describe('@p3 timeline storage check never goes green on a nonsense Arkiv expiry', () => {
   // arkiv_getBlockTiming is answered by the test: the capture's own Arkiv expiry is judged from it.
   const timing = (page: Page, answer: Record<string, unknown>) =>
@@ -565,7 +719,7 @@ test.describe('@p3 timeline storage check never goes green on a nonsense Arkiv e
     await page.goto(capturePage(keyA1));
     await expect(status(page, 'E')).toHaveAttribute('data-status', 'warn');
     await expect(e(page)).toContainText('The Arkiv record has expired');
-    await expect(e(page)).not.toContainText('-');
+    await expect(e(page)).not.toContainText(/-\d/); // no negative number of days
     await expect(verdict(page)).toHaveAttribute('data-verdict', 'pass');
   });
 });

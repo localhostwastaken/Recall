@@ -1,8 +1,9 @@
 import { CircleCheck, Copy, LoaderCircle } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import type { Hex } from 'viem';
 import { Diff } from '../components/Diff';
 import { formatBytes, formatLocal, formatUtc, safeDate } from '../format';
+import { pageSize } from '../limits';
 import { buildTimeline, type Pending, type Unverified, type Version } from '../timeline/model';
 import { useTimeline } from '../timeline/useTimeline';
 import { MonoValue, middle } from '../ui/MonoValue';
@@ -14,6 +15,25 @@ import { TechnicalDetails } from '../verify/CheckPanel';
 import { witnessLabel } from '../witness';
 
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
+
+/** Draws the first rows of a list and a "Show more" button for the rest. */
+function Paged<T>({ items, render }: { items: readonly T[]; render: (item: T) => ReactNode }) {
+  const page = useMemo(pageSize, []);
+  const [shown, setShown] = useState(page);
+  const rest = items.length - shown;
+  return (
+    <>
+      {items.slice(0, shown).map(render)}
+      {rest > 0 ? (
+        <li className="tl-more">
+          <button type="button" className="btn btn-secondary" onClick={() => setShown((n) => n + page)}>
+            Show more ({rest} more)
+          </button>
+        </li>
+      ) : null}
+    </>
+  );
+}
 
 /** A signed time from verified evidence, in UTC with the local time on hover. */
 function When({ seconds }: { seconds: bigint }) {
@@ -45,7 +65,7 @@ function VersionItem({ v }: { v: Version }) {
             <li key={c.entityKey} className="tl-confirmation" data-kind="confirmation" data-entity={c.entityKey}>
               <CircleCheck size={16} strokeWidth={1.75} aria-hidden="true" className="tl-confirmation-icon" />
               <span>
-                Confirmed unchanged on <When seconds={c.facts.signedAt} />
+                Still unchanged on <When seconds={c.facts.signedAt} />
               </span>
             </li>
           ))}
@@ -112,7 +132,8 @@ export function Timeline({ urlHash }: { urlHash: Hex }) {
   const toast = useToast();
   const t = useTimeline(urlHash);
   const [showUnverified, setShowUnverified] = useState(false);
-  const tl = useMemo(() => buildTimeline(t.rows, t.checked), [t.rows, t.checked]);
+  // `t.checked` is updated in place; `t.version` says when it changed.
+  const tl = useMemo(() => buildTimeline(t.rows, t.checked, t.notStarted), [t.rows, t.version, t.notStarted]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const copyLink = async () => {
     try {
@@ -142,7 +163,7 @@ export function Timeline({ urlHash }: { urlHash: Hex }) {
           }
         >
           The records could not be read. Check your connection and the Arkiv endpoint, then try again.
-          <TechnicalDetails text={t.error} />
+          <TechnicalDetails text={t.error ?? ''} />
         </Notice>
       </>
     );
@@ -203,7 +224,21 @@ export function Timeline({ urlHash }: { urlHash: Hex }) {
               Checking {plural(tl.pending.length, 'record', 'records')} in your browser…
             </p>
           ) : null}
-          {settled && tl.versions.length === 0 ? (
+          {tl.unchecked.length > 0 ? (
+            <Notice
+              kind="info"
+              title={`${plural(tl.unchecked.length, 'record', 'records')} not checked yet`}
+              actions={
+                <button type="button" className="btn btn-secondary" onClick={t.checkMore}>
+                  Check the next {Math.min(t.batch, tl.unchecked.length)}
+                </button>
+              }
+            >
+              Checked {t.rows.length - tl.unchecked.length} of {t.rows.length} records so far. A record that has not been
+              checked is not listed as a capture: it has not passed its checks.
+            </Notice>
+          ) : null}
+          {settled && tl.versions.length === 0 && tl.unchecked.length === 0 ? (
             <Notice kind="info" title="No capture of this page passed its checks.">
               {plural(tl.unverified.length, 'record', 'records')} didn't pass {tl.unverified.length === 1 ? 'its' : 'their'} checks. Turn on
               “Show unverified ({tl.unverified.length})” to see why.
@@ -218,9 +253,7 @@ export function Timeline({ urlHash }: { urlHash: Hex }) {
                 {tl.versions.map((v) => (
                   <VersionItem key={v.entityKey} v={v} />
                 ))}
-                {tl.pending.map((p) => (
-                  <PendingItem key={p.entityKey} p={p} />
-                ))}
+                <Paged items={tl.pending} render={(p) => <PendingItem key={p.entityKey} p={p} />} />
               </ol>
             </section>
           ) : null}
@@ -242,9 +275,7 @@ export function Timeline({ urlHash }: { urlHash: Hex }) {
                     counted above.
                   </p>
                   <ul className="timeline" data-timeline-unverified>
-                    {tl.unverified.map((u) => (
-                      <UnverifiedItem key={u.entityKey} u={u} />
-                    ))}
+                    <Paged items={tl.unverified} render={(u) => <UnverifiedItem key={u.entityKey} u={u} />} />
                   </ul>
                 </section>
               ) : null}

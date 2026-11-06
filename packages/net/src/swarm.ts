@@ -37,28 +37,84 @@ export async function swarmRootOf(bytes: Uint8Array): Promise<string> {
   return (await splitter.finalize()).hash().toHex();
 }
 
+/** Largest response `downloadBytes` accepts by default. Evidence files are far smaller (a capture is at most 64 KB of page). */
+export const DEFAULT_MAX_DOWNLOAD_BYTES = 2 * 1024 * 1024;
+
+export type DownloadOptions = {
+  /** Abandons the download (and every later gateway) when aborted. */
+  signal?: AbortSignal;
+  /** Refuses responses larger than this many bytes (default 2 MB). */
+  maxBytes?: number;
+};
+
+class TooLarge extends Error {}
+
+/**
+ * Reads a response body, counting bytes as they arrive and cancelling the stream as soon as
+ * `maxBytes` is passed, so a hostile or broken gateway cannot make the page buffer a huge body.
+ */
+async function readCapped(res: Response, maxBytes: number): Promise<Uint8Array> {
+  const stated = Number(res.headers.get('content-length'));
+  if (Number.isFinite(stated) && stated > maxBytes) {
+    await res.body?.cancel().catch(() => undefined);
+    throw new TooLarge(`response is ${stated} bytes, over the ${maxBytes}-byte limit`);
+  }
+  if (!res.body) {
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (bytes.length > maxBytes) throw new TooLarge(`response is over the ${maxBytes}-byte limit`);
+    return bytes;
+  }
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.length;
+    if (size > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      throw new TooLarge(`response is over the ${maxBytes}-byte limit`);
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(size);
+  let at = 0;
+  for (const c of chunks) {
+    out.set(c, at);
+    at += c.length;
+  }
+  return out;
+}
+
 /**
  * Tries each gateway's `/bytes/{ref}` in order and returns the first response
  * whose locally recomputed root reference equals `ref`; gateways are not trusted.
+ * A response over `maxBytes` (default 2 MB) is cut off and counts as a failure of that
+ * gateway. Aborting `signal` stops everything and throws.
  */
 export async function downloadBytes(
   ref: string,
   urls: string[],
+  opts: DownloadOptions = {},
 ): Promise<{ bytes: Uint8Array; from: string }> {
   if (!/^(0x)?[0-9a-f]{64}$/i.test(ref)) throw new Error('invalid swarm reference');
   const want = bare(ref).toLowerCase();
+  const maxBytes = opts.maxBytes ?? DEFAULT_MAX_DOWNLOAD_BYTES;
   const errors: string[] = [];
   for (const url of urls) {
+    opts.signal?.throwIfAborted();
     try {
-      const res = await fetch(`${url.replace(/\/$/, '')}/bytes/${bare(ref)}`);
+      const res = await fetch(`${url.replace(/\/$/, '')}/bytes/${bare(ref)}`, { signal: opts.signal });
       if (!res.ok) {
+        await res.body?.cancel().catch(() => undefined);
         errors.push(`${url}: ${res.status}`);
         continue;
       }
-      const bytes = new Uint8Array(await res.arrayBuffer());
+      const bytes = await readCapped(res, maxBytes);
       if ((await swarmRootOf(bytes)) === want) return { bytes, from: url };
       errors.push(`${url}: reference mismatch (returned bytes do not hash to ${want})`);
     } catch (e) {
+      if (opts.signal?.aborted) throw new Error(`download of ${want} aborted`);
       errors.push(`${url}: ${(e as Error).message}`);
     }
   }
