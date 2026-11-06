@@ -1741,6 +1741,13 @@ export function Approve({ captureId }: { captureId: string | null }) {
           <p className={needsBuy ? 'field-helper approve-helper-reserve' : 'field-helper'} aria-live="polite">
             {helper}
           </p>
+          {needsBuy && !busy && storageChoice ? (
+            // Tertiary: buying ahead on the Storage page makes later captures one confirmation.
+            // Same tab; the capture stays pending in the extension ("Open Recall tab" reopens it).
+            <a className="approve-storage-link" href={`#/storage${extensionId ? `?ext=${extensionId}` : ''}`}>
+              Buy storage once in Storage, then each capture needs one confirmation
+            </a>
+          ) : null}
           {!busy ? (
             <div className="approve-more">
               {isConfirmation && load.earlier ? (

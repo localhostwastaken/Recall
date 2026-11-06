@@ -76,6 +76,25 @@
   line-height: var(--lh-xs);
 }
 
+/* A text link (tertiary), with a 44 px tall hit area. */
+.approve-storage-link {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  min-height: 44px;
+  margin-top: calc(-1 * var(--space-2));
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+  font-weight: 600;
+  color: var(--accent-text);
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+
+.approve-storage-link:hover {
+  color: var(--text);
+}
+
 @media (max-width: 599px) {
   .approve-bar {
     padding: var(--space-3) 0;
