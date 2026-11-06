@@ -66,8 +66,11 @@ Arkiv.
 - The page it captured: `https://localhostwastaken.github.io/Recall/notice/?run=0tzgmo55`, body
   sha256 `0x99bb0a8d8c7026af50281298955f0447def7c5069c66de0566914ffe26932273` ("Deadline: 15 December").
 
-The batch is paid until about 2026-11-09 05:10 UTC. After that the evidence stays only if someone
-tops the batch up: anyone can, with **Keep alive** on the capture's page in the app.
+The batch is paid until about 2026-11-16 05:12 UTC. On 2026-11-06 the treasury added 7 days with
+**Keep alive** in the app (topUp tx
+[`0x3a27fb9a...8e6954`](https://gnosisscan.io/tx/0x3a27fb9a6d9a2d02fe271131e582783fdbba7bfd0fddd7d9b86f35a4358e6954),
+0.319 xBZZ; the same keep-alive added 7 days to the Arkiv record). After that the evidence stays only
+if someone tops the batch up: anyone can, with **Keep alive** on the capture's page in the app.
 
 ## The files that upload to Swarm and read from it
 

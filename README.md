@@ -240,8 +240,8 @@ now on show `"readonly":true`.
   keep-alive therefore checks that the batch exists on Gnosis and has Recall's shape (immutable,
   depth 17 or 18) before anyone pays to top it up.
 - **Storage lasts as long as someone pays.** A postage batch and an Arkiv record expire unless someone
-  uses Keep alive (permissionless). The demo capture's batch is paid until about 2026-11-09; anyone
-  can extend it with Keep alive on the capture's page.
+  uses Keep alive (permissionless). The demo capture's batch is paid until about 2026-11-16 (kept
+  alive by 7 days on 2026-11-06); anyone can extend it with Keep alive on the capture's page.
 - **Install and keys.** The extension installs only in developer mode ("Load unpacked"); it is not
   in the Chrome Web Store. Its stamp key (which can only stamp chunks into batches it owns) is stored
   unencrypted in `chrome.storage.local`.

@@ -26,6 +26,8 @@ export type MockWalletOptions = {
   rpcByChainId: Record<number, string>;
   /** Chain the wallet starts on; defaults to the first entry of `rpcByChainId`. */
   chainId?: number;
+  /** Called with each transaction the wallet has sent (its chain, hash and recipient), before any receipt. */
+  onSent?: (chainId: number, hash: Hex, to: Address | undefined) => void;
 };
 
 export type MockWallet = { address: Address; chainId(): number };
@@ -191,7 +193,10 @@ export async function installMockWallet(page: Page, opts: MockWalletOptions): Pr
           }),
         );
         sending = run.catch(() => undefined);
-        return { result: await run };
+        const sentOn = chainId;
+        const hash = await run;
+        opts.onSent?.(sentOn, hash, tx.to);
+        return { result: hash };
       }
       case 'personal_sign': {
         const [message, from] = params as [string, string];

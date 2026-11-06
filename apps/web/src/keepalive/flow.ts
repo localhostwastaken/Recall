@@ -17,6 +17,7 @@ import {
 } from '@recall/net';
 import { createPublicClient, custom, erc20Abi, http, type Account, type Hex, type PublicClient } from 'viem';
 import { classifyBatch, type BatchVerdict } from './batch';
+import { GAS_STEP_1 } from '../gas';
 import { errorText, shortErrorText } from '../errors';
 import { settle, type Settled } from './settle';
 import {
@@ -52,12 +53,6 @@ export type KeepAliveTarget = {
 export const arkivChainId = (cfg: NetConfig): ChainId => (cfg.arkiv.chain === 'local' ? 1337 : 7794095);
 
 export const isFree = (t: KeepAliveTarget): boolean => t.batchId === null || isFreeBatch(t.batchId);
-
-/**
- * Gas for step 1: an xBZZ approval (51k) plus the top-up (459k), both measured on the Gnosis fork
- * for a depth-17 batch and rounded up so the fee preview errs on the high side.
- */
-const GAS_STEP_1 = 540_000n;
 
 const gnosisClient = (cfg: NetConfig): PublicClient =>
   createPublicClient({ chain: chainFor(100), transport: http(cfg.gnosis.rpcUrl) }) as PublicClient;

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPublicClient, erc20Abi, http, isAddress, type Address, type Hex } from 'viem';
 import { addBatches, getStampAddress } from '../ext';
 import { ceilSig, formatBzz, formatBzzCeil, formatTtl, formatXdaiCeil } from '../format';
+import { GAS_PER_BATCH } from '../gas';
 import { getNetConfig } from '../net';
 import { getSettings } from '../settings';
 import { Field } from '../ui/Field';
@@ -16,11 +17,6 @@ import { chainFor, connectWallet, ensureChain, isUserRejection, walletFor, Walle
 const DEPTH = 17;
 const MAX_BATCHES = 20;
 const DEFAULT_BATCHES = 4;
-/**
- * Gas for one batch: an xBZZ approval plus createBatch. Measured on the Gnosis fork at
- * 51k + 357k = 408k; rounded up so the fee preview errs on the high side.
- */
-const GAS_PER_BATCH = 420_000n;
 /** Bee needs about 12 blocks (1 to 2 minutes) before it accepts stamps for a new batch. */
 const USABLE_TIMEOUT_MS = 4 * 60_000;
 

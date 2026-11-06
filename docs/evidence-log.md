@@ -107,6 +107,60 @@ Spend for the whole check: 0.1367189760376832 xBZZ, about 9.4e-12 xDAI, about 0.
 
 Manual: real MetaMask approval: pending user.
 
+## 2026-11-06 live P4 check: keep-alive of the P2 capture on Gnosis and Rabdi (UTC)
+
+Run: `pnpm test:live --grep p4` (`e2e/live/p4-live.spec.ts`), green at 11:22Z in 1.1 min.
+- The app is the live web build (`VITE_RECALL_NET=live`, bundle `index-8mgeJaF3.js`), served at https://localhostwastaken.github.io/Recall/app/.
+- The wallet is the mock wallet with the treasury key 0xd46480d1Ec02B8ce92aE383914026efD5F73f835. MetaMask is the only stand-in.
+- Every value below was read from the chains before and after the run, not from the page.
+
+Target: the P2 capture.
+- Entity 0xc50021a907dbd1d511d2e4a1482614647cbbb4a0dd2d4bf26ad70065b3611244. Its flags are `readonly: false` and `permissionlessExtension: true`, because it was written before records became read-only.
+- Batch 0xde1b6b808de55064687e6c1ef7eae9aef91d9d9167d44719a2350fb3c6d8dd63: depth 17, immutable, owner 0x5455B84fcB0a05C0B68F8262a183D7e28f2a4212.
+
+Detail page `#/c/0xc500…1244`, before:
+- Verdict pass (A to C).
+- Check E warned: "Expires in 2 days. Keep it alive or download the evidence file." (under a week left).
+
+Keep alive dialog:
+- 7 days, the shortest choice it offers.
+- Quote: "Storage: 0.32 xBZZ on Gnosis", "New end dates: Swarm 16 Nov 2026 · Arkiv 13 Dec 2026".
+- The spend cap (0.35 xBZZ) was checked before Start, against the price read from Gnosis (0.319010944057344 xBZZ) and against the price the dialog showed.
+
+Step 1 on Gnosis (lastPrice 201212 before and after):
+- approve tx 0x1517515019a1807c9bfecf7360c6a08af0cf7d8c5a9f2a2cc858b924fc2013bb (block 49138526, 51,444 gas).
+- topUp tx 0x3a27fb9a6d9a2d02fe271131e582783fdbba7bfd0fddd7d9b86f35a4358e6954 (block 49138529, 624,097 gas).
+- Paid: 24,338,603,520 per chunk (201212 × 7 × 17280) × 2^17 = 0.319010944057344 xBZZ.
+- normalisedBalance went from 942019173100 to 966357776620: up by exactly the per-chunk amount paid.
+- TTL went from 237025 s to 841765 s (+604740 s: 7 days less the minute the run took).
+- **The batch is paid until about 2026-11-16 05:12Z** (it was 2026-11-09 05:12Z).
+- The dialog said "Storage extended to 16 Nov 2026."
+
+Step 2 on Rabdi:
+- extend tx 0xc7c568811efcd9b26db5a0e7963058e8ec2d5f632ee09b633229a125f43d9a1b (block 289189, fee 0.000054683 tGLM).
+- `$expiresAt` went from block 1575811 to 1878211 (+302400 blocks: 7 days of 2 s blocks, added on top of the old expiry).
+- **The record lasts until about 2026-12-13 06:09Z** (it was 2026-12-06 06:09Z).
+
+After:
+- The dialog said "Kept alive until 16 Nov 2026." and "Swarm storage until 16 Nov 2026 · Arkiv record until 13 Dec 2026."
+- Check E, re-read by the page, passed: "Evidence paid on Swarm until 16 Nov 2026 · record on Arkiv until 13 Dec 2026."
+
+Spend, from the treasury balances: 0.319010944057344 xBZZ, 1.6e-11 xDAI and 0.000054683 tGLM (caps 0.35, 0.002 and 0.5).
+- The run notes its top-up in `<tmp>/recall-live/p4-ledger.json`, so a second paid run refuses to start (cap).
+- `RECALL_P4_DRY=1` stops before Start and sends nothing.
+
+## Finding: mainnet Gnosis uses more gas than the fork
+
+| Transaction | Mainnet | Gnosis fork |
+|---|---|---|
+| topUp | 624,097 | 459k |
+| createBatch (P2) | 473,507 | 357k |
+| approve | about 51.4k | about 51.4k |
+
+- The keep-alive and Storage fee previews used the fork's figures (540k and 420k gas), so on mainnet they showed about 25% too little.
+- They now use 760k and 600k (`apps/web/src/gas.ts`). `apps/web/test/gas.test.ts` checks both against the mainnet receipts above.
+- The amounts are tiny: step 1 cost about 1.6e-11 xDAI.
+
 ## Finding: the quick tunnel cannot carry a capture on a slow venue link
 
 - Each capture moves about 77 MB from the browser to the witness during MPC setup. Through the quick tunnel that traffic leaves this Mac and comes back (browser → Cloudflare → cloudflared on the same Mac), so it crosses the uplink and the downlink.
