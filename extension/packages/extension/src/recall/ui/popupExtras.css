@@ -54,6 +54,44 @@
   overflow-wrap: anywhere;
 }
 
+/* The raw error text's "Details": the same quiet orange line and chevron as the Details above. */
+.tech-details > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 32px;
+  padding: 0 var(--space-2);
+  margin-left: calc(-1 * var(--space-2));
+  border-radius: var(--radius-1);
+  font-weight: 600;
+  list-style: none;
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+.tech-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.tech-details > summary:hover {
+  background: var(--surface-sunken);
+}
+
+.tech-details-chevron {
+  flex: none;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.tech-details[open] .tech-details-chevron {
+  transform: rotate(180deg);
+}
+
+.tech-details > p.mono {
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-1);
+  color: var(--text);
+}
+
 /* Success art: floats beside the "Continue in the Recall tab" text, level with the title, so the
    notice barely grows. Skin tones from the duo (apps/web/src/brand/brand.css). */
 .popup-success-art {
@@ -110,7 +148,9 @@
   }
 
   .rc-details-summary,
-  .rc-details-chevron {
+  .rc-details-chevron,
+  .tech-details > summary,
+  .tech-details-chevron {
     transition: none;
   }
 }
