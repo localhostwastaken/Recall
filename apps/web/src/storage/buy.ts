@@ -17,25 +17,33 @@ export const USABLE_TIMEOUT_MS = 4 * 60_000;
 
 /**
  * The createBatch hash under `key`, kept until its outcome is known, so a retry looks the
- * purchase up instead of paying for it again: in memory for as long as the app is open, and in
- * this tab's sessionStorage so it survives a reload. Not in sessionStorage on a shared /bzz/
- * origin (R38), where another site could plant one, nor when the browser blocks it: there memory
- * alone keeps it.
+ * purchase up instead of paying for it again. In memory for as long as the app is open, and in
+ * the browser: `durable` keys (the publish page's, one per capture) in localStorage, so a closed
+ * and reopened tab still finds it; the Storage page's in this tab's sessionStorage. Never in
+ * browser storage on a shared /bzz/ origin (R38), where another site could plant one, nor when the
+ * browser blocks it: there memory alone keeps it.
  */
 const sentInMemory = new Map<string, Hex>();
-export function rememberSent(key: string, txHash: Hex): void {
+const browserArea = (durable: boolean): Storage | null => {
+  try {
+    return durable ? window.localStorage : window.sessionStorage;
+  } catch {
+    return null;
+  }
+};
+export function rememberSent(key: string, txHash: Hex, durable = false): void {
   sentInMemory.set(key, txHash);
   if (isSharedOrigin()) return;
   try {
-    window.sessionStorage.setItem(key, txHash);
+    browserArea(durable)?.setItem(key, txHash);
   } catch {
     /* storage blocked: memory keeps it */
   }
 }
-export function recallSent(key: string): Hex | undefined {
+export function recallSent(key: string, durable = false): Hex | undefined {
   if (!isSharedOrigin()) {
     try {
-      const v = window.sessionStorage.getItem(key);
+      const v = browserArea(durable)?.getItem(key);
       if (v && /^0x[0-9a-fA-F]{64}$/.test(v)) return v as Hex;
     } catch {
       /* storage blocked: memory keeps it */
@@ -45,10 +53,12 @@ export function recallSent(key: string): Hex | undefined {
 }
 export function forgetSent(key: string): void {
   sentInMemory.delete(key);
-  try {
-    window.sessionStorage.removeItem(key);
-  } catch {
-    /* nothing stored */
+  for (const durable of [false, true]) {
+    try {
+      browserArea(durable)?.removeItem(key);
+    } catch {
+      /* nothing stored */
+    }
   }
 }
 
@@ -93,7 +103,15 @@ export type BuyResult =
 export async function buyOneBatch(
   wallet: WalletClient,
   pub: PublicClient,
-  opts: { owner: Address; days: number; quotedTotal?: bigint; sentKey: string; onSent?: (txHash: Hex) => void },
+  opts: {
+    owner: Address;
+    days: number;
+    quotedTotal?: bigint;
+    sentKey: string;
+    /** Keep the hash in localStorage (the publish page), not sessionStorage. */
+    durable?: boolean;
+    onSent?: (txHash: Hex) => void;
+  },
 ): Promise<BuyResult> {
   let sent: Hex | undefined;
   try {
@@ -104,7 +122,7 @@ export async function buyOneBatch(
       quotedTotal: opts.quotedTotal, // the price may move up 10% at most between the quote and the purchase
       onSent: (txHash) => {
         sent = txHash;
-        rememberSent(opts.sentKey, txHash);
+        rememberSent(opts.sentKey, txHash, opts.durable);
         opts.onSent?.(txHash);
       },
     });

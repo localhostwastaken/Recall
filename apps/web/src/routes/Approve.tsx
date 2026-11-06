@@ -38,7 +38,7 @@ import { ChecksCard, TechnicalDetails, WhyWitness } from '../verify/CheckPanel';
 import { GATEWAY_COPY_MS, compareGatewayCopy, type GatewayCopy } from '../verify/gatewayCopy';
 import { verifyRecordEvidence } from '../verify/useVerifiedCapture';
 import { verdictOf } from '../verify/verify';
-import { trustedWitnesses, witnessLabel } from '../witness';
+import { trustedWitnesses } from '../witness';
 import {
   CHAIN_NAMES,
   chainFor,
@@ -74,9 +74,10 @@ import './approve.css';
 /** The upload of a pending capture, as the extension reports it. */
 type UploadInfo =
   | { status: 'none' }
-  | { status: 'uploading' }
+  | { status: 'uploading'; mode?: 'stamped' | 'free' }
   | { status: 'uploaded'; evidenceRef: Hex; batchId: Hex }
-  | { status: 'failed'; reason: string };
+  /** `mode`: the storage the person chose; "Try upload again" uses it again. */
+  | { status: 'failed'; reason: string; mode?: 'stamped' | 'free' };
 
 /** What `recall.getPending` answers (JSON-safe). */
 type PendingRecord = {
@@ -473,6 +474,10 @@ export function Approve({ captureId }: { captureId: string | null }) {
   const [extAsk, setExtAsk] = useState<ExtAsk>({ state: 'none' });
   const [price, setPrice] = useState<Price>({ kind: 'loading' });
   const [priceTry, setPriceTry] = useState(0);
+  /** Shown in the storage choice when the page went back to it (the storage ran out). */
+  const [offerNote, setOfferNote] = useState<string | null>(null);
+  /** Another tab of this app holds this capture's publish lock. */
+  const [otherTab, setOtherTab] = useState(false);
   const followed = useRef(false);
   const dialog = useRef<HTMLDialogElement>(null);
   const opener = useRef<HTMLElement | null>(null);
@@ -532,8 +537,8 @@ export function Approve({ captureId }: { captureId: string | null }) {
   const hasBatch = ready?.pending.storage === 'ok';
   const freeAllowed = ready?.pending.uploadMode === 'free';
 
-  // The price of one batch, shown before buying (no wallet needed to read it).
-  const showPrice = needsStorage && !hasBatch;
+  // The price of one batch, read before any buying is offered (no wallet needed to read it).
+  const showPrice = needsStorage;
   useEffect(() => {
     if (!showPrice) return;
     let live = true;
@@ -617,8 +622,8 @@ export function Approve({ captureId }: { captureId: string | null }) {
   );
 
   /** What the extension says now about storage and the upload (never the evidence: that was checked). */
-  const refreshOffer = useCallback(async () => {
-    if (!captureId) return;
+  const refreshOffer = useCallback(async (): Promise<PendingRecord['storage']> => {
+    if (!captureId) return undefined;
     try {
       const a = await ext.send<PendingRecord>({ type: 'recall.getPending', captureId }, extOpts);
       setLoad((l) =>
@@ -626,10 +631,30 @@ export function Approve({ captureId }: { captureId: string | null }) {
           ? { ...l, pending: { ...l.pending, storage: a.storage, uploadMode: a.uploadMode, upload: a.upload } }
           : l,
       );
+      return a.storage;
     } catch {
-      /* keep what is shown */
+      return undefined; // keep what is shown
     }
   }, [captureId, extOpts]);
+
+  /**
+   * One tab at a time stores and publishes this capture (Web Locks, this origin): a second tab
+   * for the same capture can neither buy, upload nor publish while the first one works.
+   */
+  const exclusive = useCallback(
+    async (fn: () => Promise<unknown>): Promise<void> => {
+      const locks = (navigator as Navigator & { locks?: LockManager }).locks;
+      if (!locks || !captureId) {
+        await fn();
+        return;
+      }
+      await locks.request(`recall.publish.${captureId}`, { ifAvailable: true }, async (lock) => {
+        setOtherTab(lock === null);
+        if (lock) await fn();
+      });
+    },
+    [captureId],
+  );
 
   /** Follows the extension's upload until the evidence is on Swarm, then checks its reference here. */
   const followUpload = useCallback(
@@ -679,25 +704,29 @@ export function Approve({ captureId }: { captureId: string | null }) {
     const u = ready.pending.upload;
     if (u?.status === 'uploading') {
       followed.current = true;
-      const how: SaveHow = ready.pending.uploadMode === 'free' && ready.pending.storage !== 'ok' ? 'free' : 'stamped';
-      followUpload(ready, how)
-        .then((next) => {
-          if (next && next.stored?.gatewayCopy !== 'unavailable') return run('publish', next);
-        })
-        .catch((e) => {
-          setSave(uploadFailed(how, e));
-          void refreshOffer();
-        });
+      const how: SaveHow = u.mode === 'free' ? 'free' : 'stamped';
+      void exclusive(() =>
+        followUpload(ready, how)
+          .then((next) => {
+            if (next && next.stored?.gatewayCopy !== 'unavailable') return run('publish', next);
+          })
+          .catch((e) => {
+            setSave(uploadFailed(how, e));
+            void refreshOffer();
+          }),
+      );
     } else if (u?.status === 'failed') {
       followed.current = true;
-      setSave(uploadFailed('stamped', new Error(u.reason)));
+      // An error already shown here (this tab's own attempt) stays as it is.
+      setSave((now) => (now.state === 'error' ? now : uploadFailed(u.mode === 'free' ? 'free' : 'stamped', new Error(u.reason))));
     }
-  }, [ready, followUpload, run, uploadFailed, refreshOffer]);
+  }, [ready, followUpload, run, uploadFailed, refreshOffer, exclusive]);
 
   /**
-   * Buys one batch for the extension's stamp key, waits until Bee takes stamps for it and hands it
-   * to the extension. A purchase sent before (a lost receipt, a reload) is looked up first and never
-   * bought again; its hash is kept until the extension holds the batch.
+   * Buys one batch for the extension's stamp key, hands it to the extension at once, then waits
+   * until Bee takes stamps for it. A purchase sent before (a lost receipt, a reload, this tab closed
+   * and opened again) is looked up first and never bought again: its hash is kept per capture in
+   * localStorage until the extension holds the batch.
    */
   const buyStorage = async (confirmedOwner?: Address): Promise<boolean> => {
     const key = `recall.approve.sentTx.v1.${captureId}`;
@@ -718,7 +747,7 @@ export function Approve({ captureId }: { captureId: string | null }) {
       return stop("Couldn't reach the Recall extension", `${sentence(reasonOf(e))}. Nothing was bought.`);
     }
     let batchId: Hex | null = null;
-    const earlier = recallSent(key);
+    const earlier = recallSent(key, true);
     if (earlier) {
       setSave({ state: 'buying', how: 'buy', step: 'checking' });
       const found = await settlePurchase(gnosisPub, earlier, owner);
@@ -727,6 +756,11 @@ export function Approve({ captureId }: { captureId: string | null }) {
       else forgetSent(key); // it bought nothing: buy below
     }
     if (!batchId) {
+      // Only at a price read just now: the purchase may cost at most 10% more than shown.
+      if (price.kind !== 'ready') {
+        setPriceTry((n) => n + 1);
+        return stop('Storage price not read yet', 'Recall reads the price before it buys anything. Wait a moment, then try again. Nothing was bought.');
+      }
       setSave({ state: 'buying', how: 'buy', step: 'wallet' });
       let w: ReturnType<typeof walletFor>;
       try {
@@ -746,8 +780,9 @@ export function Approve({ captureId }: { captureId: string | null }) {
       const r = await buyOneBatch(w, gnosisPub, {
         owner,
         days: BUY_DAYS,
-        quotedTotal: price.kind === 'ready' ? price.perBatch : undefined,
+        quotedTotal: price.perBatch,
         sentKey: key,
+        durable: true,
       });
       if (r.kind === 'unknown') return mayHaveGone(r.txHash);
       if (r.kind === 'cancelled') {
@@ -766,9 +801,8 @@ export function Approve({ captureId }: { captureId: string | null }) {
       }
       batchId = r.batchId;
     }
-    // Bee takes stamps a little after creation; the extension also waits before it uploads.
-    setSave({ state: 'buying', how: 'buy', step: 'waiting' });
-    await waitBatchUsable(cfg.swarm.uploadUrl, batchId, USABLE_TIMEOUT_MS, { chain: gnosisPub }).catch(() => undefined);
+    // Handed over at once: from now on the extension holds it, so a reopened tab offers
+    // "Upload and publish", never a second purchase.
     setSave({ state: 'buying', how: 'buy', step: 'handing' });
     try {
       await addBatches([batchId], extOpts);
@@ -780,27 +814,43 @@ export function Approve({ captureId }: { captureId: string | null }) {
     }
     forgetSent(key);
     setBought(true);
+    // Bee takes stamps a little after creation (the extension also waits before it uploads).
+    setSave({ state: 'buying', how: 'buy', step: 'waiting' });
+    await waitBatchUsable(cfg.swarm.uploadUrl, batchId, USABLE_TIMEOUT_MS, { chain: gnosisPub }).catch(() => undefined);
     return true;
   };
 
-  /** Path (b): store the evidence (buying a batch first when asked), then publish. */
-  const saveAndPublish = async (how: SaveHow, confirmedOwner?: Address) => {
-    if (!ready || !captureId || ready.pending.kind !== 'capture' || ready.stored) return;
-    setPublish({ state: 'idle' });
-    if (how === 'buy' && !(await buyStorage(confirmedOwner))) return;
-    try {
-      // Nothing is uploaded before this request: the extension starts it once, whatever the clicks.
-      await ext.send({ type: 'recall.uploadPending', captureId, mode: how === 'free' ? 'free' : 'stamped' }, { timeoutMs: 15_000, ...extOpts });
-      const next = await followUpload(ready, how);
-      // A stored copy the gateways did not confirm is shown first; the person publishes from there.
-      if (next && next.stored?.gatewayCopy !== 'unavailable') await run('publish', next);
-    } catch (e) {
-      setSave(uploadFailed(how, e));
-      void refreshOffer();
-    }
+  /** The storage ran out: back to the choice (buy, or free storage), never an upload loop. */
+  const backToOffer = () => {
+    setSave({ state: 'idle' });
+    setOfferNote('Your extension has no storage left for this capture. Buy storage, or use free storage if it is on.');
   };
 
+  /** Path (b): store the evidence (buying a batch first when asked), then publish. One tab at a time. */
+  const saveAndPublish = (how: SaveHow, confirmedOwner?: Address) =>
+    exclusive(async () => {
+      if (!ready || !captureId || ready.pending.kind !== 'capture' || ready.stored) return;
+      setPublish({ state: 'idle' });
+      setSave({ state: 'idle' });
+      setOfferNote(null);
+      if (how === 'buy' && !(await buyStorage(confirmedOwner))) return;
+      try {
+        // Nothing is uploaded before this request: the extension starts it once, whatever the clicks.
+        await ext.send({ type: 'recall.uploadPending', captureId, mode: how === 'free' ? 'free' : 'stamped' }, { timeoutMs: 15_000, ...extOpts });
+        const next = await followUpload(ready, how);
+        // A stored copy the gateways did not confirm is shown first; the person publishes from there.
+        if (next && next.stored?.gatewayCopy !== 'unavailable') await run('publish', next);
+      } catch (e) {
+        const storage = await refreshOffer();
+        if (how !== 'free' && /no storage batch/i.test(reasonOf(e)) && storage !== 'ok') backToOffer();
+        else setSave(uploadFailed(how, e));
+      }
+    });
+  /** Publishes (connect, switch, write) under the same one-tab lock. */
+  const publishNow = () => void exclusive(() => run('publish'));
+
   const startBuy = () => {
+    setSave({ state: 'idle' });
     if (linkNeedsConfirm(extensionId) && extAsk.state !== 'ok') {
       setExtAsk({ state: 'ask', address: null });
       getStampAddress(extOpts).then(
@@ -818,14 +868,19 @@ export function Approve({ captureId }: { captureId: string | null }) {
     setExtAsk({ state: 'ok', address });
     void saveAndPublish('buy', address);
   };
-  const retrySave = () => {
+  /**
+   * "Try again" after a failure, with the storage chosen before: a failed purchase buys (looking up
+   * the earlier one first), free storage uploads free again, and an upload with the extension's
+   * storage uploads again only while a batch is there; else the page goes back to the choice.
+   */
+  const retrySave = async () => {
     if (save.state !== 'error') return;
     const { how, stage } = save;
+    if (stage === 'buy') return startBuy();
+    if (how === 'free') return void saveAndPublish('free');
     setSave({ state: 'idle' });
-    if (how === 'free') void saveAndPublish('free');
-    else if (stage === 'buy' || (how === 'buy' && !bought && !hasBatch)) startBuy();
-    else if (hasBatch || how === 'stamped' || bought) void saveAndPublish('stamped');
-    else startBuy();
+    if ((await refreshOffer()) === 'ok') void saveAndPublish('stamped');
+    else backToOffer();
   };
 
   const isConfirmation = load.phase === 'ready' && load.pending.kind === 'confirmation';
@@ -917,7 +972,6 @@ export function Approve({ captureId }: { captureId: string | null }) {
   }
 
   const { facts, report, pending } = load;
-  const trusted = witnessLabel(facts.witness) !== undefined;
   const published = publish.state === 'published';
   const timelineHref = `#/u/${facts.urlHash}`;
   const heading = isConfirmation && load.earlier ? `Unchanged since ${formatUtc(load.earlier.signedAt)}` : title;
@@ -969,8 +1023,8 @@ export function Approve({ captureId }: { captureId: string | null }) {
   // One primary action at a time: after a rejection or failure the notice's "Try again" is it.
   let primary: { label: string; onClick: () => void; blocked?: string } | null = null;
   if (!published && publish.state !== 'rejected' && publish.state !== 'failed' && save.state !== 'error' && extAsk.state !== 'ask') {
-    if (isConfirmation) primary = { label: "Confirm it's still the same", onClick: () => void run('publish') };
-    else if (!needsStorage) primary = { label: 'Publish record', onClick: () => void run('publish') };
+    if (isConfirmation) primary = { label: "Confirm it's still the same", onClick: publishNow };
+    else if (!needsStorage) primary = { label: 'Publish record', onClick: publishNow };
     else if (hasBatch) primary = { label: 'Upload and publish', onClick: () => void saveAndPublish('stamped') };
     else {
       primary = {
@@ -1060,11 +1114,7 @@ export function Approve({ captureId }: { captureId: string | null }) {
             nothing new is uploaded.
           </p>
         ) : null}
-        <p className="approve-witness">
-          <span>{witnessLabel(facts.witness) ?? 'Unknown witness'}</span>
-          <MonoValue value={facts.witness} />
-          <StatusBadge status={trusted ? 'pass' : 'warn'} label={trusted ? 'In your trusted list' : 'Unknown witness'} />
-        </p>
+        {/* The witness itself is in the exhibit below, and whether you trust it is check C. */}
         <WhyWitness />
       </section>
 
@@ -1082,6 +1132,11 @@ export function Approve({ captureId }: { captureId: string | null }) {
             <p className="muted">
               Free storage (the gateway&apos;s own) needs no batch, but has no known end date and can&apos;t be kept alive.
             </p>
+          ) : null}
+          {offerNote ? (
+            <Notice kind="info" title="Choose the storage again" focus>
+              {offerNote}
+            </Notice>
           ) : null}
         </section>
       ) : null}
@@ -1154,6 +1209,11 @@ export function Approve({ captureId }: { captureId: string | null }) {
           </p>
         </Notice>
       ) : null}
+      {otherTab ? (
+        <Notice kind="warn" title="Open in another tab" focus>
+          This capture is being saved or published in another Recall tab. Finish there, or close that tab and try again here.
+        </Notice>
+      ) : null}
       {save.state === 'error' ? (
         <Notice
           kind="error"
@@ -1161,9 +1221,20 @@ export function Approve({ captureId }: { captureId: string | null }) {
           focus
           actions={
             <>
-              <button type="button" className="btn btn-secondary" onClick={retrySave}>
+              <button type="button" className="btn btn-secondary" onClick={() => void retrySave()}>
                 {save.retryLabel}
               </button>
+              {/* Every way out stays open: buy storage, free storage (when allowed), discard. */}
+              {save.stage !== 'buy' && !hasBatch ? (
+                <button type="button" className="btn btn-secondary" onClick={startBuy}>
+                  Buy storage
+                </button>
+              ) : null}
+              {freeAllowed && save.how !== 'free' ? (
+                <button type="button" className="btn btn-secondary" onClick={() => void saveAndPublish('free')}>
+                  Use free storage
+                </button>
+              ) : null}
               {discardButton}
             </>
           }
@@ -1179,7 +1250,7 @@ export function Approve({ captureId }: { captureId: string | null }) {
           focus
           actions={
             <>
-              <button type="button" className="btn btn-secondary" onClick={() => void run('publish')}>
+              <button type="button" className="btn btn-secondary" onClick={publishNow}>
                 Try again
               </button>
               {discardButton}
@@ -1195,7 +1266,7 @@ export function Approve({ captureId }: { captureId: string | null }) {
           title="Publishing failed"
           focus
           actions={
-            <button type="button" className="btn btn-secondary" onClick={() => void run('publish')}>
+            <button type="button" className="btn btn-secondary" onClick={publishNow}>
               Try again
             </button>
           }

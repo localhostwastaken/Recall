@@ -18,12 +18,17 @@ import { POSTAGE_STAMP, arkivPublic, buyBatch, downloadBytes, listByUrl, LOCAL, 
 // - An EMPTY pool: Buy storage and publish (one batch, bought once, owned by the stamp key) ->
 //   the extension uploads with it -> MetaMask publishes -> the record is readable and verifies.
 // - An upload that fails (the upload node answers 500): the capture is kept, "Try upload again"
-//   publishes it.
+//   publishes it; when the storage ran out meanwhile, the retry goes back to the storage choice.
+// - Never a second purchase: a purchase sent earlier for the capture is settled first, and a tab
+//   closed while the new storage gets ready reopens with "Upload and publish".
 
 const APP = 'http://localhost:5173';
 const RUN = Math.random().toString(36).slice(2, 10);
 const PAGE = `https://${NOTICE_HOST}/notice?run=cf-${RUN}`;
 const FAIL_PAGE = `https://${NOTICE_HOST}/notice?run=cf-${RUN}-fail`;
+const EMPTIED_PAGE = `https://${NOTICE_HOST}/notice?run=cf-${RUN}-emptied`;
+const SETTLE_PAGE = `https://${NOTICE_HOST}/notice?run=cf-${RUN}-settle`;
+const REOPEN_PAGE = `https://${NOTICE_HOST}/notice?run=cf-${RUN}-reopen`;
 const hashOf = (page: string) => urlHash(canonicalUrl(page));
 
 type Pool = { batchId: Hex; used: boolean }[];
@@ -146,6 +151,18 @@ async function approvalTab(captureId: string, onSent?: (chainId: number, hash: H
   await page!.reload();
   return page!;
 }
+
+/** A server that answers 500 to everything (an upload node that is down). */
+async function brokenServer(): Promise<{ server: Server; url: string }> {
+  const server = createServer((_req, res) => {
+    res.writeHead(500, { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' }).end('down');
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  return { server, url: `http://127.0.0.1:${(server.address() as AddressInfo).port}` };
+}
+
+const createBatchesIn = (sent: { chainId: number; to?: string }[]) =>
+  sent.filter((s) => s.chainId === 100 && s.to === POSTAGE_STAMP.toLowerCase()).length;
 
 async function published(page: Page): Promise<Hex> {
   await expect(page.getByRole('heading', { name: 'Published', exact: true })).toBeVisible({ timeout: 280_000 });
@@ -296,5 +313,87 @@ test.describe('@p2 capture first', () => {
       broken.closeAllConnections();
       broken.close();
     }
+  });
+
+  test('a stamped upload fails and the storage runs out: Try upload again goes back to the storage choice', async () => {
+    const id = await retrying(async () => (await buyBatch(gnosisPayer, { owner: stamp, depth: 17, days: 3 })).batchId);
+    expect((await api<{ error?: string }>({ type: 'recall.addBatches', batchIds: [id] })).error).toBeUndefined();
+    const broken = await brokenServer();
+    const settings = (await getLocal('recall.settings')) as Record<string, unknown>;
+    await setLocal('recall.settings', { ...settings, uploadUrl: broken.url });
+    try {
+      const r = await capture(EMPTIED_PAGE);
+      const captureId = r.upload!.captureId!;
+      const page = await approvalTab(captureId);
+      await page.getByRole('button', { name: 'Upload and publish' }).click();
+      await expect(page.getByRole('heading', { name: 'Upload failed' })).toBeVisible({ timeout: 200_000 });
+      expect((await pendingOf(captureId)).upload).toMatchObject({ status: 'failed', mode: 'stamped' });
+      // Every way out: try again, discard (the batch is still there, so no Buy here yet).
+      await expect(page.getByRole('button', { name: 'Try upload again' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Discard capture' })).toBeVisible();
+
+      // The batch is gone meanwhile (used elsewhere): the retry does not loop on "no storage".
+      await setLocal('recall.pool', (await pool()).map((b) => ({ ...b, used: true })));
+      await setLocal('recall.settings', settings);
+      await page.getByRole('button', { name: 'Try upload again' }).click();
+      await expect(page.getByRole('heading', { name: 'Choose the storage again' })).toBeVisible({ timeout: 30_000 });
+      await expect(page.getByRole('heading', { name: 'Upload failed' })).toHaveCount(0);
+      await expect(page.getByRole('button', { name: 'Buy storage and publish' })).toBeVisible();
+      expect((await pendingOf(captureId)).upload?.status).toBe('failed');
+      await page.close();
+    } finally {
+      await setLocal('recall.settings', settings);
+      broken.server.closeAllConnections();
+      broken.server.close();
+    }
+  });
+
+  test('a purchase sent earlier for this capture is settled first, never bought again', async () => {
+    const r = await capture(SETTLE_PAGE);
+    const captureId = r.upload!.captureId!;
+    expect(await pendingOf(captureId)).toMatchObject({ storage: 'empty' });
+    // As if this tab bought a batch and was closed before handing it over: the hash is kept per
+    // capture in localStorage.
+    const earlier = await retrying(() => buyBatch(gnosisPayer, { owner: stamp, depth: 17, days: 7 }));
+    const key = `recall.approve.sentTx.v1.${captureId}`;
+    await app.evaluate(([k, v]) => localStorage.setItem(k, v), [key, earlier.txHash] as const);
+    const sent: { chainId: number; to?: string }[] = [];
+    const page = await approvalTab(captureId, (chainId, _h, to) => sent.push({ chainId, to: to?.toLowerCase() }));
+    await page.getByRole('button', { name: 'Buy storage and publish' }).click();
+    const entityKey = await published(page);
+    expect(createBatchesIn(sent)).toBe(0);
+    const row = await readable(SETTLE_PAGE, entityKey);
+    expect(row.batchId.toLowerCase()).toBe(earlier.batchId.toLowerCase());
+    expect(await app.evaluate((k) => localStorage.getItem(k), key)).toBeNull();
+    await page.close();
+  });
+
+  test('a tab closed while new storage gets ready reopens with Upload and publish: one purchase only', async () => {
+    const r = await capture(REOPEN_PAGE);
+    const captureId = r.upload!.captureId!;
+    const sent: { chainId: number; to?: string }[] = [];
+    const onSent = (chainId: number, _h: Hex, to: Address | undefined) => sent.push({ chainId, to: to?.toLowerCase() });
+    const first = await approvalTab(captureId, onSent);
+    const unusedBefore = (await pool()).filter((b) => !b.used).length;
+    await first.getByRole('button', { name: 'Buy storage and publish' }).click();
+    // Bought and handed over: the extension holds the batch while Bee gets it ready.
+    await expect.poll(async () => (await pool()).filter((b) => !b.used).length, { timeout: 120_000 }).toBe(unusedBefore + 1);
+    await first.close();
+    expect(createBatchesIn(sent)).toBe(1);
+
+    const again = await ext.context.newPage();
+    await installMockWallet(again, {
+      privateKey: walletKey,
+      rpcByChainId: { 1337: LOCAL.arkiv.rpcUrl, 100: LOCAL.gnosis.rpcUrl },
+      chainId: 1337,
+      onSent,
+    });
+    await again.goto(`${APP}/#/approve/${captureId}?ext=${ext.extensionId}`);
+    await expect(again.getByRole('button', { name: 'Upload and publish' })).toBeVisible({ timeout: 30_000 });
+    await expect(again.getByRole('button', { name: 'Buy storage and publish' })).toHaveCount(0);
+    await again.getByRole('button', { name: 'Upload and publish' }).click();
+    await readable(REOPEN_PAGE, await published(again));
+    expect(createBatchesIn(sent)).toBe(1);
+    await again.close();
   });
 });

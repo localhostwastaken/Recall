@@ -41,7 +41,7 @@ describe('buyOneBatch', () => {
     expect(recallSent(KEY)).toBe(TX);
   });
 
-  it('a lost receipt after sending is settled from the hash, never bought again', async () => {
+  it('a lost receipt after sending is settled from the sent hash: bought, or unknown (never "failed")', async () => {
     net.buyBatch.mockImplementation(async (_w, o: { onSent: (h: Hex) => void }) => {
       o.onSent(TX);
       throw new Error('receipt timeout');
@@ -63,6 +63,33 @@ describe('buyOneBatch', () => {
     });
     expect(recallSent(KEY)).toBeUndefined();
     expect(priceRose(new Error('other'))).toBeNull();
+  });
+});
+
+describe('the sent hash', () => {
+  it('a durable key survives in localStorage; forgetting clears both stores', async () => {
+    const store = () => {
+      const m = new Map<string, string>();
+      return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v), removeItem: (k: string) => void m.delete(k), m };
+    };
+    const local = store();
+    const session = store();
+    vi.stubGlobal('window', { localStorage: local, sessionStorage: session });
+    try {
+      net.buyBatch.mockImplementation(async (_w, o: { onSent: (h: Hex) => void }) => {
+        o.onSent(TX);
+        return { batchId: BATCH, txHash: TX };
+      });
+      await buyOneBatch(wallet, pub, { owner: OWNER, days: 7, sentKey: KEY, durable: true });
+      expect(local.m.get(KEY)).toBe(TX);
+      expect(session.m.has(KEY)).toBe(false);
+      expect(recallSent(KEY, true)).toBe(TX);
+      forgetSent(KEY);
+      expect(local.m.has(KEY)).toBe(false);
+      expect(recallSent(KEY, true)).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
