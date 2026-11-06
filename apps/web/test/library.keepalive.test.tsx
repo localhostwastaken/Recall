@@ -15,16 +15,28 @@ import { Library } from '../src/routes/Library';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 // The real keep-alive dialog talks to MetaMask; here its trigger just reports a settled step.
-const keepAliveProps: { target: unknown; onChanged: () => void | Promise<void> }[] = [];
+const keepAliveProps: {
+  target: unknown;
+  onChanged: () => void | Promise<void>;
+  trigger?: { label: string; icon?: boolean };
+}[] = [];
 vi.mock('../src/components/KeepAlive', async () => {
   const { createElement, Fragment } = await import('react');
   return {
-    KeepAlive: (p: { target: unknown; onChanged: () => void | Promise<void> }) => {
+    KeepAlive: (p: {
+      target: unknown;
+      onChanged: () => void | Promise<void>;
+      trigger?: { label: string; icon?: boolean };
+    }) => {
       keepAliveProps.push(p);
       return createElement(
         Fragment,
         null,
-        createElement('button', { type: 'button', className: 'btn btn-secondary', onClick: () => void p.onChanged() }, 'Keep alive…'),
+        createElement(
+          'button',
+          { type: 'button', className: 'btn btn-secondary', onClick: () => void p.onChanged() },
+          p.trigger?.label ?? 'Keep alive…',
+        ),
         createElement('dialog', { 'aria-label': 'Keep this capture available' }),
       );
     },
@@ -147,7 +159,7 @@ const rankOf = (el: HTMLElement, name: string) => cardOf(el, name).querySelector
 const daysOf = (el: HTMLElement, name: string) => cardOf(el, name).querySelector<HTMLElement>('.ccard-days')!;
 
 async function keepAlive(el: HTMLElement, name: string) {
-  const button = [...cardOf(el, name).querySelectorAll('button')].find((b) => b.textContent === 'Keep alive…')!;
+  const button = [...cardOf(el, name).querySelectorAll('button')].find((b) => b.textContent === 'Keep alive')!;
   await act(async () => {
     button.click();
   });
@@ -279,10 +291,18 @@ describe('keep alive from the library', () => {
     expect(b.target).toEqual({ entityKeys: [B.newest.entityKey], batchId: B.newest.batchId });
   });
 
+  it('on a verified card the trigger reads "Keep alive", with no icon and no ellipsis', () => {
+    const el = render(raiseB());
+    const button = cardOf(el, 'b').querySelector('.ccard-action button') as HTMLButtonElement;
+    expect(button.textContent).toBe('Keep alive');
+    expect(keepAliveProps.every((p) => p.trigger?.label === 'Keep alive' && p.trigger.icon === false)).toBe(true);
+  });
+
   it('on a card not verified yet offers a disabled "Keep alive" that says why', () => {
     const el = render(raiseB(), false);
     const button = cardOf(el, 'b').querySelector('.ccard-action button') as HTMLButtonElement;
     expect(button.textContent).toBe('Keep alive');
+    expect(button.querySelector('svg')).toBeNull();
     expect(button.disabled).toBe(true);
     const describedBy = button.getAttribute('aria-describedby')!;
     expect(describedBy).toBeTruthy();

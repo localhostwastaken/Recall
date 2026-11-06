@@ -1,4 +1,3 @@
-import { Hourglass } from 'lucide-react';
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import type { Hex } from 'viem';
@@ -9,6 +8,9 @@ import { barPercent, celebrateCard, flipRerank, prefersReducedMotion, type Stop 
 import './keepAlive.css';
 
 export const KEEP_ALIVE_HINT = 'Available after this capture is checked';
+
+/** On a card the action is just two words: no hourglass, and no "…" (the card is already calm). */
+const CARD_TRIGGER = { label: 'Keep alive', icon: false } as const;
 
 /**
  * The card's one action (spec 6.3, 12.2, 12.3). On a verified card it is the keep-alive flow for the
@@ -33,8 +35,7 @@ export function LibraryKeepAlive({
     return (
       <div className="lib-ka" title={KEEP_ALIVE_HINT}>
         <button type="button" className="btn-card" disabled aria-describedby={hintId}>
-          <Hourglass size={14} strokeWidth={2} aria-hidden="true" />
-          Keep alive
+          {CARD_TRIGGER.label}
         </button>
         <span id={hintId} className="visually-hidden">
           {KEEP_ALIVE_HINT}
@@ -44,7 +45,7 @@ export function LibraryKeepAlive({
   }
   return (
     <div className="lib-ka" data-ka-for={entry.urlHash}>
-      <KeepAlive target={target} onChanged={() => onExtended(entry.urlHash)} />
+      <KeepAlive target={target} trigger={CARD_TRIGGER} onChanged={() => onExtended(entry.urlHash)} />
     </div>
   );
 }

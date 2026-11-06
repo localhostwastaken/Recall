@@ -4,7 +4,8 @@
 }
 
 /* The keep-alive trigger (the only direct button child; the dialog's buttons are deeper) drawn as
-   the card's orange-outline pill: 36 px tall with a 44 px hit area, like .btn-card. */
+   the card's orange-outline pill: 36 px tall with a 44 px hit area, exactly like .btn-card (the
+   disabled one), so a card's action looks the same before and after its check. Words only. */
 .lib-ka > .btn {
   position: relative;
   height: 36px;
@@ -14,7 +15,7 @@
   border-radius: var(--radius-pill);
   background: transparent;
   color: var(--accent-text);
-  font-size: var(--text-xs);
+  font-size: 13px;
   font-weight: 700;
   white-space: nowrap;
 }
@@ -28,11 +29,6 @@
 .lib-ka > .btn:hover:not(:disabled),
 .lib-ka > .btn:active:not(:disabled) {
   background: var(--accent-soft);
-}
-
-.lib-ka > .btn svg {
-  width: 14px;
-  height: 14px;
 }
 
 /* A kept-alive card: a brief ring in the colour of time left. */

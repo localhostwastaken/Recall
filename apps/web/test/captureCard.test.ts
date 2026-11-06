@@ -2,7 +2,7 @@
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it } from 'vitest';
-import { CaptureCard, favLetter, lifeWidth, type CaptureCardProps } from '../src/components/CaptureCard';
+import { CaptureCard, lifeWidth, type CaptureCardProps } from '../src/components/CaptureCard';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -60,10 +60,35 @@ describe('CaptureCard', () => {
     expect(el.textContent).toContain('Time left unknown');
   });
 
-  it('shows the rank only when given', () => {
-    expect(render({ rank: 1 }).textContent).toContain('#1');
+  it('shows the rank only when given, as quiet text beside the title', () => {
+    const rank = render({ rank: 1 }).querySelector('.ccard-head .ccard-rank')!;
+    expect(rank.textContent).toBe('#1');
     act(() => root?.unmount());
     expect(render().textContent).not.toContain('#');
+  });
+
+  it('has no letter tile: the title gets the full width', () => {
+    const el = render({ address: 'www.github.com/a/b' });
+    expect(el.querySelector('.ccard-fav')).toBeNull();
+    expect(el.querySelector('.ccard-head')!.textContent).toBe('Public noticewww.github.com/a/b');
+  });
+
+  it('shows the status pill, then plain facts with no icons', () => {
+    const el = render({ status: 'verified', versions: 1, date: new Date(Date.UTC(2026, 10, 6, 12)) });
+    const facts = el.querySelector('.ccard-facts')!;
+    expect(facts.firstElementChild!.classList.contains('ccard-pill')).toBe(true);
+    const meta = facts.querySelector('.ccard-meta')!;
+    expect(meta.textContent).toBe('Page · 6 Nov');
+    expect(meta.querySelector('svg')).toBeNull();
+    expect(facts.querySelectorAll('svg')).toHaveLength(1); // only the status pill's own icon
+  });
+
+  it('counts versions only when there is more than one', () => {
+    expect(render({ kind: 'repo', versions: 3 }).querySelector('.ccard-meta')!.textContent).toBe('Repo · 3 versions');
+    act(() => root?.unmount());
+    const one = render({ kind: 'page', versions: 1 });
+    expect(one.querySelector('.ccard-meta')!.textContent).toBe('Page');
+    expect(one.textContent).not.toContain('version');
   });
 
   it('opens the capture page from a link, with the keep-alive slot outside it', () => {
@@ -76,11 +101,15 @@ describe('CaptureCard', () => {
     expect(button.closest('a')).toBeNull();
   });
 
-  it('caps the life bar at 240 days and uses the site letter', () => {
+  it('caps the life bar at 240 days', () => {
     expect(lifeWidth(480)).toBe(100);
     expect(lifeWidth(24)).toBe(10);
     expect(lifeWidth(-3)).toBe(0);
-    expect(favLetter('www.github.com/a/b')).toBe('G');
-    expect(favLetter('https://notice.recall.test/x')).toBe('N');
+  });
+
+  it('says how many days are left, the number in the colour of time left', () => {
+    const el = render({ daysLeft: 29 });
+    expect(el.querySelector('.ccard-life-label')!.textContent).toBe('29 days left');
+    expect(el.querySelector('.ccard-days')!.textContent).toBe('29');
   });
 });

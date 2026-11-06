@@ -1,5 +1,6 @@
-/* The one capture card (spec 4.4). 16 px inside, 14 px corners, three rows: title + address,
-   status + facts, time left + one action. In a grid every card is the same height and the
+/* The one capture card (spec 4.4), kept calm. 16 px inside, 14 px corners, three rows: title (and
+   a quiet rank) over the address; status pill + plain facts; time left + one action. No letter
+   tile and no icons in the facts. In a grid every card is the same height and the
    bottom row lines up (flex column, footer margin-top: auto). */
 .ccard {
   position: relative;
@@ -26,21 +27,6 @@
   align-items: flex-start;
   gap: var(--space-3);
   min-width: 0;
-}
-
-.ccard-fav {
-  flex: none;
-  display: grid;
-  place-items: center;
-  width: 36px;
-  height: 36px;
-  border-radius: var(--radius-1);
-  background: var(--surface-2, var(--surface-sunken));
-  border: 1px solid var(--border);
-  font-family: var(--font-display);
-  font-weight: 800;
-  font-size: 14px;
-  line-height: 1;
 }
 
 .ccard-ttl {
@@ -108,23 +94,19 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-1) var(--space-4);
-  margin: 0;
-  padding: 0;
-  list-style: none;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+}
+
+/* Plain words after the pill: "Page · 6 Nov". */
+.ccard-meta {
   font-size: 13px;
   line-height: 20px;
   color: var(--text-muted);
-}
-
-.ccard-facts > li {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
   font-variant-numeric: tabular-nums;
 }
 
-.ccard-facts svg {
+.ccard-pill svg {
   flex: none;
 }
 
@@ -167,22 +149,19 @@
   border-color: color-mix(in srgb, var(--fail) 45%, transparent);
 }
 
+/* The rank: quiet blue text level with the title's first line, no chip. */
 .ccard-rank {
-  display: inline-flex;
-  align-items: center;
-  height: 22px;
-  padding: 0 var(--space-2);
-  border-radius: var(--radius-pill, 999px);
-  background: var(--life-bg, var(--info-bg));
-  color: var(--life, var(--info));
-  font-family: var(--font-display);
-  font-weight: 800;
+  flex: none;
   font-size: 13px;
+  line-height: 20px;
+  font-weight: 700;
+  color: var(--life, var(--info));
+  font-variant-numeric: tabular-nums;
 }
 
 .ccard-foot {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: var(--space-4);
   margin-top: auto;
 }
@@ -200,7 +179,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-.ccard-life-label b {
+.ccard-days {
   color: var(--life, var(--info));
   font-weight: 700;
 }
@@ -221,7 +200,7 @@
   transform-origin: left center;
 }
 
-.ccard-life.is-soon .ccard-life-label b {
+.ccard-life.is-soon .ccard-days {
   color: var(--warn);
 }
 
@@ -240,7 +219,7 @@
   flex: none;
 }
 
-/* The card action: an orange-outline pill, 36 px tall with a 44 px hit area. */
+/* The card action: an orange-outline pill, 36 px tall with a 44 px hit area. Words only. */
 .btn-card {
   position: relative;
   display: inline-flex;
@@ -260,6 +239,7 @@
   white-space: nowrap;
   cursor: pointer;
   text-decoration: none;
+  transition: background-color var(--dur-fast) var(--ease-out);
 }
 
 .btn-card::before {
@@ -280,7 +260,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ccard {
+  .ccard,
+  .btn-card {
     transition: none;
   }
 }
