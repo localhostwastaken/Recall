@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { ChevronDown } from 'lucide-react';
 import type { Address } from 'viem';
 import { BUILT_IN_ARKIV_KEY } from '../../recall/build';
 import { MonoValue } from '../../recall/ui/MonoValue';
@@ -16,6 +17,7 @@ import {
   type UploadMode,
 } from '../../recall/settings';
 import '../../recall/ui/settings.css';
+import './settingsAdvanced.css';
 
 // The extension's settings form: upload mode, trusted witnesses and endpoints. It lives in the
 // popup (a panel behind the header's Settings button) and on the options page, so both agree.
@@ -150,6 +152,8 @@ export function SettingsPanel({
   const [status, setStatus] = useState('');
   const [showKey, setShowKey] = useState(false);
   const [focusFirst, setFocusFirst] = useState(0);
+  // Everything is preconfigured, so the form stays folded away until someone asks for it.
+  const [advanced, setAdvanced] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const uploadModeName = useId();
 
@@ -283,181 +287,197 @@ export function SettingsPanel({
           </button>
         ) : null}
       </div>
-      <p className="muted">Saved in this browser only.</p>
+      <p className="muted">
+        Everything is preconfigured. You don&apos;t need to change anything here.
+      </p>
 
-      <section className="sp-section" aria-labelledby="sp-upload">
-        <h3 id="sp-upload" className="section-label">
-          Upload mode
-        </h3>
-        <fieldset className="sp-radios">
-          <legend className="visually-hidden">Upload mode</legend>
-          <label className="sp-radio">
-            <input
-              type="radio"
-              name={uploadModeName}
-              checked={draft.uploadMode === 'stamped'}
-              onChange={() => set('uploadMode', 'stamped')}
-            />
-            <span className="sp-radio-name">Prepaid storage (default)</span>
-            <span className="sp-radio-desc">
-              Each capture uses one batch from your pool. Keep-alive works.
-            </span>
-          </label>
-          <label className="sp-radio">
-            <input
-              type="radio"
-              name={uploadModeName}
-              checked={draft.uploadMode === 'free'}
-              onChange={() => set('uploadMode', 'free')}
-            />
-            <span className="sp-radio-name">Gateway free storage</span>
-            <span className="sp-radio-desc">{FREE_MODE_NOTE}</span>
-          </label>
-        </fieldset>
-      </section>
+      <details
+        className="sp-advanced"
+        open={advanced}
+        onToggle={(e) => setAdvanced(e.currentTarget.open)}
+      >
+        <summary className="sp-advanced-summary">
+          <span>Advanced settings</span>
+          <ChevronDown size={18} strokeWidth={1.75} aria-hidden="true" />
+        </summary>
+        <div className="sp-advanced-body">
+          <p className="muted">Saved in this browser only.</p>
 
-      <section className="sp-section" aria-labelledby="sp-witnesses">
-        <h3 id="sp-witnesses" className="section-label">
-          Trusted witnesses
-        </h3>
-        <p className="sp-helper">
-          Check C passes only for witnesses in this list. Add a witness only if you trust whoever
-          runs it.
-        </p>
-        {draft.pinned.length === 0 ? (
-          <p className="muted">
-            No trusted witnesses. Every signature shows as an unknown witness until you add one.
-          </p>
-        ) : (
-          <ul className="sp-witnesses" aria-label="Trusted witnesses">
-            {draft.pinned.map((address, i) => (
-              <li key={address} className="sp-witness">
-                <span>
-                  <MonoValue value={address} />
-                  {i === 0 ? (
-                    <span className="sp-helper"> First: used to find the witness</span>
-                  ) : null}
+          <section className="sp-section" aria-labelledby="sp-upload">
+            <h3 id="sp-upload" className="section-label">
+              Upload mode
+            </h3>
+            <fieldset className="sp-radios">
+              <legend className="visually-hidden">Upload mode</legend>
+              <label className="sp-radio">
+                <input
+                  type="radio"
+                  name={uploadModeName}
+                  checked={draft.uploadMode === 'stamped'}
+                  onChange={() => set('uploadMode', 'stamped')}
+                />
+                <span className="sp-radio-name">Prepaid storage (default)</span>
+                <span className="sp-radio-desc">
+                  Each capture uses one batch from your pool. Keep-alive works.
                 </span>
+              </label>
+              <label className="sp-radio">
+                <input
+                  type="radio"
+                  name={uploadModeName}
+                  checked={draft.uploadMode === 'free'}
+                  onChange={() => set('uploadMode', 'free')}
+                />
+                <span className="sp-radio-name">Gateway free storage</span>
+                <span className="sp-radio-desc">{FREE_MODE_NOTE}</span>
+              </label>
+            </fieldset>
+          </section>
+
+          <section className="sp-section" aria-labelledby="sp-witnesses">
+            <h3 id="sp-witnesses" className="section-label">
+              Trusted witnesses
+            </h3>
+            <p className="sp-helper">
+              Check C passes only for witnesses in this list. Add a witness only if you trust
+              whoever runs it.
+            </p>
+            {draft.pinned.length === 0 ? (
+              <p className="muted">
+                No trusted witnesses. Every signature shows as an unknown witness until you add one.
+              </p>
+            ) : (
+              <ul className="sp-witnesses" aria-label="Trusted witnesses">
+                {draft.pinned.map((address, i) => (
+                  <li key={address} className="sp-witness">
+                    <span>
+                      <MonoValue value={address} />
+                      {i === 0 ? (
+                        <span className="sp-helper"> First: used to find the witness</span>
+                      ) : null}
+                    </span>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => {
+                        set(
+                          'pinned',
+                          draft.pinned.filter((p) => p !== address),
+                        );
+                        setNote('Witness taken off the list. Save settings to apply it.');
+                      }}
+                    >
+                      Remove<span className="visually-hidden"> {address}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <p className="sp-helper" role="status">
+              {note}
+            </p>
+            <div className="sp-add">
+              <Field
+                label="Witness address (0x…)"
+                type="text"
+                value={newAddress}
+                error={errors.newAddress}
+                invalidFocus={false}
+                mono
+                onChange={(v) => {
+                  setNewAddress(v);
+                  setErrors((e) => (e.newAddress ? { ...e, newAddress: undefined } : e));
+                }}
+                onBlur={(v) => {
+                  if (v.trim())
+                    setErrors((e) => ({
+                      ...e,
+                      newAddress: validAddress(v) ? undefined : ADDRESS_ERROR,
+                    }));
+                }}
+              />
+              <div className="sp-add-button">
+                <button type="button" className="btn btn-secondary" onClick={addWitness}>
+                  Add witness
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <section className="sp-section" aria-labelledby="sp-endpoints">
+            <h3 id="sp-endpoints" className="section-label">
+              Endpoints
+            </h3>
+            <Field
+              label="Witness URL"
+              value={draft.witnessUrl}
+              error={errors.witnessUrl}
+              helper="Used when no announced address is found. Leave empty for the default."
+              onChange={(v) => set('witnessUrl', v)}
+              onBlur={(v) => validate('witnessUrl', v)}
+            />
+            <Field
+              label="App URL"
+              value={draft.appUrl}
+              error={errors.appUrl}
+              helper="The Recall web app, where you approve and browse captures."
+              onChange={(v) => set('appUrl', v)}
+              onBlur={(v) => validate('appUrl', v)}
+            />
+            <Field
+              label="Arkiv RPC URL"
+              value={draft.arkivRpcUrl}
+              error={errors.arkivRpcUrl}
+              onChange={(v) => set('arkivRpcUrl', v)}
+              onBlur={(v) => validate('arkivRpcUrl', v)}
+            />
+            <Field
+              label="Arkiv access key"
+              type={showKey ? 'text' : 'password'}
+              mono
+              value={draft.arkivAccessKey}
+              error={errors.arkivAccessKey}
+              placeholder={builtInKey ? 'Built-in key (default)' : 'Optional'}
+              helper={keyHelper(builtInKey, draft.arkivAccessKey.trim() !== '')}
+              onChange={(v) => set('arkivAccessKey', v)}
+              onBlur={(v) => validate('arkivAccessKey', v)}
+              right={
                 <button
                   type="button"
                   className="btn btn-secondary"
-                  onClick={() => {
-                    set(
-                      'pinned',
-                      draft.pinned.filter((p) => p !== address),
-                    );
-                    setNote('Witness taken off the list. Save settings to apply it.');
-                  }}
+                  aria-pressed={showKey}
+                  onClick={() => setShowKey((v) => !v)}
                 >
-                  Remove<span className="visually-hidden"> {address}</span>
+                  {showKey ? 'Hide' : 'Show'}
+                  <span className="visually-hidden"> Arkiv access key</span>
                 </button>
-              </li>
-            ))}
-          </ul>
-        )}
-        <p className="sp-helper" role="status">
-          {note}
-        </p>
-        <div className="sp-add">
-          <Field
-            label="Witness address (0x…)"
-            type="text"
-            value={newAddress}
-            error={errors.newAddress}
-            invalidFocus={false}
-            mono
-            onChange={(v) => {
-              setNewAddress(v);
-              setErrors((e) => (e.newAddress ? { ...e, newAddress: undefined } : e));
-            }}
-            onBlur={(v) => {
-              if (v.trim())
-                setErrors((e) => ({
-                  ...e,
-                  newAddress: validAddress(v) ? undefined : ADDRESS_ERROR,
-                }));
-            }}
-          />
-          <div className="sp-add-button">
-            <button type="button" className="btn btn-secondary" onClick={addWitness}>
-              Add witness
+              }
+            />
+            <Field
+              label="Swarm upload gateway"
+              value={draft.uploadUrl}
+              error={errors.uploadUrl}
+              helper="Where evidence is uploaded."
+              onChange={(v) => set('uploadUrl', v)}
+              onBlur={(v) => validate('uploadUrl', v)}
+            />
+            <div>
+              <button type="button" className="btn btn-ghost" onClick={resetEndpoints}>
+                Reset endpoints to default
+              </button>
+            </div>
+          </section>
+
+          <div className="sp-actions">
+            <button type="button" className="btn btn-primary" onClick={() => void save()}>
+              Save settings
             </button>
+            <p className="sp-status" role="status">
+              {status}
+            </p>
           </div>
         </div>
-      </section>
-
-      <section className="sp-section" aria-labelledby="sp-endpoints">
-        <h3 id="sp-endpoints" className="section-label">
-          Endpoints
-        </h3>
-        <Field
-          label="Witness URL"
-          value={draft.witnessUrl}
-          error={errors.witnessUrl}
-          helper="Used when no announced address is found. Leave empty for the default."
-          onChange={(v) => set('witnessUrl', v)}
-          onBlur={(v) => validate('witnessUrl', v)}
-        />
-        <Field
-          label="App URL"
-          value={draft.appUrl}
-          error={errors.appUrl}
-          helper="The Recall web app, where you approve and browse captures."
-          onChange={(v) => set('appUrl', v)}
-          onBlur={(v) => validate('appUrl', v)}
-        />
-        <Field
-          label="Arkiv RPC URL"
-          value={draft.arkivRpcUrl}
-          error={errors.arkivRpcUrl}
-          onChange={(v) => set('arkivRpcUrl', v)}
-          onBlur={(v) => validate('arkivRpcUrl', v)}
-        />
-        <Field
-          label="Arkiv access key"
-          type={showKey ? 'text' : 'password'}
-          mono
-          value={draft.arkivAccessKey}
-          error={errors.arkivAccessKey}
-          placeholder={builtInKey ? 'Built-in key (default)' : 'Optional'}
-          helper={keyHelper(builtInKey, draft.arkivAccessKey.trim() !== '')}
-          onChange={(v) => set('arkivAccessKey', v)}
-          onBlur={(v) => validate('arkivAccessKey', v)}
-          right={
-            <button
-              type="button"
-              className="btn btn-secondary"
-              aria-pressed={showKey}
-              onClick={() => setShowKey((v) => !v)}
-            >
-              {showKey ? 'Hide' : 'Show'}
-              <span className="visually-hidden"> Arkiv access key</span>
-            </button>
-          }
-        />
-        <Field
-          label="Swarm upload gateway"
-          value={draft.uploadUrl}
-          error={errors.uploadUrl}
-          helper="Where evidence is uploaded."
-          onChange={(v) => set('uploadUrl', v)}
-          onBlur={(v) => validate('uploadUrl', v)}
-        />
-        <div>
-          <button type="button" className="btn btn-ghost" onClick={resetEndpoints}>
-            Reset endpoints to default
-          </button>
-        </div>
-      </section>
-
-      <div className="sp-actions">
-        <button type="button" className="btn btn-primary" onClick={() => void save()}>
-          Save settings
-        </button>
-        <p className="sp-status" role="status">
-          {status}
-        </p>
-      </div>
+      </details>
     </div>
   );
 }

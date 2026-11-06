@@ -1,0 +1,50 @@
+/* The one "Advanced settings" disclosure that holds the whole settings form. Tokens only. */
+.sp-advanced {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+}
+
+.sp-advanced-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: var(--control-h);
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-2);
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+.sp-advanced-summary::-webkit-details-marker {
+  display: none;
+}
+
+.sp-advanced-summary:hover {
+  background: var(--surface-sunken);
+}
+
+.sp-advanced-summary svg {
+  flex: none;
+  color: var(--accent);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.sp-advanced[open] > .sp-advanced-summary svg {
+  transform: rotate(180deg);
+}
+
+.sp-advanced-body {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+
+/* The first section needs no rule under the disclosure's own. */
+.sp-advanced-body > .sp-section:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
