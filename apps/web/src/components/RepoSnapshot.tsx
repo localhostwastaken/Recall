@@ -151,7 +151,43 @@ function SnapshotCard({ branch, item, index }: { branch: GitHubBranch; item: Rep
         </button>
         <OutsideLinkList links={links} />
       </div>
+      {state.phase === 'ok' ? <GitCheck branch={branch} /> : null}
     </section>
+  );
+}
+
+/** The shell line that rebuilds the git tree hash of a downloaded snapshot with the person's own git. */
+export function gitCheckCommand(branch: GitHubBranch): string {
+  return `mkdir recall-check && tar xzf ${codeFileName(branch)} -C recall-check --strip-components=1 && cd recall-check && git init -q && git add -A -f && git write-tree`;
+}
+
+/** "Don't trust this page": the same tree-hash check, done with plain git on the downloaded file. */
+function GitCheck({ branch }: { branch: GitHubBranch }) {
+  const toast = useToast();
+  const command = gitCheckCommand(branch);
+  const onCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(command);
+      toast('Copied');
+    } catch {
+      toast('Copy is blocked in this browser. Select the command instead.');
+    }
+  };
+  return (
+    <details className="repo-git-check">
+      <summary>Check it with your own git</summary>
+      <p>Download the code, then run this in the folder where it was saved:</p>
+      <div className="repo-git-cmd">
+        <code className="mono">{command}</code>
+        <button type="button" className="icon-btn" aria-label="Copy the command" onClick={onCopy}>
+          <Copy size={16} strokeWidth={1.75} aria-hidden="true" />
+        </button>
+      </div>
+      <p>
+        Git must print <span className="mono repo-git-tree">{branch.treeSha}</span>, the tree hash GitHub reported for commit{' '}
+        {branch.commitSha.slice(0, 7)} in the notarized capture. No Recall code is involved.
+      </p>
+    </details>
   );
 }
 

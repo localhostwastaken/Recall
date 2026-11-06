@@ -68,3 +68,35 @@
   line-height: var(--lh-sm);
   overflow-wrap: anywhere;
 }
+
+/* "Check it with your own git": a fold-out under the actions; the command wraps, never scrolls. */
+.repo-git-check {
+  margin-top: var(--space-4);
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+}
+.repo-git-check summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.repo-git-check summary:focus-visible { outline: 2px solid var(--focus, currentColor); outline-offset: 2px; }
+.repo-git-check p { margin: var(--space-2) 0; max-width: var(--measure); color: var(--text-muted); }
+.repo-git-cmd {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  background: var(--surface-sunken);
+}
+.repo-git-cmd code {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+.repo-git-tree { overflow-wrap: anywhere; color: var(--text); }
