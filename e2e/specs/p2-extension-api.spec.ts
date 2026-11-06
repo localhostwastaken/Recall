@@ -9,16 +9,17 @@ import { arkivWallet, buyBatch, downloadBytes, LOCAL, writeCapture } from '../..
 
 // The extension's app-facing API (chrome.runtime.onMessageExternal), called from a page on
 // the web app's origin (http://localhost:5173, listed in externally_connectable), plus the
-// upload that follows a capture: the stamp key signs client-side postage stamps for one
-// batch from the pool, and the evidence file goes to the local Bee node.
+// upload the publish tab asks for after a capture (R44: never before): the stamp key signs
+// client-side postage stamps for one batch from the pool, and the evidence file goes to the
+// local Bee node.
 
 const APP = 'http://localhost:5173';
 const NOTICE = `https://${NOTICE_HOST}/notice`;
 
 type Pool = { batchId: Hex; used: boolean; usable?: boolean }[];
 type Upload =
-  | { status: 'uploaded'; captureId: string; evidenceRef: Hex; batchId: Hex }
-  | { status: 'no_storage' | 'skipped' | 'failed'; reason?: string; error?: string };
+  | { status: 'pending'; captureId: string }
+  | { status: 'skipped' | 'failed'; reason?: string; error?: string };
 type CaptureResult =
   | { evidence: EvidenceFile; checks: Record<'A' | 'B' | 'C', { status: string }>; upload?: Upload }
   | { error: string };
@@ -28,6 +29,9 @@ type Pending = {
   evidence: EvidenceFile;
   evidenceRef?: Hex;
   batchId?: Hex;
+  upload?: { status: string; evidenceRef?: Hex; batchId?: Hex; reason?: string };
+  storage?: string;
+  uploadMode?: string;
 };
 
 let ext: ExtensionSession;
@@ -179,80 +183,73 @@ test.describe('@p2 extension api', () => {
     expect(await api({ type: 'recall.listPending' })).toEqual({ error: expect.stringMatching(/unknown/i) });
   });
 
-  test('empty pool shows buy-storage prompt', async () => {
+  test('empty pool: Capture needs no storage first (R44); Storage still asks about a link-only extension', async () => {
     expect(await pool()).toEqual([]);
     const { tab, popup } = await openPopup();
     try {
       await expect(popup.getByText('Witness online')).toBeVisible();
-      await expect(popup.getByRole('heading', { name: 'No storage left' })).toBeVisible();
-      await expect(popup.getByText('Your prepaid storage is used up. Buy more to keep capturing.')).toBeVisible();
-      // Capturing still works (checked, not uploaded), and the helper says so.
+      // No storage prompt before a capture: storage is chosen afterwards, in the Recall tab.
+      await expect(popup.getByRole('heading', { name: 'No storage left' })).toHaveCount(0);
+      await expect(popup.getByRole('button', { name: 'Buy storage' })).toHaveCount(0);
       await expect(popup.getByRole('button', { name: 'Capture this page' })).toBeEnabled();
-      await expect(popup.getByText(/^No storage left: the page will be checked but not uploaded/)).toBeVisible();
-      const opened = ext.context.waitForEvent('page');
-      await popup.getByRole('button', { name: 'Buy storage' }).click();
-      const storagePage = await opened;
-      // The link names this extension. Settings name none yet (a fresh browser), so the page shows
-      // the stamp address it reports and buys nothing until the person picks it, once.
-      await expect.poll(() => storagePage.url()).toBe(`${APP}/#/storage?ext=${ext.extensionId}`);
-      await expect(
-        storagePage.getByText(`This link uses extension ${ext.extensionId}, and your Settings name no extension yet.`),
-      ).toBeVisible();
-      await expect(storagePage.locator('.ext-choice .mono-value')).toHaveAttribute('title', stampAddress);
-      await expect(storagePage.getByRole('button', { name: /^Buy / })).toBeDisabled();
-      await expect(storagePage.getByText('Choose which extension to use first: see the notice above.')).toBeVisible();
-      await storagePage.getByRole('button', { name: 'Use this extension' }).click();
-      await expect(storagePage.locator('.owner-row')).toContainText('Owner (extension):');
-      await expect(storagePage.locator('.owner-row .mono-value')).toHaveAttribute('title', stampAddress);
-      const saved = await storagePage.evaluate(() => localStorage.getItem('recall.web.settings.v1'));
-      expect(JSON.parse(saved ?? '{}')).toMatchObject({ extensionId: ext.extensionId });
-      // From Settings now: the same link no longer asks.
-      await storagePage.reload();
-      await expect(storagePage.locator('.owner-row .mono-value')).toHaveAttribute('title', stampAddress);
-      await expect(storagePage.locator('.ext-choice')).toHaveCount(0);
-      await storagePage.evaluate(() => localStorage.removeItem('recall.web.settings.v1'));
-      await storagePage.close();
-
-      // Only an expired batch left: a distinct notice (the popup follows the pool live).
-      await setLocal('recall.pool', [
-        {
-          batchId: `0x${'ee'.repeat(32)}`,
-          depth: 17,
-          used: false,
-          usable: false,
-          startBlock: '1',
-          addedAt: 1,
-          dead: 'batch expired',
-        },
-      ]);
-      await expect(popup.getByRole('heading', { name: 'Storage expired' })).toBeVisible();
-      await expect(popup.getByText('Buy more in the Recall app.')).toBeVisible();
-      await expect(popup.getByText(/^Storage expired: the page will be checked but not uploaded/)).toBeVisible();
-      await expect(popup.getByRole('button', { name: 'Buy storage' })).toBeVisible();
-      await setLocal('recall.pool', undefined);
-      await expect(popup.getByRole('heading', { name: 'No storage left' })).toBeVisible();
+      await expect(popup.getByText('Takes about 30 s and about 80 MB of data. Pages up to 64 KB.')).toBeVisible();
     } finally {
       await popup.close();
       await tab.close();
     }
+
+    // The Storage page (bulk buying) with a link that names this extension. Settings name none
+    // yet (a fresh browser), so the page shows the stamp address it reports and buys nothing
+    // until the person picks it, once.
+    const storagePage = await ext.context.newPage();
+    await storagePage.goto(`${APP}/#/storage?ext=${ext.extensionId}`);
+    await expect(
+      storagePage.getByText(`This link uses extension ${ext.extensionId}, and your Settings name no extension yet.`),
+    ).toBeVisible();
+    await expect(storagePage.locator('.ext-choice .mono-value')).toHaveAttribute('title', stampAddress);
+    await expect(storagePage.getByRole('button', { name: /^Buy / })).toBeDisabled();
+    await expect(storagePage.getByText('Choose which extension to use first: see the notice above.')).toBeVisible();
+    await storagePage.getByRole('button', { name: 'Use this extension' }).click();
+    await expect(storagePage.locator('.owner-row')).toContainText('Owner (extension):');
+    await expect(storagePage.locator('.owner-row .mono-value')).toHaveAttribute('title', stampAddress);
+    const saved = await storagePage.evaluate(() => localStorage.getItem('recall.web.settings.v1'));
+    expect(JSON.parse(saved ?? '{}')).toMatchObject({ extensionId: ext.extensionId });
+    // From Settings now: the same link no longer asks.
+    await storagePage.reload();
+    await expect(storagePage.locator('.owner-row .mono-value')).toHaveAttribute('title', stampAddress);
+    await expect(storagePage.locator('.ext-choice')).toHaveCount(0);
+    await storagePage.evaluate(() => localStorage.removeItem('recall.web.settings.v1'));
+    await storagePage.close();
   });
 
-  test('capture with no storage is checked but not uploaded', async () => {
+  test('capture with no storage is checked and kept, not uploaded', async () => {
     const r = await captureForTest();
     if ('error' in r) throw new Error(r.error);
     expect([r.checks.A.status, r.checks.B.status]).toEqual(['pass', 'pass']);
-    expect(r.upload?.status).toBe('no_storage');
-    expect(await pendingKeys()).toEqual([]);
+    expect(r.upload?.status).toBe('pending');
+    const { captureId: kept } = r.upload as Extract<Upload, { status: 'pending' }>;
+    const pending = await api<Pending>({ type: 'recall.getPending', captureId: kept });
+    expect(pending).toMatchObject({ kind: 'capture', upload: { status: 'none' }, storage: 'empty', uploadMode: 'stamped' });
+    expect(pending.evidenceRef).toBeUndefined();
+    // An upload needs a batch (or free storage the settings allow); nothing starts without one.
+    expect(await api({ type: 'recall.uploadPending', captureId: kept, mode: 'stamped' })).toEqual({
+      error: 'the extension has no storage batch to upload with',
+    });
+    expect((await api<{ error?: string }>({ type: 'recall.uploadPending', captureId: kept, mode: 'free' })).error).toMatch(
+      /free storage is turned off/,
+    );
+    expect((await api<Pending>({ type: 'recall.getPending', captureId: kept })).upload).toEqual({ status: 'none' });
 
     const { tab, popup } = await openPopup();
     try {
       await expect(popup.getByRole('heading', { name: "Valid signature, but from a witness you haven't trusted" })).toBeVisible();
-      await expect(popup.getByRole('heading', { name: 'No storage left' })).toBeVisible();
-      await expect(popup.getByText(/Nothing was published\./)).toBeVisible();
+      await expect(popup.getByRole('heading', { name: 'Continue in the Recall tab' })).toBeVisible();
+      await expect(popup.getByRole('button', { name: 'Open Recall tab' })).toBeVisible();
     } finally {
       await popup.close();
       await tab.close();
     }
+    expect(await api({ type: 'recall.discardPending', captureId: kept })).toEqual({ ok: true });
   });
 
   test('addBatches rejects a batch not owned by the stamp key', async () => {
@@ -293,7 +290,7 @@ test.describe('@p2 extension api', () => {
   let usedBatch: Hex;
   let evidenceRef: Hex;
 
-  test('addBatches then capture uploads using one batch', async () => {
+  test('addBatches, capture, then uploadPending uploads using one batch', async () => {
     const ids = [await buy(stampAddress), await buy(stampAddress)];
     const added = await api<{ pool?: Pool; error?: string }>({ type: 'recall.addBatches', batchIds: ids });
     expect(added.error, JSON.stringify(added)).toBeUndefined();
@@ -306,15 +303,22 @@ test.describe('@p2 extension api', () => {
 
     const r = await captureForTest();
     if ('error' in r) throw new Error(r.error);
-    // Default settings pin no witness: C warns, and a warning still uploads.
+    // Default settings pin no witness: C warns, and a warning may still be uploaded.
     expect([r.checks.A.status, r.checks.B.status, r.checks.C.status]).toEqual(['pass', 'pass', 'warn']);
-    expect(r.upload?.status, JSON.stringify(r.upload)).toBe('uploaded');
-    const up = r.upload as Extract<Upload, { status: 'uploaded' }>;
-    expect(up.captureId).toMatch(/^[0-9a-f]{32}$/);
-    captureId = up.captureId;
+    expect(r.upload?.status, JSON.stringify(r.upload)).toBe('pending');
+    const kept = r.upload as Extract<Upload, { status: 'pending' }>;
+    expect(kept.captureId).toMatch(/^[0-9a-f]{32}$/);
+    captureId = kept.captureId;
     captured = r.evidence;
-    usedBatch = up.batchId;
-    evidenceRef = up.evidenceRef;
+    // Nothing uploaded until the publish tab asks.
+    expect(await unused()).toBe(2);
+    expect(await api({ type: 'recall.uploadPending', captureId, mode: 'stamped' })).toEqual({ status: 'uploading' });
+    let up: { status?: string; evidenceRef?: Hex; batchId?: Hex } = {};
+    await expect
+      .poll(async () => (up = (await api<Pending>({ type: 'recall.getPending', captureId })).upload ?? {}).status, { timeout: 150_000 })
+      .toBe('uploaded');
+    usedBatch = up.batchId!;
+    evidenceRef = up.evidenceRef!;
 
     expect(await unused()).toBe(1);
     const p = await pool();
@@ -327,19 +331,18 @@ test.describe('@p2 extension api', () => {
     expect(pending.evidenceRef).toBe(up.evidenceRef);
     expect(pending.batchId).toBe(up.batchId);
     expect(pending.evidence).toEqual(r.evidence);
+    // Asked again: no second upload, no second batch.
+    expect(await api({ type: 'recall.uploadPending', captureId, mode: 'stamped' })).toEqual({
+      status: 'uploaded',
+      evidenceRef: up.evidenceRef,
+      batchId: up.batchId,
+    });
+    expect(await unused()).toBe(1);
 
     // The uploaded bytes are exactly the encoded evidence file, readable from the other node.
     const down = await downloadBytes(pending.evidenceRef!, ['http://localhost:1643']);
     expect(Buffer.from(down.bytes).equals(Buffer.from(encodeEvidence(pending.evidence)))).toBe(true);
 
-    // The popup shows the upload.
-    const { tab, popup } = await openPopup();
-    try {
-      await expect(popup.getByRole('heading', { name: 'Evidence uploaded' })).toBeVisible();
-    } finally {
-      await popup.close();
-      await tab.close();
-    }
   });
 
   test('getPending with a wrong captureId returns nothing', async () => {
@@ -411,6 +414,7 @@ test.describe('@p2 extension api', () => {
     const r = await captureForTest({ tamperEvidence: true });
     if ('error' in r) throw new Error(r.error);
     expect(r.checks.A.status).toBe('fail');
+    // Not even kept: nothing can be published from it.
     expect(r.upload?.status).toBe('skipped');
     expect(await pool()).toEqual(before.pool);
     expect(await pendingKeys()).toEqual(before.pending);
