@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { WalletChip } from './components/WalletChip';
 import { routeId, useRoute, type Route } from './router';
 import { Capture } from './routes/Capture';
@@ -125,7 +126,12 @@ export function App() {
         </div>
       </header>
       <main id="main" ref={main} tabIndex={-1} className="container page">
-        <Page route={route} />
+        <ErrorBoundary
+          key={routeId(route)}
+          title={route.name === 'capture' || route.name === 'file' ? "Couldn't display this record" : "Couldn't display this page"}
+        >
+          <Page route={route} />
+        </ErrorBoundary>
       </main>
       <footer className="site-footer">
         <div className="container">

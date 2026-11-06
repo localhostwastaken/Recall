@@ -7,6 +7,7 @@ import { DropZone } from '../ui/DropZone';
 import { Field } from '../ui/Field';
 import { Notice } from '../ui/Notice';
 import { clearHandoff, readFile, setComparisonFile, setEvidenceFile, type GivenFile } from '../verify/handoff';
+import { TechnicalDetails } from '../verify/CheckPanel';
 import { verifyRecordEvidence } from '../verify/useVerifiedCapture';
 import { verdictOf } from '../verify/verify';
 
@@ -220,7 +221,8 @@ function CompareFile() {
         ) : null}
         {found?.kind === 'error' ? (
           <Notice kind="error" title="Couldn't search for captures.">
-            {found.message}
+            The search could not finish. Check your connection and the Arkiv endpoint, then try again.
+            <TechnicalDetails text={found.message} />
           </Notice>
         ) : null}
       </div>

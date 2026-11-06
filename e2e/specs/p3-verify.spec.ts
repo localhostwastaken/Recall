@@ -1,10 +1,10 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { randomBytes } from 'node:crypto';
 import { sha256, type Hex } from 'viem';
-import { canonicalUrl, runChecks, urlHash } from '../../packages/evidence/src/index';
-import { DEVNET_WITNESS_ADDRESS } from '../fixtures/keys';
+import { canonicalUrl, encodeEvidence, runChecks, urlHash } from '../../packages/evidence/src/index';
+import { DEVNET_WITNESS_ADDRESS, DEVNET_WITNESS_KEY } from '../fixtures/keys';
 import { allowLocalArkiv } from '../fixtures/localCors';
-import { NOTICE_HOST, Rig, tamperEvidence, type Published } from '../fixtures/verifyRig';
+import { NOTICE_HOST, Rig, record, signEvidence, tamperEvidence, type Published } from '../fixtures/verifyRig';
 
 // The verification UI of the web app (apps/web on :5173), against the REAL local devnet
 // (Arkiv :8545, Bee :1633/:1643, Gnosis fork :9545, notice fixture :443). Fixtures are built
@@ -130,6 +130,46 @@ test('@p3 verify nothing is green while the checks are still running', async ({ 
   await expect(verdict(page)).toHaveAttribute('data-verdict', 'pass');
 });
 
+test('@p3 verify changing the file never shows a stale pass or a stale match', async ({ page }) => {
+  await page.goto(capturePage(good.entityKey));
+  await expect(verdict(page)).toHaveAttribute('data-verdict', 'pass');
+  const chooser = fileInput(page, 'File to compare');
+  await chooser.setInputFiles(file('notice.html', good.body, 'text/html'));
+  await expect(status(page, 'D')).toHaveAttribute('data-status', 'pass');
+  await expect(verdict(page)).toHaveAttribute('data-verdict', 'pass');
+
+  // From here on, record every state the DOM goes through.
+  await page.evaluate(() => {
+    type Snap = { verdict: string | null; d: string | null; file: string | null };
+    const log: Snap[] = [];
+    (window as unknown as { __log: Snap[] }).__log = log;
+    const snap = (): Snap => ({
+      verdict: document.querySelector('[data-verdict]')?.getAttribute('data-verdict') ?? null,
+      d: document.querySelector('[data-check="D"] [data-status]')?.getAttribute('data-status') ?? null,
+      file: document.querySelector('.file-line .mono')?.textContent ?? null,
+    });
+    new MutationObserver(() => log.push(snap())).observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      characterData: true,
+    });
+  });
+  await chooser.setInputFiles(file('other.html', new TextEncoder().encode('<p>something else</p>'), 'text/html'));
+  await expect(status(page, 'D')).toHaveAttribute('data-status', 'fail');
+  await expect(verdict(page)).toHaveAttribute('data-verdict', 'fail');
+
+  const log = await page.evaluate(
+    () => (window as unknown as { __log: { verdict: string | null; d: string | null; file: string | null }[] }).__log,
+  );
+  const forNew = log.filter((e) => e.file === 'other.html');
+  expect(forNew.length).toBeGreaterThan(0);
+  // While the new file is shown, neither a pass verdict nor a D match may ever appear:
+  // those belong to the previous file. The in-between state is "Checking…".
+  expect(forNew.filter((e) => e.verdict === 'pass' || e.d === 'pass')).toEqual([]);
+  expect(forNew.some((e) => e.verdict === 'pending' && e.d === 'pending')).toBe(true);
+});
+
 test('@p3 verify a dropped evidence file is verified offline', async ({ page, context }) => {
   await page.goto(`${APP}/#/`);
   await expect(page.getByRole('heading', { level: 1, name: 'Recall' })).toBeVisible();
@@ -176,6 +216,52 @@ test('@p3 verify dropped tampered evidence shows A failed in red', async ({ page
   await expect(page.locator('.exhibit')).toHaveCount(0);
   await expect(page.getByText(/Checks passed/)).toHaveCount(0);
   await expect(status(page, 'B')).not.toHaveAttribute('data-status', 'pass');
+});
+
+test('@p3 verify an impossible signed time cannot crash the page or pass', async ({ page }) => {
+  // A uint64 signedAt of 2^64-1: not a date. It once made `toISOString()` throw and blank the app.
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  const rec = await record(`/notice?run=${randomBytes(6).toString('hex')}`);
+  const forever = 2n ** 64n - 1n;
+  const stranger = await signEvidence(rec, { key: `0x${randomBytes(32).toString('hex')}` as Hex, override: { signedAt: forever } });
+  const trusted = await signEvidence(rec, { key: DEVNET_WITNESS_KEY, override: { signedAt: forever } });
+
+  for (const [who, signed, kind] of [
+    ['an unpinned witness', stranger, 'warn'],
+    ['the pinned witness', trusted, 'na'],
+  ] as const) {
+    await page.goto(`${APP}/#/`);
+    await fileInput(page, 'Evidence file').setInputFiles(file('evidence.json', encodeEvidence(signed.evidence), 'application/json'));
+    await expect(page).toHaveURL(/#\/file$/);
+    await expect(page.getByRole('heading', { level: 1 }), who).toContainText(NOTICE_HOST);
+    await expect(page.locator('.exhibit'), who).toContainText('Invalid time');
+    await expect(page.locator('time[datetime]'), who).toHaveCount(0);
+    await expect(page.getByText(/Couldn't display/), who).toHaveCount(0);
+    // Never a pass: an unpinned signer warns, and even the pinned witness cannot make a time up.
+    await expect(verdict(page), who).toHaveAttribute('data-verdict', kind);
+    await expect(page.getByText(/Checks passed/), who).toHaveCount(0);
+  }
+  expect(errors).toEqual([]);
+});
+
+test('@p3 verify a page that fails to draw shows no result at all', async ({ page }) => {
+  // Make the one date call the detail page makes throw, as an unforeseen value could.
+  await page.addInitScript(() => {
+    Date.prototype.toISOString = () => {
+      throw new RangeError('boom');
+    };
+  });
+  await page.goto(capturePage(good.entityKey));
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText("Couldn't display this record");
+  await expect(page.getByText('Nothing here counts as checked.')).toBeVisible();
+  // No verdict, no badge, no exhibit: nothing in the fallback can read as a pass.
+  await expect(page.locator('main').locator('[data-verdict], [data-status], .exhibit')).toHaveCount(0);
+  // The next page starts fresh.
+  await page.evaluate(() => {
+    window.location.hash = '#/';
+  });
+  await expect(page.getByRole('heading', { level: 1, name: 'Recall' })).toBeVisible();
 });
 
 test('@p3 verify a file that is not evidence is refused', async ({ page }) => {
@@ -282,6 +368,33 @@ test('@p3 verify expired storage warns in E but does not change the verdict', as
   for (const id of ['A', 'B', 'C'] as const) {
     await expect(status(page, id)).toHaveAttribute('data-status', 'pass');
   }
+  await expect(verdict(page)).toHaveAttribute('data-verdict', 'pass');
+});
+
+test('@p3 verify storage is never green when the Arkiv expiry cannot be read', async ({ page }) => {
+  // Registered after the CORS shim, so it sees the request first and passes the others on.
+  await page.route(/^http:\/\/localhost:8545\//, async (route) => {
+    const body = route.request().postData() ?? '';
+    if (!body.includes('arkiv_getBlockTiming')) return route.fallback();
+    const { id } = JSON.parse(body) as { id: number };
+    await route.fulfill({
+      status: 200,
+      headers: { 'access-control-allow-origin': '*', 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32601, message: 'method not found' } }),
+    });
+  });
+  await page.goto(capturePage(good.entityKey));
+  await expect(status(page, 'E')).toHaveAttribute('data-status', 'unavailable');
+  await expect(check(page, 'E')).toContainText('Arkiv record expiry could not be read');
+  // E informs only: the capture checks are untouched.
+  await expect(verdict(page)).toHaveAttribute('data-verdict', 'pass');
+});
+
+test('@p3 verify storage that cannot be read at all is Not checked, not stuck on Checking', async ({ page }) => {
+  await page.route(/^http:\/\/localhost:9545\//, (route) => route.abort());
+  await page.goto(capturePage(good.entityKey));
+  await expect(status(page, 'E')).toHaveAttribute('data-status', 'unavailable');
+  await expect(check(page, 'E')).toContainText('Storage status not checked (offline or RPC unreachable).');
   await expect(verdict(page)).toHaveAttribute('data-verdict', 'pass');
 });
 

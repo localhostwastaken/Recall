@@ -37,17 +37,34 @@ export function formatTtl(seconds: bigint): string {
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const two = (n: number) => String(n).padStart(2, '0');
 
+/** The last second of year 9999: later signed times are treated as not a real time. */
+const MAX_SECONDS = 253_402_300_799n;
+export const INVALID_TIME = 'Invalid time';
+
+/**
+ * A Date for Unix seconds, or null when the value is out of range. Signed times come from
+ * evidence a stranger may have made (a uint64 can be 2^64-1), so never build a Date from one
+ * without this: `toISOString()` throws on an invalid Date.
+ */
+export function safeDate(seconds: bigint): Date | null {
+  if (seconds < 0n || seconds > MAX_SECONDS) return null;
+  const d = new Date(Number(seconds) * 1000);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 /** "4 Nov 2026, 14:02 UTC" from Unix seconds (the witness's signed time is always shown in UTC). */
 export function formatUtc(seconds: bigint): string {
-  const d = new Date(Number(seconds) * 1000);
+  const d = safeDate(seconds);
+  if (!d) return INVALID_TIME;
   return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}, ${two(d.getUTCHours())}:${two(d.getUTCMinutes())} UTC`;
 }
 
 /** The same instant in the viewer's own time zone, for a hover title. */
-export const formatLocal = (seconds: bigint): string => new Date(Number(seconds) * 1000).toLocaleString();
+export const formatLocal = (seconds: bigint): string => safeDate(seconds)?.toLocaleString() ?? INVALID_TIME;
 
 /** "4 Nov 2026" (UTC) from a Date. */
 export function formatDay(d: Date): string {
+  if (Number.isNaN(d.getTime())) return INVALID_TIME;
   return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
 }
 

@@ -1,6 +1,6 @@
 import type { VerifiedFacts } from '@recall/evidence';
 import type { ReactNode } from 'react';
-import { formatBytes, formatLocal, formatUtc } from '../format';
+import { INVALID_TIME, formatBytes, formatLocal, formatUtc, safeDate } from '../format';
 import { MonoValue } from '../ui/MonoValue';
 import { witnessLabel } from '../witness';
 
@@ -11,6 +11,8 @@ import { witnessLabel } from '../witness';
  */
 export function ExhibitCard({ facts, evidenceRef }: { facts: VerifiedFacts; evidenceRef?: string }) {
   const label = witnessLabel(facts.witness);
+  // The signed time comes from evidence anyone can make: an impossible one must not crash the page.
+  const when = safeDate(facts.signedAt);
   const row = (term: string, value: ReactNode) => (
     <div className="exhibit-row">
       <dt>{term}</dt>
@@ -27,9 +29,13 @@ export function ExhibitCard({ facts, evidenceRef }: { facts: VerifiedFacts; evid
         {row('Address', <MonoValue value={facts.canonicalUrl} full />)}
         {row(
           'Captured',
-          <time className="tabular" dateTime={new Date(Number(facts.signedAt) * 1000).toISOString()} title={formatLocal(facts.signedAt)}>
-            {formatUtc(facts.signedAt)}
-          </time>,
+          when ? (
+            <time className="tabular" dateTime={when.toISOString()} title={formatLocal(facts.signedAt)}>
+              {formatUtc(facts.signedAt)}
+            </time>
+          ) : (
+            <span>{INVALID_TIME}</span>
+          ),
         )}
         {row('Size', <span className="mono">{formatBytes(facts.body.length)}</span>)}
         {row('HTTP status', <span className="mono">{facts.httpStatus}</span>)}

@@ -1,11 +1,11 @@
 import { useState } from 'react';
 import { ExhibitCard } from '../components/ExhibitCard';
 import { Notice } from '../ui/Notice';
+import { captureTitle } from '../verify/captureTitle';
 import { CheckPanel, VerdictLine, WhyWitness } from '../verify/CheckPanel';
 import { peekEvidenceFile, readFile, type GivenFile } from '../verify/handoff';
 import { useVerifiedEvidenceFile } from '../verify/useVerifiedCapture';
 import { verdictOf } from '../verify/verify';
-import { captureTitle } from './Capture';
 
 /**
  * An evidence file dropped on the home page, checked entirely in the browser: A to C (and D)
@@ -37,7 +37,7 @@ export function FileCheck() {
       </p>
       <Notice kind="info" title="Checked offline. A–C ran in your browser; storage (E) was not checked." />
       {facts ? <ExhibitCard facts={facts} /> : null}
-      <VerdictLine verdict={verdictOf(report)} />
+      <VerdictLine verdict={verdictOf(report, file?.bytes)} />
       <WhyWitness />
       <CheckPanel
         report={report}

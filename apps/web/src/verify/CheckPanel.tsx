@@ -2,7 +2,7 @@ import type { CheckResult } from '@recall/evidence';
 import { CircleCheck, CircleDashed, CircleX, LoaderCircle, TriangleAlert, type LucideIcon } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { sha256 } from 'viem';
-import { formatBytes } from '../format';
+import { formatBytes, formatTtl } from '../format';
 import { CheckRow } from '../ui/CheckRow';
 import { DropZone } from '../ui/DropZone';
 import { MonoValue, middle } from '../ui/MonoValue';
@@ -48,6 +48,16 @@ export function WhyWitness() {
   );
 }
 
+/** A raw error text (it can hold URLs or keys later), kept out of the way until asked for. */
+export function TechnicalDetails({ text }: { text: string }) {
+  return (
+    <details className="tech-details">
+      <summary>Technical details</summary>
+      <p className="mono">{text}</p>
+    </details>
+  );
+}
+
 type RowModel = { status: Status; result: ReactNode; how?: ReactNode };
 
 const PENDING = (text: string): RowModel => ({ status: 'pending', result: text });
@@ -63,7 +73,7 @@ const how = (...lines: ReactNode[]) => (
 function rowA(report: VerifiedReport | null): RowModel {
   if (!report) return PENDING('Comparing the evidence with the hashes the witness signed.');
   const { A } = report;
-  const detail = how(`Result: ${A.detail}`);
+  const detail = how(`Result: ${A.detail}`, report.technical ? <TechnicalDetails text={report.technical} /> : null);
   switch (A.status) {
     case 'pass':
       return { status: 'pass', result: 'The evidence matches the hashes the witness signed.', how: detail };
@@ -141,7 +151,14 @@ function rowD(report: VerifiedReport | null, file: GivenFile | null): RowModel {
   if (!file) {
     return { status: 'unavailable', result: 'No file given. Drop a file to compare.' };
   }
-  if (!report?.D) return { ...PENDING('Comparing your file with the captured bytes.'), how: how(fileLine) };
+  // A report speaks about D only for the file it was computed for. After the file changed it
+  // is "Checking…" again, never the previous file's answer.
+  if (!report || report.forFile !== file.bytes) {
+    return { ...PENDING('Comparing your file with the captured bytes.'), how: how(fileLine) };
+  }
+  if (!report.D) {
+    return { status: 'unavailable', result: 'Not compared: the capture could not be checked.', how: how(fileLine) };
+  }
   const { D, facts } = report;
   const detail = how(`Result: ${D.detail}`, fileLine);
   switch (D.status) {
@@ -174,7 +191,7 @@ function storageHow(check: CheckResult, info: StorageInfo | null, batchId?: stri
   return how(
     'Read live: the Swarm storage batch on Gnosis and the Arkiv record expiry. This check does not count toward the verdict.',
     batchId ? <>Storage batch: <MonoValue value={batchId} /></> : null,
-    info ? `Swarm time left: ${info.ttlSeconds === null ? 'none (expired or not found)' : `${info.ttlSeconds} s`}` : check.detail,
+    info ? `Swarm time left: ${info.ttlSeconds === null ? 'none (expired or not found)' : formatTtl(info.ttlSeconds)}` : check.detail,
     info ? `Arkiv record expires at block ${info.arkivExpiresAtBlock}` : null,
   );
 }

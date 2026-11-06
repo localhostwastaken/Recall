@@ -680,3 +680,20 @@ a.btn {
 a.btn-secondary:hover {
   color: var(--text);
 }
+
+.tech-details {
+  margin-top: var(--space-2);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+  color: var(--text-muted);
+}
+
+.tech-details > summary {
+  cursor: pointer;
+  color: var(--accent);
+}
+
+.tech-details > p {
+  margin-top: var(--space-1);
+  overflow-wrap: anywhere;
+}

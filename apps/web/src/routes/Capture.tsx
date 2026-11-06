@@ -1,18 +1,14 @@
-import type { VerifiedFacts } from '@recall/evidence';
 import { Copy, Download } from 'lucide-react';
 import { useState } from 'react';
 import type { Hex } from 'viem';
 import { ExhibitCard } from '../components/ExhibitCard';
 import { Notice } from '../ui/Notice';
 import { useToast } from '../ui/Toast';
-import { CheckPanel, VerdictLine, WhyWitness } from '../verify/CheckPanel';
+import { captureTitle } from '../verify/captureTitle';
+import { CheckPanel, TechnicalDetails, VerdictLine, WhyWitness } from '../verify/CheckPanel';
 import { readFile, peekComparisonFile, type GivenFile } from '../verify/handoff';
 import { useVerifiedCapture, type VerifiedCapture } from '../verify/useVerifiedCapture';
 import { verdictOf } from '../verify/verify';
-
-/** `Capture of <host>` once the verified facts name the host; a plain title until then. */
-export const captureTitle = (facts: VerifiedFacts | null): string =>
-  facts ? `Capture of ${facts.serverName}` : 'Capture';
 
 /** `recall-<urlHash8>-<signedAt>.json`, from the verified facts when there are any. */
 function evidenceFilename(v: VerifiedCapture): string {
@@ -39,7 +35,7 @@ export function Capture({ entityKey }: { entityKey: Hex }) {
   const [file, setFile] = useState<GivenFile | null>(() => peekComparisonFile(entityKey));
   const [fileError, setFileError] = useState<string | undefined>();
   const v = useVerifiedCapture(entityKey, file?.bytes);
-  const verdict = verdictOf(v.report);
+  const verdict = verdictOf(v.report, file?.bytes);
 
   const onFile = async (f: File) => {
     try {
@@ -106,7 +102,8 @@ export function Capture({ entityKey }: { entityKey: Hex }) {
             </>
           }
         >
-          {v.error}
+          The record could not be read. Check your connection and the Arkiv endpoint, then try again.
+          {v.error ? <TechnicalDetails text={v.error} /> : null}
         </Notice>
       </>
     );

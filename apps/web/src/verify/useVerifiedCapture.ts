@@ -85,30 +85,43 @@ function downloadReason(err: unknown): { reason: string; raw: string } {
   return { reason: 'No Swarm gateway could provide the evidence file.', raw };
 }
 
-const daysLeft = (seconds: number): string => {
+const expiresIn = (seconds: number): string => {
   const d = Math.floor(seconds / 86_400);
-  return d < 1 ? 'under 1 day' : `${d} ${d === 1 ? 'day' : 'days'}`;
+  const when = d < 1 ? 'within a day' : `in ${d} ${d === 1 ? 'day' : 'days'}`;
+  return `Expires ${when}. Keep it alive or download the evidence file.`;
 };
 
-/** Check E from live reads. It informs, but never counts toward the verdict. */
+/**
+ * Check E from live reads. It informs, but never counts toward the verdict. Green needs a
+ * successful live read of BOTH the Swarm batch TTL and the Arkiv record expiry; if either
+ * could not be read it is never a pass.
+ */
 function storageCheck(info: StorageInfo): CheckResult {
   const swarmSeconds = info.ttlSeconds === null ? 0 : Number(info.ttlSeconds);
   if (swarmSeconds <= 0) {
     return {
       status: 'warn',
-      detail: 'The Swarm storage for this evidence has expired or was not found. Download the evidence file while it is still online.',
+      detail: 'Storage has expired; the evidence may no longer be downloadable. Anyone can keep a capture alive before it expires.',
     };
   }
-  const soonest = Math.min(swarmSeconds, info.arkivSecondsLeft ?? Infinity);
-  if (soonest < SOON_SECONDS) {
-    return { status: 'warn', detail: `Expires in ${daysLeft(soonest)}. Keep it alive or download the evidence file.` };
+  if (swarmSeconds < SOON_SECONDS) return { status: 'warn', detail: expiresIn(swarmSeconds) };
+  if (info.arkivSecondsLeft === null) {
+    return {
+      status: 'unavailable',
+      detail: 'Storage status not fully checked: the Arkiv record expiry could not be read (offline or RPC unreachable).',
+    };
   }
-  const arkiv = info.arkivExpiresAt ? formatDay(info.arkivExpiresAt) : `block ${info.arkivExpiresAtBlock}`;
+  if (info.arkivSecondsLeft < SOON_SECONDS) return { status: 'warn', detail: expiresIn(info.arkivSecondsLeft) };
   return {
     status: 'pass',
-    detail: `Evidence paid on Swarm until ${info.swarmExpiresAt ? formatDay(info.swarmExpiresAt) : 'an unknown date'} · record on Arkiv until ${arkiv}.`,
+    detail: `Evidence paid on Swarm until ${info.swarmExpiresAt ? formatDay(info.swarmExpiresAt) : 'an unknown date'} · record on Arkiv until ${info.arkivExpiresAt ? formatDay(info.arkivExpiresAt) : `block ${info.arkivExpiresAtBlock}`}.`,
   };
 }
+
+const STORAGE_UNREADABLE: { check: CheckResult; info: StorageInfo | null } = {
+  check: { status: 'unavailable', detail: 'Storage status not checked (offline or RPC unreachable).' },
+  info: null,
+};
 
 /** Reads the batch TTL on Gnosis and the Arkiv block timing. A failed read is "Not checked", never a pass. */
 async function readStorage(cfg: NetConfig, record: CaptureRecord): Promise<{ check: CheckResult; info: StorageInfo | null }> {
@@ -117,9 +130,7 @@ async function readStorage(cfg: NetConfig, record: CaptureRecord): Promise<{ che
     batchTtlSeconds(gnosisClient, record.batchId),
     arkivPublic(cfg).getBlockTiming(),
   ]);
-  if (ttl.status === 'rejected') {
-    return { check: { status: 'unavailable', detail: 'Storage status not checked (offline or RPC unreachable).' }, info: null };
-  }
+  if (ttl.status === 'rejected') return STORAGE_UNREADABLE;
   const now = Date.now();
   let arkivSecondsLeft: number | null = null;
   if (timing.status === 'fulfilled') {
@@ -146,14 +157,19 @@ export async function verifyRecordEvidence(
   bytes: Uint8Array,
   userFileBytes?: Uint8Array,
 ): Promise<VerifiedReport> {
-  const r = await verifyEvidence(bytes, {
-    pinnedWitnesses: trustedWitnesses().map((w) => w.address),
-    ...(userFileBytes ? { userFileBytes } : {}),
-  });
-  const mismatch = r.facts ? crossCheck(r.facts, record) : [];
-  if (mismatch.length === 0) return r;
-  const { facts: _withheld, ...rest } = r;
-  return { ...rest, mismatch };
+  try {
+    const r = await verifyEvidence(bytes, {
+      pinnedWitnesses: trustedWitnesses().map((w) => w.address),
+      ...(userFileBytes ? { userFileBytes } : {}),
+    });
+    const mismatch = r.facts ? crossCheck(r.facts, record) : [];
+    if (mismatch.length === 0) return r;
+    const { facts: _withheld, ...rest } = r;
+    return { ...rest, mismatch };
+  } catch (e) {
+    // Never leave the page on "Checking…": an unexpected failure is "not checked".
+    return unavailableReport('The checks could not run in this browser.', userFileBytes, e instanceof Error ? e.message : String(e));
+  }
 }
 
 /**
@@ -179,28 +195,34 @@ export function useVerifiedCapture(entityKey: Hex, userFile?: Uint8Array): Verif
     setStorage({ phase: 'pending' });
     setReport(null);
     (async () => {
-      const cfg = getNetConfig();
-      let record: CaptureRecord;
       try {
-        record = await fetchCapture(cfg, entityKey);
-      } catch (e) {
+        const cfg = getNetConfig();
+        let record: CaptureRecord;
+        try {
+          record = await fetchCapture(cfg, entityKey);
+        } catch (e) {
+          if (!alive) return;
+          const name = (e as { name?: string })?.name;
+          if (name === 'NoEntityFoundError') setLoad({ phase: 'missing' });
+          else if (name === 'SchemaMismatchError') setLoad({ phase: 'not-capture' });
+          else setLoad({ phase: 'error', message: e instanceof Error ? e.message : String(e) });
+          return;
+        }
         if (!alive) return;
-        const name = (e as { name?: string })?.name;
-        if (name === 'NoEntityFoundError') setLoad({ phase: 'missing' });
-        else if (name === 'SchemaMismatchError') setLoad({ phase: 'not-capture' });
-        else setLoad({ phase: 'error', message: e instanceof Error ? e.message : String(e) });
-        return;
-      }
-      if (!alive) return;
-      setLoad({ phase: 'record', record, evidence: { state: 'downloading' } });
-      void readStorage(cfg, record).then((s) => {
-        if (alive) setStorage({ phase: 'done', ...s });
-      });
-      try {
-        const { bytes } = await downloadBytes(record.evidenceRef, cfg.swarm.downloadUrls);
-        if (alive) setLoad({ phase: 'record', record, evidence: { state: 'ok', bytes } });
+        setLoad({ phase: 'record', record, evidence: { state: 'downloading' } });
+        readStorage(cfg, record)
+          .catch(() => STORAGE_UNREADABLE)
+          .then((s) => {
+            if (alive) setStorage({ phase: 'done', ...s });
+          });
+        try {
+          const { bytes } = await downloadBytes(record.evidenceRef, cfg.swarm.downloadUrls);
+          if (alive) setLoad({ phase: 'record', record, evidence: { state: 'ok', bytes } });
+        } catch (e) {
+          if (alive) setLoad({ phase: 'record', record, evidence: { state: 'failed', ...downloadReason(e) } });
+        }
       } catch (e) {
-        if (alive) setLoad({ phase: 'record', record, evidence: { state: 'failed', ...downloadReason(e) } });
+        if (alive) setLoad({ phase: 'error', message: e instanceof Error ? e.message : String(e) });
       }
     })();
     return () => {
@@ -212,7 +234,7 @@ export function useVerifiedCapture(entityKey: Hex, userFile?: Uint8Array): Verif
   useEffect(() => {
     if (load.phase !== 'record' || load.evidence.state === 'downloading') return;
     if (load.evidence.state === 'failed') {
-      setReport(unavailableReport(load.evidence.reason));
+      setReport(unavailableReport(load.evidence.reason, userFile, load.evidence.raw));
       return;
     }
     let alive = true;
@@ -245,12 +267,16 @@ export function useVerifiedEvidenceFile(bytes: Uint8Array | null, userFile?: Uin
   useEffect(() => {
     if (!bytes) return;
     let alive = true;
-    void verifyEvidence(bytes, {
+    verifyEvidence(bytes, {
       pinnedWitnesses: trustedWitnesses().map((w) => w.address),
       ...(userFile ? { userFileBytes: userFile } : {}),
-    }).then((r) => {
-      if (alive) setReport(r);
-    });
+    })
+      .catch((e) =>
+        unavailableReport('The checks could not run in this browser.', userFile, e instanceof Error ? e.message : String(e)),
+      )
+      .then((r) => {
+        if (alive) setReport(r);
+      });
     return () => {
       alive = false;
     };
