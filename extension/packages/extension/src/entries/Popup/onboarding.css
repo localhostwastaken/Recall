@@ -100,7 +100,7 @@
   display: grid;
   justify-items: start;
   gap: var(--space-3);
-  padding: var(--space-5);
+  padding: var(--space-4);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-2);
@@ -127,9 +127,9 @@
   outline: none;
 }
 
+/* The heading takes focus only so a screen reader reads the new step; it is not a control. */
 .ob-title:focus-visible {
-  outline: 3px solid var(--focus);
-  outline-offset: 2px;
+  outline: none;
 }
 
 .ob-body {
@@ -139,6 +139,8 @@
 }
 
 .ob-tip {
+  display: grid;
+  gap: var(--space-1);
   width: 100%;
   padding: var(--space-3);
   background: var(--citrus-soft);
@@ -151,6 +153,8 @@
 
 .ob-link {
   color: var(--accent);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
   font-weight: 600;
   text-decoration: underline;
   text-underline-offset: 0.18em;

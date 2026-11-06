@@ -230,7 +230,7 @@ export function Onboarding({ showHelpButton = true }: { showHelpButton?: boolean
                 <p className="ob-body">{current.body}</p>
                 {step === 0 ? (
                   <p className="ob-tip">
-                    Try{' '}
+                    <span>Try it on</span>
                     <a className="ob-link" href={EXAMPLE_REPO} target="_blank" rel="noreferrer">
                       github.com/permissionlesstech/bitchat
                     </a>
