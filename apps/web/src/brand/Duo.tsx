@@ -121,6 +121,8 @@ export function Duo({ className }: { className?: string }) {
             <path d="M19 92 h12" />
           </g>
           <g id="duo-receipt" transform="translate(-36 28) rotate(-12)">
+            {/* a flat offset shadow, so the white card still reads on the light page */}
+            <rect y="3" width="68" height="50" rx="8" fill="var(--duo-receipt-shadow)" />
             <rect width="68" height="50" rx="8" fill={PAPER} />
             <rect x="9" y="10" width="30" height="5" rx="2.5" fill={INK} opacity=".75" />
             <rect x="9" y="20" width="40" height="3.5" rx="1.75" fill={INK} opacity=".28" />
