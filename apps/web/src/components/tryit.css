@@ -49,18 +49,7 @@
 
 .tryit-action {
   margin-top: var(--space-2);
-}
-
-.tryit-link,
-.tryit-action {
   gap: var(--space-1);
-}
-
-.tryit-link {
-  display: inline-flex;
-  align-items: center;
-  font-weight: 600;
-  overflow-wrap: anywhere;
 }
 
 .tryit-example {
@@ -82,6 +71,7 @@
 
 @media (min-width: 900px) {
   .tryit {
+    align-items: start;
     grid-template-columns: minmax(0, 7fr) minmax(0, 4fr);
     gap: var(--space-6);
   }

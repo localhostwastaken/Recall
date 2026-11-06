@@ -61,12 +61,11 @@ export function TryIt() {
             <div className="tryit-text">
               <p className="tryit-name">Open a GitHub repo and click Capture</p>
               <p className="muted">
-                Try{' '}
-                <Outside className="tryit-link" href={EXAMPLE_REPO_URL}>
-                  github.com/permissionlesstech/bitchat
-                </Outside>
-                . The witness watches GitHub answer. It takes about 30 seconds.
+                Try permissionlesstech/bitchat. The witness watches GitHub answer. It takes about 30 seconds.
               </p>
+              <Outside className="btn btn-secondary btn-compact tryit-action" href={EXAMPLE_REPO_URL}>
+                Open the example repo
+              </Outside>
             </div>
           </li>
           <li className="tryit-step">
