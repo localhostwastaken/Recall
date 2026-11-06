@@ -538,7 +538,7 @@ test.describe('@p2 approve', () => {
     const kept = r.upload as Extract<Upload, { status: 'pending' }>;
     // The publish tab's upload request (recall.uploadPending) runs it in the extension; asked
     // twice, it uploads once.
-    expect(await api({ type: 'recall.uploadPending', captureId: kept.captureId, mode: 'stamped' })).toEqual({ status: 'uploading' });
+    expect(await api({ type: 'recall.uploadPending', captureId: kept.captureId, mode: 'stamped' })).toEqual({ status: 'uploading', mode: 'stamped' });
     expect((await api<{ status?: string }>({ type: 'recall.uploadPending', captureId: kept.captureId, mode: 'stamped' })).status).toMatch(
       /^(uploading|uploaded)$/,
     );

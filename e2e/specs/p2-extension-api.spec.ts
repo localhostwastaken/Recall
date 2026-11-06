@@ -312,7 +312,7 @@ test.describe('@p2 extension api', () => {
     captured = r.evidence;
     // Nothing uploaded until the publish tab asks.
     expect(await unused()).toBe(2);
-    expect(await api({ type: 'recall.uploadPending', captureId, mode: 'stamped' })).toEqual({ status: 'uploading' });
+    expect(await api({ type: 'recall.uploadPending', captureId, mode: 'stamped' })).toEqual({ status: 'uploading', mode: 'stamped' });
     let up: { status?: string; evidenceRef?: Hex; batchId?: Hex } = {};
     await expect
       .poll(async () => (up = (await api<Pending>({ type: 'recall.getPending', captureId })).upload ?? {}).status, { timeout: 150_000 })

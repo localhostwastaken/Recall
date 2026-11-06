@@ -1200,6 +1200,80 @@ test.describe('@p3 settings extension', () => {
     }
   });
 
+  test('@p3 settings extension a failed free upload keeps free storage for the retry', async () => {
+    test.setTimeout(300_000);
+    await ensureArkivGas();
+    gatewayBatch ??= await buyNodeBatch();
+    const gw = await startGateway(gatewayBatch);
+    // An upload node that is down (answers 500 to everything).
+    const down = createServer((_req, res) => {
+      res.writeHead(500, { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*' }).end('down');
+    });
+    await new Promise<void>((r) => down.listen(0, '127.0.0.1', r));
+    const base = {
+      net: 'local',
+      witnessUrl: 'http://localhost:7047',
+      pinnedWitnesses: [DEVNET_WITNESS_ADDRESS],
+      appUrl: APP,
+      uploadMode: 'free',
+    };
+    try {
+      await setLocal('recall.settings', { ...base, uploadUrl: `http://127.0.0.1:${(down.address() as AddressInfo).port}` });
+      const poolBefore = await getLocal('recall.pool');
+      const page = `https://${NOTICE_HOST}/notice?run=freefail-${Math.random().toString(36).slice(2, 10)}`;
+      const run = () =>
+        sw().evaluate(async (u) => {
+          const g = globalThis as unknown as { recall?: { captureForTest?: (url: string) => Promise<unknown> } };
+          if (!g.recall?.captureForTest) return { error: 'no recall.captureForTest in this build' };
+          return g.recall.captureForTest(u);
+        }, page) as Promise<{ upload?: { status: string; captureId?: string } } | { error: string }>;
+      let result = await run();
+      if ('error' in result && /witness busy|too many sessions|did not connect in time|timed out/i.test(result.error)) result = await run();
+      if ('error' in result) throw new Error(`capture failed: ${result.error}`);
+      const captureId = result.upload!.captureId!;
+      let tab: Page | undefined;
+      await expect
+        .poll(() => (tab = ext.context.pages().find((p) => p.url().includes(`#/approve/${captureId}`))), { timeout: 15_000 })
+        .toBeTruthy();
+      await installMockWallet(tab!, {
+        privateKey: SETTINGS_WALLET_KEY,
+        rpcByChainId: { 1337: LOCAL.arkiv.rpcUrl, 100: LOCAL.gnosis.rpcUrl },
+        chainId: 1337,
+      });
+      await allowLocalArkiv(tab!);
+      await tab!.reload();
+      await tab!.getByRole('button', { name: 'Use free storage instead' }).click();
+      await expect(tab!.getByRole('heading', { name: 'Upload failed' })).toBeVisible({ timeout: 60_000 });
+      const failedState = await tab!.evaluate(
+        ([id, cid]) =>
+          new Promise<unknown>((resolve) =>
+            (window as unknown as { chrome: { runtime: { sendMessage: Function } } }).chrome.runtime.sendMessage(
+              id,
+              { type: 'recall.getPending', captureId: cid },
+              (r: { upload?: unknown }) => resolve(r.upload),
+            ),
+          ),
+        [ext.extensionId, captureId] as const,
+      );
+      expect(failedState).toMatchObject({ status: 'failed', mode: 'free' });
+      // Free storage again is "Try upload again" itself, so it is not offered twice.
+      await expect(tab!.getByRole('button', { name: 'Use free storage', exact: true })).toHaveCount(0);
+
+      // The gateway is back: the retry uses free storage again (not the pool's batch).
+      await setLocal('recall.settings', { ...base, uploadUrl: gw.url });
+      await tab!.getByRole('button', { name: 'Try upload again' }).click();
+      await expect(tab!.getByRole('heading', { name: 'Published', exact: true })).toBeVisible({ timeout: 90_000 });
+      expect(gw.seen.filter((r) => r.method === 'POST').map((r) => r.url)).toEqual(['/bytes']);
+      expect(await getLocal('recall.pool')).toEqual(poolBefore);
+      await tab!.close();
+    } finally {
+      gw.server.closeAllConnections();
+      gw.server.close();
+      down.closeAllConnections();
+      down.close();
+    }
+  });
+
   test('@p3 settings extension free-mode approve compares the gateway copy before publishing', async () => {
     test.setTimeout(240_000);
     gatewayBatch ??= await buyNodeBatch();
@@ -1244,7 +1318,7 @@ test.describe('@p3 settings extension', () => {
             }),
           [ext.extensionId, msg] as const,
         ) as Promise<T>;
-      expect(await send({ type: 'recall.uploadPending', captureId: up.captureId, mode: 'free' })).toEqual({ status: 'uploading' });
+      expect(await send({ type: 'recall.uploadPending', captureId: up.captureId, mode: 'free' })).toEqual({ status: 'uploading', mode: 'free' });
       let state: { status?: string; evidenceRef?: Hex; batchId?: Hex } = {};
       await expect
         .poll(
