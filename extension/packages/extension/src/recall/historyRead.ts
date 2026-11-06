@@ -32,6 +32,8 @@ export type SummaryAnswer = {
   versions: number;
   confirmations: number;
   latest?: string;
+  records: number;
+  unavailable: number;
   incomplete: boolean;
 };
 
@@ -52,10 +54,17 @@ export async function readHistory(
     const deps: HistoryDeps = {
       urlHash: req.urlHash,
       pinned: req.pinned,
-      // Aborted (not just abandoned) when slow, so a stalling gateway costs nothing more.
-      download: async (ref) =>
-        (await downloadBytes(ref, req.net.swarm.downloadUrls, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) }))
-          .bytes,
+      // Aborted (not just abandoned) when slow, so a stalling gateway costs nothing more. The
+      // Swarm root is checked except for free-mode records (all-zero batch id, as in the web
+      // app): a gateway's free-storage reference differs from the local root over 4 KB; those
+      // bytes are bound by checks A-C and the R13 facts cross-check in verifiedFacts.
+      download: async (ref, batchId) =>
+        (
+          await downloadBytes(ref, req.net.swarm.downloadUrls, {
+            signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+            verifyRoot: !/^0x0{64}$/i.test(batchId),
+          })
+        ).bytes,
     };
     if (req.want === 'latest') {
       const latest = await latestVerifiedCapture(rows, deps);
@@ -69,6 +78,8 @@ export async function readHistory(
       versions: s.versions,
       confirmations: s.confirmations,
       ...(s.latest !== undefined ? { latest: s.latest.toString(10) } : {}),
+      records: s.records,
+      unavailable: s.unavailable,
       incomplete: s.incomplete,
     };
   } catch (err) {

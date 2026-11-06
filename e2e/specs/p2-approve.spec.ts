@@ -39,7 +39,14 @@ const PAGE = `https://${NOTICE_HOST}/notice?run=${RUN}`;
 const JUNK_PAGE = `https://${NOTICE_HOST}/notice?run=${RUN}-junk`;
 const hashOf = (page: string) => urlHash(canonicalUrl(page));
 
-type Facts = { canonicalUrl: string; bodySha256: Hex; signedAt: string; witness: Address };
+type Facts = {
+  canonicalUrl: string;
+  serverName: string;
+  httpStatus: number;
+  bodySha256: Hex;
+  signedAt: string;
+  witness: Address;
+};
 type Upload =
   | { status: 'uploaded'; captureId: string; evidenceRef: Hex; batchId: Hex }
   | { status: 'confirmation'; captureId: string; captureKey: Hex; since: string }
@@ -420,6 +427,41 @@ test.describe('@p2 approve', () => {
     await page.close();
   });
 
+  test('discard after a rejection removes the pending capture', async () => {
+    const r = await capture(PAGE);
+    const c = r.upload as Extract<Upload, { status: 'confirmation' }>;
+    expect(c.status).toBe('confirmation');
+    const before = (await rows(PAGE)).length;
+    const { page } = await approvalTab(c.captureId);
+    await page.locator('main').getByRole('button', { name: 'Connect MetaMask' }).click();
+    await expect(page.getByRole('button', { name: 'Publish confirmation' })).toBeEnabled();
+    await page.evaluate(() => {
+      (window as unknown as { __rejectNext: unknown }).__rejectNext = 'eth_sendTransaction';
+    });
+    await page.getByRole('button', { name: 'Publish confirmation' }).click();
+    await expect(page.getByRole('heading', { name: 'Not published' })).toBeVisible({ timeout: 30_000 });
+
+    // The confirm dialog: Esc closes it and focus goes back to the button; nothing changes.
+    const discardButton = page.getByRole('button', { name: 'Discard capture' });
+    await discardButton.click();
+    const dialog = page.getByRole('dialog', { name: 'Discard this confirmation?' });
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText('Nothing was uploaded for it, and nothing will be published.');
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
+    await expect(discardButton).toBeFocused();
+    expect((await pendingOf(c.captureId)).captureId).toBe(c.captureId);
+
+    await discardButton.click();
+    await dialog.getByRole('button', { name: 'Discard', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Capture discarded' })).toBeVisible();
+    await expect(page.getByText('The capture was removed from the extension. Nothing was published.')).toBeVisible();
+    // Gone from the extension; nothing was written to Arkiv.
+    expect(await pendingOf(c.captureId)).toEqual({ error: expect.any(String) });
+    expect((await rows(PAGE)).length).toBe(before);
+    await page.close();
+  });
+
   test('wrong chain is switched', async () => {
     const r = await capture(PAGE);
     const c = r.upload as Extract<Upload, { status: 'confirmation' }>;
@@ -444,7 +486,25 @@ test.describe('@p2 approve', () => {
     expect(await unused()).toBe(before - 1);
     const up = r.upload as Extract<Upload, { status: 'uploaded' }>;
     const { page } = await approvalTab(up.captureId);
-    await publish(page, 'capture');
+    // Duplicate guard: as if an earlier attempt's transaction landed after the page gave up,
+    // this account already wrote the record. Publishing reuses it instead of writing again.
+    const f = r.checks.facts!;
+    const sameAccount = arkivWallet(LOCAL, http(LOCAL.arkiv.rpcUrl), privateKeyToAccount(walletKey));
+    const { entityKey: already } = await retrying(() =>
+      writeCapture(sameAccount, {
+        urlHash: hashOf(PAGE),
+        bodySha256: f.bodySha256,
+        serverName: f.serverName,
+        witness: f.witness,
+        signedAt: BigInt(f.signedAt),
+        httpStatus: f.httpStatus,
+        batchId: up.batchId,
+        evidenceRef: up.evidenceRef,
+        canonicalUrl: f.canonicalUrl,
+      }),
+    );
+    expect((await publish(page, 'capture')).toLowerCase()).toBe(already.toLowerCase());
+    expect(await pendingOf(up.captureId)).toEqual({ error: expect.any(String) });
     await page.close();
 
     const captures = (await rows(PAGE)).filter((x): x is Extract<Listed, { kind: 'capture' }> => x.kind === 'capture');
@@ -492,10 +552,15 @@ test.describe('@p2 approve', () => {
     expect(r.upload?.status, JSON.stringify(r.upload)).toBe('uploaded');
     expect(await unused()).toBe(before - 1);
 
-    // Junk is never counted as an earlier capture.
+    // Junk is never counted as an earlier capture, and it is not "no captures" either: the
+    // record whose evidence can't be downloaded is Not checked (design brief 5).
     const { tab, popup } = await openPopup(JUNK_PAGE, { later: true });
     try {
-      await expect(popup.getByText('No captures of this page yet.')).toBeVisible({ timeout: 30_000 });
+      const earlier = popup.locator('section[aria-labelledby="earlier-captures"]');
+      await expect(earlier.getByText(/^Earlier captures couldn't be checked right now/)).toBeVisible({ timeout: 30_000 });
+      await expect(earlier.locator('.badge')).toHaveAttribute('data-status', 'unavailable');
+      await expect(popup.getByText('No captures of this page yet.')).toHaveCount(0);
+      await expect(popup.getByText(/version/)).toHaveCount(0);
     } finally {
       await popup.close();
       await tab.close();

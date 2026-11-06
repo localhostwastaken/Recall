@@ -43,6 +43,18 @@ async function askOffscreen<T>(msg: Ask): Promise<T> {
 
 export type WitnessStatus = { url?: string; online: boolean };
 
+/**
+ * Whether an announced witness URL may be used: https, or plain http only for this machine
+ * (localhost, 127.0.0.1: the devnet and a local witness). A profile on Arkiv is public and
+ * signed only by the witness key, but a plain-http URL elsewhere could be read or changed on
+ * the way, so it is never followed.
+ */
+export function announcedUrlAllowed(url: unknown): url is string {
+  if (!isWitnessUrl(url)) return false;
+  const u = new URL(url);
+  return u.protocol === 'https:' || u.hostname === 'localhost' || u.hostname === '127.0.0.1';
+}
+
 let cached: { key: string; at: number; status: WitnessStatus } | null = null;
 
 /**
@@ -71,7 +83,7 @@ export async function resolveWitness(opts: { fresh?: boolean } = {}): Promise<Wi
       ANNOUNCE_TIMEOUT_MS,
       'the witness profile read timed out',
     ).catch(() => null);
-    if (res && 'url' in res && isWitnessUrl(res.url)) candidates.push(res.url);
+    if (res && 'url' in res && announcedUrlAllowed(res.url)) candidates.push(res.url);
   }
   if (s.witnessUrl && !candidates.includes(s.witnessUrl)) candidates.push(s.witnessUrl);
   for (const url of candidates) {
@@ -83,6 +95,25 @@ export async function resolveWitness(opts: { fresh?: boolean } = {}): Promise<Wi
   }
   cached = null;
   return { ...(candidates[0] ? { url: candidates[0] } : {}), online: false };
+}
+
+/**
+ * The witness for a new capture: online only after `/info` answered as a pinned witness.
+ * If the lookup itself fails, the settings URL is still put through the same signer check
+ * (never used blind); anything else is offline.
+ */
+export async function witnessForCapture(): Promise<WitnessStatus> {
+  try {
+    return await resolveWitness();
+  } catch {
+    try {
+      const s = await loadSettings();
+      const online = await witnessOnline(s.witnessUrl, undefined, s.pinnedWitnesses);
+      return { ...(s.witnessUrl ? { url: s.witnessUrl } : {}), online };
+    } catch {
+      return { online: false };
+    }
+  }
 }
 
 /** The urlHash of a page the extension can capture, or an error in plain words. */
@@ -106,7 +137,7 @@ export async function earlierCaptures(pageUrl: string): Promise<EarlierCaptures>
   const s = await loadSettings();
   const where = { urlHash: h, timelineUrl: timelineUrl(s.appUrl, h) };
   if (s.pinnedWitnesses.length === 0) {
-    return { ...where, trusted: false, versions: 0, confirmations: 0, incomplete: false };
+    return { ...where, trusted: false, versions: 0, confirmations: 0, records: 0, unavailable: 0, incomplete: false };
   }
   const msg: OffscreenHistory = {
     type: 'recall.offscreen.history',

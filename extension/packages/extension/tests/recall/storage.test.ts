@@ -39,6 +39,7 @@ import {
   PENDING_PREFIX,
   PUBLISHED_PREFIX,
   markPublished,
+  discardPending,
   newCaptureId,
   prunePending,
   readPending,
@@ -523,6 +524,19 @@ describe('pending records', () => {
     for (const wrong of [cid.toUpperCase(), cid.slice(1), `${cid}0`, newCaptureId(), 7, null]) {
       expect(await readPending(wrong, area)).toBeNull();
     }
+  });
+
+  it('are discarded only by their exact captureId', async () => {
+    const area = memArea();
+    const cid = newCaptureId();
+    await savePending(rec(cid, Date.now()), area);
+    for (const wrong of [cid.toUpperCase(), cid.slice(1), `${cid}0`, newCaptureId(), 7, null]) {
+      expect(await discardPending(wrong, area)).toEqual({ error: 'no pending capture with this id' });
+    }
+    expect(await readPending(cid, area)).not.toBeNull();
+    expect(await discardPending(cid, area)).toEqual({ ok: true });
+    expect(await readPending(cid, area)).toBeNull();
+    expect(await discardPending(cid, area)).toEqual({ error: 'no pending capture with this id' });
   });
 
   it('still saves the record when pruning old ones fails', async () => {
@@ -1066,14 +1080,15 @@ describe('offscreen upload', () => {
 
 describe('popup copy', () => {
   it('lists the upload step only when an upload is planned', () => {
-    expect(jobSteps(false, 2)).toHaveLength(3);
-    expect(jobSteps(true, 1)).toEqual([
+    expect(jobSteps({ uploadPlanned: false, step: 2 }).labels).toHaveLength(3);
+    expect(jobSteps({ uploadPlanned: true, step: 1 }).labels).toEqual([
       'Connecting to the witness',
       'Proving the page with the witness',
       'Checking the witness signature',
       'Uploading evidence to Swarm',
+      'Opening the approval tab',
     ]);
-    expect(jobSteps(undefined, 4)).toHaveLength(4);
+    expect(jobSteps({ step: 4 })).toEqual({ labels: expect.any(Array), current: 3 });
   });
 
   it('warns about missing or expired storage before a capture', () => {
@@ -1095,7 +1110,7 @@ describe('popup copy', () => {
         { status: 'uploaded', captureId: 'x', evidenceRef: id(1), batchId: id(2) },
         'empty',
       ),
-    ).toMatchObject({ kind: 'success', title: 'Uploaded. Ready to publish' });
+    ).toMatchObject({ kind: 'success', title: 'Evidence uploaded' });
     expect(uploadCopy({ status: 'no_storage' }, 'empty')).toEqual({
       kind: 'error',
       title: 'No storage left',

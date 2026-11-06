@@ -14,7 +14,7 @@ import { applyBatchUpdates, loadPool } from './pool';
 import { unusedBatches } from './poolState';
 import { stampKey } from './stamp';
 import { newCaptureId, savePending } from './pending';
-import { latestVerifiedCapture, openApproveTab, resolveWitness } from './lookup';
+import { latestVerifiedCapture, openApproveTab, witnessForCapture } from './lookup';
 import {
   USABLE_WAIT_MS,
   canonicalEvidence,
@@ -129,24 +129,30 @@ export async function startCapture(
   url: string,
   overrides?: CaptureOverrides,
 ): Promise<{ id: string } | { error: string }> {
-  // A failed lookup (offscreen document or Arkiv down) falls back to the settings URL.
-  const witness = await resolveWitness().catch(async () => ({ url: (await loadSettings()).witnessUrl }));
+  // Never a witness that failed its signer check (fail closed).
+  const witness = await witnessForCapture();
   return update(async () => {
     if (isLive(await readCaptureState())) return { error: 'A capture is already running.' };
     const base: Base = { id: crypto.randomUUID(), url, startedAt: Date.now() };
-    const witnessUrl = witness?.url;
+    const witnessUrl = witness.url;
     if (!witnessUrl) {
       await finish(failure(base, 'no witness address is set', 'witness_offline'));
       return { id: base.id };
     }
+    if (!witness.online) {
+      await finish(failure(base, 'the witness is offline', 'witness_offline'));
+      return { id: base.id };
+    }
     // With no batch in the pool the capture is still proved and checked, but not uploaded.
     const uploadPlanned = unusedBatches(await loadPool()).length > 0;
+    const lookupPlanned = (await loadSettings()).pinnedWitnesses.length > 0;
     await area().set({
       [CAPTURE_STATE_KEY]: {
         ...base,
         status: 'running',
         step: 1,
         uploadPlanned,
+        lookupPlanned,
       } satisfies CaptureState,
     });
     try {
@@ -227,7 +233,14 @@ function checkCapture(
       }
       // Still step 3: the same-page check runs next. Storing the checked capture marks it.
       await area().set({
-        [CAPTURE_STATE_KEY]: { ...s, step: 3, stepAt: Date.now(), evidence, checks } satisfies CaptureState,
+        [CAPTURE_STATE_KEY]: {
+          ...s,
+          step: 3,
+          stepAt: Date.now(),
+          lookup: s.lookupPlanned === true,
+          evidence,
+          checks,
+        } satisfies CaptureState,
       });
       return { evidence, checks };
     } else if (outcome.code === 'cancelled') {
@@ -266,7 +279,7 @@ async function afterChecks(id: string, evidence: EvidenceFile, checks: CheckSumm
     if (s?.status !== 'running' || s.id !== id || s.step !== 3 || !s.evidence) return; // cancelled
     const base: Base = { id: s.id, url: s.url, startedAt: s.startedAt };
     if (!same || !checks.facts) {
-      await beginUpload(base, evidence, checks);
+      await beginUpload(base, evidence, checks, s.lookupPlanned);
       return;
     }
     try {
@@ -289,7 +302,7 @@ async function afterChecks(id: string, evidence: EvidenceFile, checks: CheckSumm
     } catch (err) {
       // Could not keep the confirmation: upload as a new capture instead.
       console.error('[recall] confirmation could not be kept', errorText(err));
-      await beginUpload(base, evidence, checks);
+      await beginUpload(base, evidence, checks, s.lookupPlanned);
     }
   });
   if (opened) await openApproveTab(opened);
@@ -315,6 +328,7 @@ async function beginUpload(
   base: Base,
   evidence: EvidenceFile,
   checks: CheckSummary,
+  lookupPlanned?: boolean,
 ): Promise<void> {
   const candidates = unusedBatches(await loadPool());
   if (candidates.length === 0) {
@@ -328,6 +342,7 @@ async function beginUpload(
       step: 4,
       stepAt: Date.now(),
       uploadPlanned: true,
+      ...(lookupPlanned ? { lookupPlanned } : {}),
       evidence,
       checks,
     } satisfies CaptureState,

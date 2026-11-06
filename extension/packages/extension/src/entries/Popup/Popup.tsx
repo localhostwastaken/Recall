@@ -148,6 +148,14 @@ function EarlierCapturesView({ value }: { value: EarlierCaptures | undefined }) 
           {v.note ? <p className="muted">{v.note}</p> : null}
           <p>{timeline(v.timelineUrl)}</p>
         </div>
+      ) : v.kind === 'unavailable' ? (
+        <div className="earlier">
+          <p>
+            <StatusBadge status="unavailable" />
+          </p>
+          <p className="muted">{v.text}</p>
+          <p>{timeline(v.timelineUrl)}</p>
+        </div>
       ) : v.kind === 'unchecked' ? (
         <div className="earlier">
           <p className="muted">{v.text}</p>
@@ -267,14 +275,11 @@ export function Popup() {
               Capture progress
             </h2>
             <Steps
-              steps={jobSteps(mine.uploadPlanned, mine.step).map((label, i) => ({
-                label,
-                state: (i + 1 < mine.step
-                  ? 'done'
-                  : i + 1 === mine.step
-                    ? 'active'
-                    : 'waiting') as StepState,
-              }))}
+              steps={(({ labels, current }) =>
+                labels.map((label, i) => ({
+                  label,
+                  state: (i < current ? 'done' : i === current ? 'active' : 'waiting') as StepState,
+                })))(jobSteps(mine))}
             />
             <progress className="progress" aria-label="Capture progress" />
             <p className="progress-text">

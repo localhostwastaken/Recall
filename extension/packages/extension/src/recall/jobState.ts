@@ -56,6 +56,10 @@ export type CaptureState =
       stepAt?: number;
       /** The pool had a batch at the start, so the steps include the upload. */
       uploadPlanned?: boolean;
+      /** Witnesses are pinned, so the same-page check (and maybe a confirmation) comes after the checks. */
+      lookupPlanned?: boolean;
+      /** Step 3 only: the checks passed and the same-page check is running. */
+      lookup?: boolean;
       /** Step 3 (same-page check) and step 4 (upload): the checked capture. */
       evidence?: EvidenceFile;
       checks?: CheckSummary;

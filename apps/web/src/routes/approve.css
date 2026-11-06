@@ -59,3 +59,28 @@
   border-top: 1px solid var(--border);
   background: var(--bg);
 }
+
+/* "Discard this capture?": a native modal dialog over the scrim. */
+.approve-dialog {
+  max-width: min(28rem, calc(100vw - 2 * var(--space-4)));
+  padding: var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-2);
+}
+
+.approve-dialog::backdrop {
+  background: var(--scrim);
+}
+
+.approve-dialog > * + * {
+  margin-top: var(--space-3);
+}
+
+.approve-dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}

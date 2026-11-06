@@ -29,8 +29,14 @@ export const CAPTURE_STEPS = [
   'Checking the witness signature',
 ] as const;
 
-/** Step 4, shown when the pool has a batch to upload with. */
+/** Shown when witnesses are pinned: the same-page check after the signature check. */
+export const LOOKUP_STEP = 'Looking for earlier captures';
+
+/** Shown when the pool has a batch to upload with. */
 export const UPLOAD_STEP = 'Uploading evidence to Swarm';
+
+/** The last step whenever a record can follow (an upload or a confirmation). */
+export const APPROVE_STEP = 'Opening the approval tab';
 
 /** The popup's footer helper while a capture can start (design brief 4.1). */
 export const CAPTURE_HELPER = 'Takes about 30 s and about 80 MB of data. Pages up to 64 KB.';
@@ -51,9 +57,27 @@ export const captureHelper = (storage: StorageState | undefined): string =>
       ? CAPTURE_HELPER_EXPIRED
       : CAPTURE_HELPER;
 
-/** The steps a job shows: the capture's three, plus the upload when one is planned. */
-export function jobSteps(uploadPlanned: boolean | undefined, step: number): string[] {
-  return uploadPlanned || step > 3 ? [...CAPTURE_STEPS, UPLOAD_STEP] : [...CAPTURE_STEPS];
+export type StepPlan = {
+  step: number;
+  uploadPlanned?: boolean;
+  lookupPlanned?: boolean;
+  /** Step 3 with the checks done: the same-page check is running. */
+  lookup?: boolean;
+};
+
+/**
+ * The steps a job shows (design brief 4.1) and which one is current: the capture's three,
+ * then the same-page check when witnesses are pinned, the upload when storage is there, and
+ * opening the approval tab whenever a record can follow.
+ */
+export function jobSteps(p: StepPlan): { labels: string[]; current: number } {
+  const labels: string[] = [...CAPTURE_STEPS];
+  if (p.lookupPlanned || p.lookup) labels.push(LOOKUP_STEP);
+  if (p.uploadPlanned || p.step > 3) labels.push(UPLOAD_STEP);
+  if (labels.length > CAPTURE_STEPS.length) labels.push(APPROVE_STEP);
+  const label =
+    p.step >= 4 ? UPLOAD_STEP : p.step === 3 && p.lookup ? LOOKUP_STEP : CAPTURE_STEPS[Math.max(0, p.step - 1)];
+  return { labels, current: Math.max(0, labels.indexOf(label)) };
 }
 
 export type CheckLine = {
@@ -264,10 +288,11 @@ const sentence = (s: string) => {
 export function uploadCopy(upload: UploadState, storage: StorageState): UploadCopy {
   switch (upload.status) {
     case 'uploaded':
+      // Design brief 4.1; the approval tab opens by itself, the button is the fallback.
       return {
         kind: 'success',
-        title: 'Uploaded. Ready to publish',
-        body: 'The evidence file is on Swarm. Finish in the approval tab to publish its record on Arkiv.',
+        title: 'Evidence uploaded',
+        body: 'Finish in the approval tab to publish the record.',
         actions: ['openApprove'],
       };
     case 'confirmation': {
@@ -366,6 +391,10 @@ export type EarlierCaptures =
       confirmations: number;
       /** Unix seconds (decimal) of the newest verified record. */
       latest?: string;
+      /** Records listed for the page, verified or not. */
+      records: number;
+      /** Capture records whose evidence could not be downloaded (unknown, not failed). */
+      unavailable: number;
       incomplete: boolean;
     }
   | { error: string };
@@ -373,7 +402,7 @@ export type EarlierCaptures =
 export type EarlierView =
   | { kind: 'loading'; text: string }
   | { kind: 'error' | 'none'; text: string }
-  | { kind: 'unchecked'; text: string; timelineUrl: string }
+  | { kind: 'unchecked' | 'unavailable'; text: string; timelineUrl: string }
   | { kind: 'some'; counts: string; latest: string; note?: string; timelineUrl: string };
 
 const count = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -392,19 +421,33 @@ export function earlierCopy(r: EarlierCaptures | undefined): EarlierView {
     };
   }
   if (r.versions === 0) {
-    return r.incomplete
-      ? {
-          kind: 'unchecked',
-          text: 'No verified captures among the records checked here. The timeline checks them all.',
-          timelineUrl: r.timelineUrl,
-        }
-      : { kind: 'none', text: 'No captures of this page yet.' };
+    // "None" only for an empty, complete listing. Unreachable evidence is "Not checked"
+    // (design brief 5), and records that did not verify are not "no captures".
+    if (r.records === 0 && !r.incomplete) return { kind: 'none', text: 'No captures of this page yet.' };
+    if (r.unavailable > 0) {
+      return {
+        kind: 'unavailable',
+        text: "Earlier captures couldn't be checked right now (their evidence couldn't be downloaded). You can still capture this page.",
+        timelineUrl: r.timelineUrl,
+      };
+    }
+    return {
+      kind: 'unchecked',
+      text: 'No verified captures among the records checked here. The timeline checks them all.',
+      timelineUrl: r.timelineUrl,
+    };
   }
+  const note =
+    r.unavailable > 0
+      ? `${count(r.unavailable, 'record')} couldn't be checked right now. The timeline checks them all.`
+      : r.incomplete
+        ? 'Some records were not checked here. The timeline checks them all.'
+        : undefined;
   return {
     kind: 'some',
     counts: `${count(r.versions, 'version')} · ${count(r.confirmations, 'confirmation')}`,
     latest: `Latest: ${r.latest ? formatUtc(Number(r.latest)) : 'unknown'}`,
-    ...(r.incomplete ? { note: 'Some records were not checked here. The timeline checks them all.' } : {}),
+    ...(note ? { note } : {}),
     timelineUrl: r.timelineUrl,
   };
 }

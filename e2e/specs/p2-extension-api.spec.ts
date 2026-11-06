@@ -317,7 +317,7 @@ test.describe('@p2 extension api', () => {
     // The popup shows the upload.
     const { tab, popup } = await openPopup();
     try {
-      await expect(popup.getByRole('heading', { name: 'Uploaded. Ready to publish' })).toBeVisible();
+      await expect(popup.getByRole('heading', { name: 'Evidence uploaded' })).toBeVisible();
     } finally {
       await popup.close();
       await tab.close();

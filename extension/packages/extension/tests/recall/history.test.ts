@@ -160,13 +160,25 @@ describe('earlier captures', () => {
     const w = world();
     const v1 = await evidence('<p>v1</p>', T0);
     const k1 = await w.capture(v1);
-    // Junk claiming the same body and a later time, one pointing nowhere, one at real
-    // evidence of another address (R13: the record's address differs from the evidence's).
-    w.junk(bodyHash('<p>v1</p>'), T0 + 500n);
+    // Junk claiming the same body and a later time, pointing at real evidence of another
+    // address (R13: the record's address differs from the evidence's).
     const other = await evidence('<p>v1</p>', T0 + 400n, WITNESS_KEY, '/other');
     await w.capture(other, { urlHash: HASH, bodySha256: bodyHash('<p>v1</p>'), signedAt: T0 + 400n });
     const latest = await latestVerifiedCapture(w.rows, w.deps);
     expect(latest).toEqual({ entityKey: k1, bodySha256: bodyHash('<p>v1</p>'), signedAt: T0 });
+  });
+
+  it('a newer record whose evidence cannot be downloaded is unknown: no confirmation (upload)', async () => {
+    const w = world();
+    await w.capture(await evidence('<p>v1</p>', T0));
+    // Might be a real newer version whose gateway is down, or junk pointing nowhere.
+    w.junk(bodyHash('<p>v1</p>'), T0 + 500n);
+    expect(await latestVerifiedCapture(w.rows, w.deps)).toBeNull();
+    // Older unreachable records do not matter once a newer one verified.
+    const w2 = world();
+    w2.junk(bodyHash('<p>v1</p>'), T0 - 500n);
+    const k = await w2.capture(await evidence('<p>v1</p>', T0));
+    expect((await latestVerifiedCapture(w2.rows, w2.deps))?.entityKey).toBe(k);
   });
 
   it('latest verified capture is the newest verified one, whatever its body', async () => {
@@ -182,7 +194,11 @@ describe('earlier captures', () => {
   it('latest verified capture gives up (null) after a bounded number of failed candidates', async () => {
     const w = world();
     await w.capture(await evidence('<p>v1</p>', T0));
-    for (let i = 1; i <= 4; i++) w.junk(bodyHash('<p>v1</p>'), T0 + BigInt(i));
+    // Records that claim this address but carry another address's real evidence.
+    for (let i = 1; i <= 4; i++) {
+      const e = await evidence('<p>v1</p>', T0 + BigInt(i), WITNESS_KEY, `/other${i}`);
+      await w.capture(e, { urlHash: HASH });
+    }
     expect(await latestVerifiedCapture(w.rows, w.deps, 3)).toBeNull();
     expect(w.downloads).toHaveLength(3);
     expect(await latestVerifiedCapture(w.rows, w.deps, 5)).not.toBeNull();
@@ -214,14 +230,36 @@ describe('earlier captures', () => {
       versions: 2,
       confirmations: 1,
       latest: T0 + 100n,
+      records: w.rows.length,
+      unavailable: 1, // the junk record pointing nowhere: not checked, not counted
       incomplete: false,
     });
   });
 
   it('summary of nothing, and an incomplete listing is flagged', async () => {
     const w = world();
-    expect(await summarizeHistory([], false, w.deps)).toEqual({ versions: 0, confirmations: 0, incomplete: false });
+    expect(await summarizeHistory([], false, w.deps)).toEqual({
+      versions: 0,
+      confirmations: 0,
+      records: 0,
+      unavailable: 0,
+      incomplete: false,
+    });
     await w.capture(await evidence('<p>v1</p>', T0));
     expect((await summarizeHistory(w.rows, true, w.deps)).incomplete).toBe(true);
+  });
+
+  it('summary: a download failure is unavailable (unknown), a record that fails is unverified', async () => {
+    const w = world();
+    await w.capture(await evidence('<p>v1</p>', T0));
+    const down: HistoryDeps = { ...w.deps, download: async () => Promise.reject(new Error('gateway timeout')) };
+    expect(await summarizeHistory(w.rows, false, down)).toMatchObject({ versions: 0, records: 1, unavailable: 1 });
+    const stranger = world();
+    await stranger.capture(await evidence('<p>v1</p>', T0, STRANGER_KEY));
+    expect(await summarizeHistory(stranger.rows, false, stranger.deps)).toMatchObject({
+      versions: 0,
+      records: 1,
+      unavailable: 0,
+    });
   });
 });

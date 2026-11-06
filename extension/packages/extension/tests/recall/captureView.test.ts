@@ -3,6 +3,7 @@ import type { EvidenceFile } from '@recall/evidence';
 import {
   approveUrl,
   checkLines,
+  jobSteps,
   earlierCopy,
   errorCopy,
   formatElapsed,
@@ -154,8 +155,8 @@ describe('capture view copy', () => {
     const k = ('0x' + '1'.repeat(64)) as `0x${string}`;
     expect(uploadCopy({ status: 'uploaded', captureId: 'x', evidenceRef: k, batchId: k }, 'ok')).toEqual({
       kind: 'success',
-      title: 'Uploaded. Ready to publish',
-      body: 'The evidence file is on Swarm. Finish in the approval tab to publish its record on Arkiv.',
+      title: 'Evidence uploaded',
+      body: 'Finish in the approval tab to publish the record.',
       actions: ['openApprove'],
     });
   });
@@ -173,19 +174,37 @@ describe('capture view copy', () => {
   });
 
   it('earlier captures: counts of verified records only, never green', () => {
-    const base = { urlHash: ('0x' + '2'.repeat(64)) as `0x${string}`, timelineUrl: 'http://app/#/u/x' };
+    const base = {
+      urlHash: ('0x' + '2'.repeat(64)) as `0x${string}`,
+      timelineUrl: 'http://app/#/u/x',
+      records: 0,
+      unavailable: 0,
+    };
     expect(earlierCopy(undefined)).toEqual({ kind: 'loading', text: 'Checking earlier captures…' });
     expect(earlierCopy({ error: 'rpc down' })).toEqual({
       kind: 'error',
       text: "Couldn't load earlier captures. You can still capture this page.",
     });
+    // "None" only for an empty, complete listing.
     expect(earlierCopy({ ...base, trusted: true, versions: 0, confirmations: 0, incomplete: false })).toEqual({
       kind: 'none',
       text: 'No captures of this page yet.',
     });
-    expect(earlierCopy({ ...base, trusted: true, versions: 0, confirmations: 0, incomplete: true })).toEqual({
+    expect(earlierCopy({ ...base, trusted: true, versions: 0, confirmations: 0, incomplete: true, records: 2001 })).toEqual({
       kind: 'unchecked',
       text: 'No verified captures among the records checked here. The timeline checks them all.',
+      timelineUrl: base.timelineUrl,
+    });
+    // Records exist but none verified (junk): not "no captures".
+    expect(earlierCopy({ ...base, trusted: true, versions: 0, confirmations: 0, incomplete: false, records: 2 }).kind).toBe(
+      'unchecked',
+    );
+    // Evidence unreachable: Not checked (design brief 5), never "none".
+    expect(
+      earlierCopy({ ...base, trusted: true, versions: 0, confirmations: 0, incomplete: false, records: 1, unavailable: 1 }),
+    ).toEqual({
+      kind: 'unavailable',
+      text: "Earlier captures couldn't be checked right now (their evidence couldn't be downloaded). You can still capture this page.",
       timelineUrl: base.timelineUrl,
     });
     expect(earlierCopy({ ...base, trusted: false, versions: 0, confirmations: 0, incomplete: false })).toEqual({
@@ -194,7 +213,7 @@ describe('capture view copy', () => {
       timelineUrl: base.timelineUrl,
     });
     expect(
-      earlierCopy({ ...base, trusted: true, versions: 1, confirmations: 1, latest: '1793800920', incomplete: false }),
+      earlierCopy({ ...base, trusted: true, versions: 1, confirmations: 1, latest: '1793800920', incomplete: false, records: 2 }),
     ).toEqual({
       kind: 'some',
       counts: '1 version · 1 confirmation',
@@ -202,13 +221,43 @@ describe('capture view copy', () => {
       timelineUrl: base.timelineUrl,
     });
     expect(
-      earlierCopy({ ...base, trusted: true, versions: 2, confirmations: 0, latest: '1793800920', incomplete: true }),
-    ).toEqual({
-      kind: 'some',
+      earlierCopy({ ...base, trusted: true, versions: 2, confirmations: 0, latest: '1793800920', incomplete: true, records: 9 }),
+    ).toMatchObject({
       counts: '2 versions · 0 confirmations',
-      latest: 'Latest: 4 Nov 2026, 14:02 UTC',
       note: 'Some records were not checked here. The timeline checks them all.',
-      timelineUrl: base.timelineUrl,
     });
+    expect(
+      earlierCopy({ ...base, trusted: true, versions: 1, confirmations: 0, latest: '1', incomplete: false, records: 3, unavailable: 2 }),
+    ).toMatchObject({ kind: 'some', note: "2 records couldn't be checked right now. The timeline checks them all." });
+  });
+
+  it('steps: the same-page check, the upload and the approval tab when they can happen', () => {
+    // Pinned witness, no storage: a confirmation can still follow.
+    const pinned = jobSteps({ step: 2, lookupPlanned: true });
+    expect(pinned.labels).toEqual([
+      'Connecting to the witness',
+      'Proving the page with the witness',
+      'Checking the witness signature',
+      'Looking for earlier captures',
+      'Opening the approval tab',
+    ]);
+    expect(pinned.current).toBe(1);
+    // During the same-page check the current step is the lookup, not the signature check.
+    expect(jobSteps({ step: 3, lookupPlanned: true, lookup: true, uploadPlanned: true })).toEqual({
+      labels: [
+        'Connecting to the witness',
+        'Proving the page with the witness',
+        'Checking the witness signature',
+        'Looking for earlier captures',
+        'Uploading evidence to Swarm',
+        'Opening the approval tab',
+      ],
+      current: 3,
+    });
+    expect(jobSteps({ step: 3, lookupPlanned: true }).current).toBe(2);
+    expect(jobSteps({ step: 4, lookupPlanned: true, uploadPlanned: true }).current).toBe(4);
+    // Nothing pinned, no storage: just the capture's three steps.
+    expect(jobSteps({ step: 1 })).toEqual({ labels: expect.any(Array), current: 0 });
+    expect(jobSteps({ step: 1 }).labels).toHaveLength(3);
   });
 });

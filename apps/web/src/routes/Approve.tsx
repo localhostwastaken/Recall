@@ -10,12 +10,13 @@ import {
   CaptureSchema,
   arkivPublic,
   arkivWallet,
+  listByUrl,
   swarmRootOf,
   writeCapture,
   writeConfirmation,
 } from '@recall/net';
 import { LoaderCircle } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type RefObject } from 'react';
 import { custom, type Account, type Address, type Hex } from 'viem';
 import { ExhibitCard } from '../components/ExhibitCard';
 import { downloadEvidence, isFreeModeBatch } from '../download';
@@ -84,13 +85,14 @@ type Load =
   | { phase: 'none' }
   | { phase: 'unreachable'; message: string }
   | { phase: 'offline'; message: string }
-  | { phase: 'refused'; reason: string; report?: CheckReport }
+  | { phase: 'refused'; reason: string; report?: CheckReport; kind?: 'capture' | 'confirmation' }
   | ({ phase: 'ready' } & Ready);
 
 type Publish =
   | { state: 'idle' }
   | { state: 'connecting' }
   | { state: 'switching' }
+  | { state: 'looking' }
   | { state: 'signing' }
   | { state: 'publishing' }
   | { state: 'rejected' }
@@ -132,19 +134,19 @@ async function loadPending(captureId: string, extensionId: string | undefined, o
     bytes = encodeEvidence(decodeEvidence(encodeEvidence(pending.evidence)));
     report = await runChecks(decodeEvidence(bytes), { pinnedWitnesses: trustedWitnesses().map((w) => w.address) });
   } catch (e) {
-    return { phase: 'refused', reason: `The evidence file could not be read: ${reasonOf(e)}.` };
+    return { phase: 'refused', kind: pending.kind, reason: `The evidence file could not be read: ${reasonOf(e)}.` };
   }
   const facts = report.facts;
   if (report.A.status !== 'pass' || report.B.status !== 'pass' || report.C.status === 'fail' || !facts) {
-    return { phase: 'refused', reason: 'The checks in this browser did not pass, so this capture cannot be published.', report };
+    return { phase: 'refused', kind: pending.kind, reason: 'The checks in this browser did not pass, so this capture cannot be published.', report };
   }
   if (pending.bodySha256?.toLowerCase() !== facts.bodySha256.toLowerCase()) {
-    return { phase: 'refused', reason: "The extension's details of this capture don't match its evidence.", report };
+    return { phase: 'refused', kind: pending.kind, reason: "The extension's details of this capture don't match its evidence.", report };
   }
 
   if (pending.kind === 'capture') {
     if (!pending.evidenceRef || !KEY.test(pending.evidenceRef) || !pending.batchId || !KEY.test(pending.batchId)) {
-      return { phase: 'refused', reason: 'The capture has no valid Swarm reference or storage batch.', report };
+      return { phase: 'refused', kind: pending.kind, reason: 'The capture has no valid Swarm reference or storage batch.', report };
     }
     onStep('Checking the uploaded evidence reference…');
     // The Swarm reference is a hash of the bytes, so it is checked here without a download.
@@ -153,17 +155,17 @@ async function loadPending(captureId: string, extensionId: string | undefined, o
     // from the locally computed root (R13). Its evidence is bound by checks A to C above, and by
     // the record being built from the facts of this very evidence. Every other batch id keeps the root check.
     if (!isFreeModeBatch(pending.batchId) && (await swarmRootOf(bytes)) !== pending.evidenceRef.slice(2).toLowerCase()) {
-      return { phase: 'refused', reason: "The uploaded evidence reference doesn't match this capture's evidence.", report };
+      return { phase: 'refused', kind: pending.kind, reason: "The uploaded evidence reference doesn't match this capture's evidence.", report };
     }
     return { phase: 'ready', pending, bytes, report, facts };
   }
 
   // A confirmation: the evidence goes inline, and the capture it confirms must verify too.
   if (!pending.captureKey || !KEY.test(pending.captureKey)) {
-    return { phase: 'refused', reason: 'The confirmation does not name a valid earlier capture.', report };
+    return { phase: 'refused', kind: pending.kind, reason: 'The confirmation does not name a valid earlier capture.', report };
   }
   if (bytes.length > INLINE_EVIDENCE_MAX) {
-    return { phase: 'refused', reason: 'The evidence is too large to publish inline as a confirmation.', report };
+    return { phase: 'refused', kind: pending.kind, reason: 'The evidence is too large to publish inline as a confirmation.', report };
   }
   onStep('Checking the earlier capture…');
   const cfg = getNetConfig();
@@ -180,7 +182,7 @@ async function loadPending(captureId: string, extensionId: string | undefined, o
     };
   } catch (e) {
     if (/not found|NoEntityFound|does not exist/i.test(String(e))) {
-      return { phase: 'refused', reason: 'The earlier capture this confirms is not on Arkiv.', report };
+      return { phase: 'refused', kind: pending.kind, reason: 'The earlier capture this confirms is not on Arkiv.', report };
     }
     return { phase: 'offline', message: reasonOf(e) };
   }
@@ -192,29 +194,114 @@ async function loadPending(captureId: string, extensionId: string | undefined, o
   }
   const { evidenceRef: _ref, batchId: _batch, ...recordClaims } = claims;
   const earlier = await verifyRecordEvidence(recordClaims, earlierBytes);
+  // Checks that could not run (e.g. the signature code failed to load) are not a failure of
+  // the earlier capture: that is "try again", not "can't be a confirmation".
+  const verdict = verdictOf(earlier);
+  if (verdict.kind === 'na' || verdict.kind === 'pending') {
+    return { phase: 'offline', message: earlier.technical ?? earlier.A.detail };
+  }
   const ef = earlier.facts;
   const ok =
-    verdictOf(earlier).kind === 'pass' &&
+    verdict.kind === 'pass' &&
     ef !== undefined &&
     ef.urlHash.toLowerCase() === facts.urlHash.toLowerCase() &&
     ef.bodySha256.toLowerCase() === facts.bodySha256.toLowerCase() &&
     ef.signedAt < facts.signedAt;
   if (!ok || !ef) {
-    return { phase: 'refused', reason: "The earlier capture didn't pass its checks or has different bytes, so this can't be a confirmation of it.", report };
+    return { phase: 'refused', kind: pending.kind, reason: "The earlier capture didn't pass its checks or has different bytes, so this can't be a confirmation of it.", report };
   }
   return { phase: 'ready', pending, bytes, report, facts, earlier: { key: pending.captureKey, signedAt: ef.signedAt } };
 }
 
-/** When the record expires, from the chain (the SDK turns 30 days into a block number). */
-async function recordUntil(entityKey: Hex): Promise<Date | null> {
+const sameHex = (a: string | undefined, b: string | undefined) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
+
+/**
+ * A record this account already wrote for this pending capture, if any. After a failure that
+ * came after MetaMask sent the transaction (a receipt timeout, a reload), the record may exist
+ * already: it is reused (and marked published) instead of writing a second one. It must match
+ * what markPublished checks: the same evidence reference for a capture, the same earlier
+ * capture for a confirmation, and the same bytes and signed time.
+ */
+async function existingRecord(ready: Ready, owner: Address): Promise<Hex | null> {
   try {
-    const pub = arkivPublic(getNetConfig());
-    const [entity, timing] = await Promise.all([pub.getEntity(entityKey), pub.getBlockTiming()]);
-    const seconds = Number(entity.$expiresAt - timing.currentBlock) * timing.blockDuration;
-    return Number.isFinite(seconds) && seconds > 0 ? new Date(Date.now() + seconds * 1000) : null;
+    const { rows } = await listByUrl(arkivPublic(getNetConfig()), ready.facts.urlHash);
+    const hit = rows.find(
+      (r) =>
+        sameHex(r.owner, owner) &&
+        r.kind === ready.pending.kind &&
+        sameHex(r.bodySha256, ready.facts.bodySha256) &&
+        r.signedAt === ready.facts.signedAt &&
+        (r.kind === 'capture' ? sameHex(r.evidenceRef, ready.pending.evidenceRef) : sameHex(r.captureKey, ready.earlier?.key)),
+    );
+    return hit?.entityKey ?? null;
   } catch {
-    return null;
+    return null; // unknown: write (a duplicate is better than never publishing)
   }
+}
+
+/**
+ * When the record expires, from the chain (the SDK turns 30 days into a block number). The
+ * node's query index can trail the receipt by a moment, so the read is retried briefly.
+ */
+async function recordUntil(entityKey: Hex): Promise<Date | null> {
+  const pub = arkivPublic(getNetConfig());
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const [entity, timing] = await Promise.all([pub.getEntity(entityKey), pub.getBlockTiming()]);
+      const seconds = Number(entity.$expiresAt - timing.currentBlock) * timing.blockDuration;
+      return Number.isFinite(seconds) && seconds > 0 ? new Date(Date.now() + seconds * 1000) : null;
+    } catch {
+      await new Promise((r) => setTimeout(r, 1_000));
+    }
+  }
+  return null;
+}
+
+type Discard = { state: 'idle' } | { state: 'working' } | { state: 'done' } | { state: 'error'; reason: string };
+
+/**
+ * "Discard this capture?" (design brief 4.2): a native modal dialog (focus stays inside, Esc
+ * closes it, focus goes back to the button that opened it). Discarding removes the pending copy
+ * from the extension; nothing is published.
+ */
+function DiscardDialog({
+  dialog,
+  kind,
+  discard,
+  onConfirm,
+  onClosed,
+}: {
+  dialog: RefObject<HTMLDialogElement | null>;
+  kind: 'capture' | 'confirmation';
+  discard: Discard;
+  onConfirm: () => void;
+  onClosed: () => void;
+}) {
+  return (
+    <dialog ref={dialog} className="approve-dialog" aria-labelledby="discard-title" onClose={onClosed}>
+      <h2 id="discard-title" className="section-title">
+        {kind === 'capture' ? 'Discard this capture?' : 'Discard this confirmation?'}
+      </h2>
+      <p>
+        {kind === 'capture'
+          ? "The uploaded evidence stays on Swarm but won't be listed."
+          : 'Nothing was uploaded for it, and nothing will be published.'}
+      </p>
+      {discard.state === 'error' ? (
+        <p className="field-error" role="alert">
+          {discard.reason}
+        </p>
+      ) : null}
+      <div className="approve-dialog-actions">
+        <button type="button" className="btn btn-danger" disabled={discard.state === 'working'} aria-busy={discard.state === 'working'} onClick={onConfirm}>
+          {discard.state === 'working' ? 'Discarding…' : 'Discard'}
+        </button>
+        <button type="button" className="btn btn-secondary" onClick={() => dialog.current?.close()}>
+          Keep it
+        </button>
+      </div>
+    </dialog>
+  );
 }
 
 /** Tells the extension, which checks the record on Arkiv first; retried while the read catches up. */
@@ -271,6 +358,39 @@ export function Approve({ captureId }: { captureId: string | null }) {
   const [attempt, setAttempt] = useState(0);
   const [load, setLoad] = useState<Load>({ phase: 'loading', step: 'Asking the Recall extension for the capture…' });
   const [publish, setPublish] = useState<Publish>({ state: 'idle' });
+  const [discard, setDiscard] = useState<Discard>({ state: 'idle' });
+  const dialog = useRef<HTMLDialogElement>(null);
+  const opener = useRef<HTMLElement | null>(null);
+  const openDiscard = useCallback((e: MouseEvent<HTMLElement>) => {
+    opener.current = e.currentTarget;
+    setDiscard({ state: 'idle' });
+    dialog.current?.showModal();
+  }, []);
+  const confirmDiscard = useCallback(async () => {
+    if (!captureId) return;
+    setDiscard({ state: 'working' });
+    try {
+      await ext.send({ type: 'recall.discardPending', captureId }, extensionId ? { extensionId } : {});
+      setDiscard({ state: 'done' });
+      dialog.current?.close();
+    } catch (e) {
+      setDiscard({ state: 'error', reason: `${sentence(reasonOf(e))}. The capture is still pending.` });
+    }
+  }, [captureId, extensionId]);
+  const discardDialog = (kind: 'capture' | 'confirmation') => (
+    <DiscardDialog
+      dialog={dialog}
+      kind={kind}
+      discard={discard}
+      onConfirm={() => void confirmDiscard()}
+      onClosed={() => opener.current?.isConnected && opener.current.focus()}
+    />
+  );
+  const discardButton = (
+    <button type="button" className="btn btn-danger" onClick={openDiscard}>
+      Discard capture
+    </button>
+  );
 
   useEffect(() => {
     if (!captureId) {
@@ -287,7 +407,7 @@ export function Approve({ captureId }: { captureId: string | null }) {
     };
   }, [captureId, extensionId, attempt]);
 
-  const busy = ['connecting', 'switching', 'signing', 'publishing'].includes(publish.state);
+  const busy = ['connecting', 'switching', 'looking', 'signing', 'publishing'].includes(publish.state);
   const connected = wallet.address !== null;
   const onArkiv = connected && wallet.chainId === arkivId;
 
@@ -318,10 +438,14 @@ export function Approve({ captureId }: { captureId: string | null }) {
           },
         });
         const w = arkivWallet(cfg, watched, { address, type: 'json-rpc' } as unknown as Account);
-        setPublish({ state: 'signing' });
+        // Already written by this account (a failure after sending, a reload)? Reuse it.
+        setPublish({ state: 'looking' });
+        const existing = await existingRecord(load, address);
+        if (!existing) setPublish({ state: 'signing' });
         const { pending, facts, bytes } = load;
-        const { entityKey } =
-          pending.kind === 'capture'
+        const { entityKey } = existing
+          ? { entityKey: existing }
+          : pending.kind === 'capture'
             ? await writeCapture(w, {
                 urlHash: facts.urlHash,
                 bodySha256: facts.bodySha256,
@@ -403,14 +527,26 @@ export function Approve({ captureId }: { captureId: string | null }) {
       </>
     );
   }
-  if (load.phase === 'refused') {
+  if (discard.state === 'done') {
     return (
       <>
         <h1 tabIndex={-1}>Publish this capture</h1>
-        <Notice kind="error" title="This capture can't be published" focus>
+        <Notice kind="info" title="Capture discarded" focus>
+          The capture was removed from the extension. Nothing was published.
+        </Notice>
+      </>
+    );
+  }
+  if (load.phase === 'refused') {
+    // Not a dead end: the reason, and a way to drop the pending capture.
+    return (
+      <>
+        <h1 tabIndex={-1}>Publish this capture</h1>
+        <Notice kind="error" title="This capture can't be published" focus actions={captureId ? discardButton : undefined}>
           {load.reason} Nothing was published.
         </Notice>
         {load.report ? <CheckSummary report={load.report} /> : null}
+        {discardDialog(load.kind ?? 'capture')}
       </>
     );
   }
@@ -442,6 +578,8 @@ export function Approve({ captureId }: { captureId: string | null }) {
       ? 'Connecting…'
       : publish.state === 'switching'
         ? 'Switching network…'
+        : publish.state === 'looking'
+          ? 'Checking Arkiv…'
         : publish.state === 'signing'
           ? 'Confirm in MetaMask…'
           : publish.state === 'publishing'
@@ -508,9 +646,12 @@ export function Approve({ captureId }: { captureId: string | null }) {
           title="Not published"
           focus
           actions={
-            <button type="button" className="btn btn-secondary" onClick={() => void run(onArkiv ? 'publish' : connected ? 'switch' : 'connect')}>
-              Try again
-            </button>
+            <>
+              <button type="button" className="btn btn-secondary" onClick={() => void run(onArkiv ? 'publish' : connected ? 'switch' : 'connect')}>
+                Try again
+              </button>
+              {discardButton}
+            </>
           }
         >
           You rejected the request in MetaMask. Your capture is kept as pending in the extension, so you can retry any time.
@@ -583,6 +724,7 @@ export function Approve({ captureId }: { captureId: string | null }) {
           </p>
         </div>
       ) : null}
+      {discardDialog(pending.kind)}
     </div>
   );
 }

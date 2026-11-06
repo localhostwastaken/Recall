@@ -117,6 +117,20 @@ export async function readPending(
   }
 }
 
+/**
+ * Drops a pending capture the person decided not to publish (the approval tab's Discard).
+ * The exact unguessable captureId is the authority, as for readPending; the evidence stays on
+ * Swarm, only the extension's hand-over copy goes.
+ */
+export async function discardPending(
+  captureId: unknown,
+  area: PendingArea = defaultArea(),
+): Promise<{ ok: true } | { error: string }> {
+  if (!(await readPending(captureId, area))) return { error: 'no pending capture with this id' };
+  await area.remove(PENDING_PREFIX + (captureId as string));
+  return { ok: true };
+}
+
 const same = (a: string | undefined, b: string | undefined) =>
   !!a && !!b && a.toLowerCase() === b.toLowerCase();
 

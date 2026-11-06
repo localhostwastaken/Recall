@@ -11,7 +11,10 @@ vi.mock('../../src/recall/settings', async (orig) => ({
   loadSettings: vi.fn(async () => settings),
 }));
 
-const { latestVerifiedCapture, resolveWitness, earlierCaptures } = await import('../../src/recall/lookup');
+const { latestVerifiedCapture, resolveWitness, earlierCaptures, witnessForCapture, announcedUrlAllowed } = await import(
+  '../../src/recall/lookup'
+);
+const { loadSettings } = await import('../../src/recall/settings');
 
 const sendMessage = chrome.runtime.sendMessage as unknown as ReturnType<typeof vi.fn>;
 const KEY = `0x${'ab'.repeat(32)}`;
@@ -58,7 +61,7 @@ describe('same-page lookup (service worker side)', () => {
   });
 
   it('earlier captures carry the timeline link of the canonical address', async () => {
-    sendMessage.mockResolvedValueOnce({ versions: 1, confirmations: 0, latest: '1', incomplete: false });
+    sendMessage.mockResolvedValueOnce({ versions: 1, confirmations: 0, latest: '1', records: 1, unavailable: 0, incomplete: false });
     const r = await earlierCaptures('https://NOTICE.recall.test/notice#frag');
     expect(r).toMatchObject({ trusted: true, versions: 1 });
     expect('timelineUrl' in r && r.timelineUrl).toMatch(/^http:\/\/localhost:5173\/#\/u\/0x[0-9a-f]{64}$/);
@@ -96,5 +99,40 @@ describe('witness discovery', () => {
     witnesses({ 'http://localhost:7047': OTHER });
     expect(await resolveWitness({ fresh: true })).toEqual({ url: 'http://localhost:7047', online: true });
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('an announced URL must be https (plain http only for this machine)', async () => {
+    expect(announcedUrlAllowed('https://tunnel.example')).toBe(true);
+    expect(announcedUrlAllowed('http://localhost:7047')).toBe(true);
+    expect(announcedUrlAllowed('http://127.0.0.1:7047')).toBe(true);
+    expect(announcedUrlAllowed('http://witness.example')).toBe(false);
+    expect(announcedUrlAllowed('http://192.168.1.5:7047')).toBe(false);
+    expect(announcedUrlAllowed('https://user:pw@tunnel.example')).toBe(false);
+    expect(announcedUrlAllowed('javascript:alert(1)')).toBe(false);
+    // A plain-http announcement elsewhere is never followed, even if it answers as the witness.
+    sendMessage.mockResolvedValue({ url: 'http://witness.example' });
+    witnesses({ 'http://witness.example': PINNED, 'http://localhost:7047': PINNED });
+    expect(await resolveWitness({ fresh: true })).toEqual({ url: 'http://localhost:7047', online: true });
+  });
+});
+
+describe('the witness for a new capture (fail closed)', () => {
+  it('is the resolved one, offline included (an offline result is never cached)', async () => {
+    sendMessage.mockResolvedValue({ url: null });
+    witnesses({});
+    expect(await resolveWitness({ fresh: true })).toEqual({ url: 'http://localhost:7047', online: false });
+    expect(await witnessForCapture()).toEqual({ url: 'http://localhost:7047', online: false });
+  });
+
+  it('when the lookup itself fails, still checks the settings URL against the pinned list', async () => {
+    const load = loadSettings as unknown as ReturnType<typeof vi.fn>;
+    load.mockRejectedValueOnce(new Error('storage busy'));
+    witnesses({ 'http://localhost:7047': OTHER });
+    expect(await witnessForCapture()).toEqual({ url: 'http://localhost:7047', online: false });
+    load.mockRejectedValueOnce(new Error('storage busy'));
+    witnesses({ 'http://localhost:7047': PINNED });
+    expect(await witnessForCapture()).toEqual({ url: 'http://localhost:7047', online: true });
+    load.mockRejectedValueOnce(new Error('storage busy')).mockRejectedValueOnce(new Error('still busy'));
+    expect(await witnessForCapture()).toEqual({ online: false });
   });
 });

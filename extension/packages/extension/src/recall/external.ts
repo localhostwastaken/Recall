@@ -5,13 +5,14 @@
 // - recall.addBatches       -> {pool} | {error, pool, rejected}  each batch checked on Gnosis
 // - recall.getPending       -> PendingRecord | {error}   exact unguessable captureId only
 // - recall.markPublished    -> {ok:true} | {error}       only after the Arkiv record matches
+// - recall.discardPending   -> {ok:true} | {error}       exact unguessable captureId only
 // Every answer is JSON-safe (strings, numbers, booleans; no bytes, no bigint).
 import { createPublicClient, http, type Hex } from 'viem';
 import { gnosis } from 'viem/chains';
 import { loadSettings, netConfigFor } from './settings';
 import { stampAddress } from './stamp';
 import { addBatches, parseBatchIds } from './pool';
-import { markPublished, readPending, type EntitySummary } from './pending';
+import { discardPending, markPublished, readPending, type EntitySummary } from './pending';
 import { ensureOffscreen } from './offscreen';
 import type { OffscreenReadEntity } from './arkivRead';
 
@@ -19,7 +20,8 @@ export type ExternalRequest =
   | { type: 'recall.getStampAddress' }
   | { type: 'recall.addBatches'; batchIds: Hex[] }
   | { type: 'recall.getPending'; captureId: string }
-  | { type: 'recall.markPublished'; captureId: string; entityKey: Hex };
+  | { type: 'recall.markPublished'; captureId: string; entityKey: Hex }
+  | { type: 'recall.discardPending'; captureId: string };
 
 type Answer = Record<string, unknown>;
 
@@ -74,6 +76,9 @@ export async function handleExternal(raw: unknown): Promise<Answer> {
 
     case 'recall.markPublished':
       return markPublished(msg.captureId, msg.entityKey, readEntity);
+
+    case 'recall.discardPending':
+      return discardPending(msg.captureId);
 
     default:
       return { error: 'unknown request' };

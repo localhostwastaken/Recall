@@ -26,8 +26,11 @@ export type HistoryDeps = {
   /** The address being looked at. */
   urlHash: Hex;
   pinned: readonly Address[];
-  /** The evidence file a capture record points to (root-checked); throws when unavailable. */
-  download(ref: Hex): Promise<Uint8Array>;
+  /**
+   * The evidence file a capture record points to; throws when unavailable. Root-checked, except
+   * for a free-mode record (all-zero batch id), whose bytes are bound by the checks and R13.
+   */
+  download(ref: Hex, batchId: Hex): Promise<Uint8Array>;
 };
 
 const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
@@ -66,14 +69,21 @@ type ConfirmationRow = Extract<Listed, { kind: 'confirmation' }>;
 const newestFirst = <T extends { signedAt: bigint }>(rows: readonly T[]): T[] =>
   [...rows].sort((a, b) => (a.signedAt === b.signedAt ? 0 : a.signedAt > b.signedAt ? -1 : 1));
 
-async function verifyCapture(row: CaptureRow, deps: HistoryDeps): Promise<VerifiedFacts | null> {
+/**
+ * One capture record's check. `unavailable`: its evidence could not be downloaded (gateway
+ * down, timeout, not found); that is unknown, never the same as a record that failed.
+ */
+type Checked = { state: 'verified'; facts: VerifiedFacts } | { state: 'unverified' } | { state: 'unavailable' };
+
+async function verifyCapture(row: CaptureRow, deps: HistoryDeps): Promise<Checked> {
   let bytes: Uint8Array;
   try {
-    bytes = await deps.download(row.evidenceRef);
+    bytes = await deps.download(row.evidenceRef, row.batchId);
   } catch {
-    return null;
+    return { state: 'unavailable' };
   }
-  return verifiedFacts(bytes, row, deps);
+  const facts = await verifiedFacts(bytes, row, deps);
+  return facts ? { state: 'verified', facts } : { state: 'unverified' };
 }
 
 export type LatestCapture = { entityKey: Hex; bodySha256: Hex; signedAt: bigint };
@@ -83,6 +93,8 @@ export type LatestCapture = { entityKey: Hex; bodySha256: Hex; signedAt: bigint 
  * found within `maxTries` downloads. Candidates are tried newest claimed time first: a
  * verified record's claimed time is its real signed time (R13), so the first one that
  * verifies is the newest verified capture; junk that claims a later time only costs a try.
+ * A newer candidate whose evidence could not be downloaded might be a real newer version,
+ * so it also gives null (fail-safe: the capture is uploaded, never wrongly confirmed).
  */
 export async function latestVerifiedCapture(
   rows: readonly Listed[],
@@ -92,8 +104,11 @@ export async function latestVerifiedCapture(
   if (deps.pinned.length === 0) return null;
   const captures = newestFirst(rows.filter((r): r is CaptureRow => r.kind === 'capture'));
   for (const row of captures.slice(0, maxTries)) {
-    const f = await verifyCapture(row, deps);
-    if (f) return { entityKey: row.entityKey, bodySha256: f.bodySha256, signedAt: f.signedAt };
+    const c = await verifyCapture(row, deps);
+    if (c.state === 'unavailable') return null;
+    if (c.state === 'verified') {
+      return { entityKey: row.entityKey, bodySha256: c.facts.bodySha256, signedAt: c.facts.signedAt };
+    }
   }
   return null;
 }
@@ -105,6 +120,10 @@ export type HistorySummary = {
   confirmations: number;
   /** The newest signed time among them (Unix seconds). */
   latest?: bigint;
+  /** Records listed for the address (captures and confirmations, verified or not). */
+  records: number;
+  /** Capture records whose evidence could not be downloaded: not checked (unknown). */
+  unavailable: number;
   /** The listing was cut short, or there were more records than were checked. */
   incomplete: boolean;
 };
@@ -146,8 +165,9 @@ export async function summarizeHistory(
   const versions = new Map<string, VerifiedFacts>();
   const versionOfKey = new Map<string, VerifiedFacts>();
   captures.forEach((row, i) => {
-    const f = checked[i];
-    if (!f) return;
+    const c = checked[i];
+    if (c.state !== 'verified') return;
+    const f = c.facts;
     const k = observation(f);
     if (!versions.has(k)) versions.set(k, f);
     versionOfKey.set(row.entityKey.toLowerCase(), versions.get(k)!);
@@ -176,6 +196,8 @@ export async function summarizeHistory(
     versions: ordered.length,
     confirmations: confirmed,
     ...(latest !== undefined ? { latest } : {}),
+    records: rows.length,
+    unavailable: checked.filter((c) => c.state === 'unavailable').length,
     incomplete,
   };
 }
