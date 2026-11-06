@@ -38,7 +38,7 @@
   font-family: var(--font-display);
   font-size: var(--text-xl);
   line-height: var(--lh-xl);
-  font-weight: 600;
+  font-weight: 800;
 }
 
 .ka-lede {
@@ -49,9 +49,10 @@
 .ka-quote {
   display: grid;
   gap: var(--space-1);
-  padding: var(--space-3);
-  background: var(--surface-sunken);
-  border-radius: var(--radius-1);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
   font-size: var(--text-sm);
   line-height: var(--lh-sm);
   font-variant-numeric: tabular-nums;

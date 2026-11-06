@@ -1,10 +1,10 @@
-/* Repository snapshot card (R46): the exhibit card, with a green rule only once verified. */
+/* Repository snapshot card (R46): the exhibit card; its edge turns green only once verified,
+   red on a mismatch (a 1 px edge, never a coloured stripe). */
 .repo-snapshot {
   margin-top: var(--space-5);
-  border-top-color: var(--border-strong);
 }
-.repo-snapshot[data-phase='ok'] { border-top-color: var(--pass); }
-.repo-snapshot[data-phase='mismatch'] { border-top-color: var(--fail); }
+.repo-snapshot[data-phase='ok'] { border-color: color-mix(in srgb, var(--pass) 45%, var(--border)); }
+.repo-snapshot[data-phase='mismatch'] { border-color: color-mix(in srgb, var(--fail) 45%, var(--border)); }
 
 .repo-snapshot-head {
   display: flex;
@@ -38,7 +38,7 @@
 .repo-snapshot-progress progress {
   width: 100%;
   height: 8px;
-  accent-color: var(--accent);
+  accent-color: var(--text);
 }
 
 .repo-snapshot-ok { color: var(--pass); }
@@ -55,12 +55,11 @@
   max-width: var(--measure);
   padding: var(--space-4);
   border: 1px solid var(--border);
-  border-left: 4px solid var(--accent);
-  border-radius: var(--radius-1);
+  border-radius: var(--radius-2);
   background: var(--surface);
 }
 .approve-repo p { margin: 0; }
-.approve-repo[data-checked='true'] { border-left-color: var(--pass); }
+.approve-repo[data-checked='true'] { border-color: color-mix(in srgb, var(--pass) 45%, var(--border)); }
 
 /* Capture page header of a GitHub branch capture: the API address under the title. */
 .capture-subtitle {

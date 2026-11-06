@@ -25,11 +25,12 @@
   width: 36px;
   height: 36px;
   border-radius: 50%;
-  background: var(--accent);
-  color: var(--on-accent);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
   font-family: var(--font-display);
   font-size: var(--text-md);
-  font-weight: 700;
+  font-weight: 800;
   font-variant-numeric: tabular-nums;
 }
 
@@ -44,7 +45,7 @@
   font-family: var(--font-display);
   font-size: var(--text-lg);
   line-height: var(--lh-lg);
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .tryit-action {
@@ -58,15 +59,15 @@
   justify-items: start;
   gap: var(--space-3);
   padding: var(--space-4);
-  background: var(--citrus-soft);
-  border: 1px solid var(--citrus);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
   border-radius: var(--radius-2);
 }
 
 .tryit-example-title {
   font-size: var(--text-lg);
   line-height: var(--lh-lg);
-  font-weight: 600;
+  font-weight: 700;
 }
 
 @media (min-width: 900px) {

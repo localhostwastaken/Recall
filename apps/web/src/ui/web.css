@@ -1,8 +1,9 @@
 /* Web shell and form styles. Only design-token variables: no raw colours, shadows or font sizes. */
 
+/* Page gutter 16 on a phone, 24 on a tablet, 32 on a desktop; 1120 px of content at most. */
 .container {
   width: 100%;
-  max-width: var(--page-max);
+  max-width: calc(1120px + 2 * var(--space-6));
   margin: 0 auto;
   padding-left: var(--space-4);
   padding-right: var(--space-4);
@@ -34,7 +35,7 @@ a:hover {
   background: var(--surface);
   color: var(--text);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-1);
+  border-radius: var(--radius-pill);
 }
 
 .skip-link:focus {
@@ -68,12 +69,13 @@ a:hover {
   margin-top: var(--space-4);
 }
 
+/* Page titles: Bricolage 800, 40 px (28 px on a phone), as the landing's section titles. */
 h1 {
   font-family: var(--font-display);
-  font-size: var(--text-3xl);
-  line-height: var(--lh-3xl);
-  font-weight: 600;
-  letter-spacing: -0.03em;
+  font-size: 40px;
+  line-height: 1.1;
+  font-weight: 800;
+  letter-spacing: -0.025em;
   overflow-wrap: anywhere;
 }
 
@@ -90,7 +92,7 @@ h1[tabindex='-1']:focus-visible {
   font-family: var(--font-display);
   font-size: var(--text-xl);
   line-height: var(--lh-xl);
-  font-weight: 600;
+  font-weight: 800;
 }
 
 .lede {
@@ -143,14 +145,15 @@ h1[tabindex='-1']:focus-visible {
   margin-top: 2px;
 }
 
+/* Inputs: 44 px, 14 px corners, the same as the library's search box. */
 .input {
   width: 100%;
-  min-height: var(--control-h);
-  padding: 0 var(--space-3);
+  min-height: 44px;
+  padding: 0 var(--space-4);
   background: var(--surface);
   color: var(--text);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-1);
+  border-radius: var(--radius-2);
   font: inherit;
   font-size: var(--text-md);
 }
@@ -170,7 +173,7 @@ h1[tabindex='-1']:focus-visible {
 }
 
 .btn-compact {
-  padding: 0 var(--space-3);
+  padding: 0 var(--space-4);
 }
 
 .btn-wide {
@@ -198,13 +201,13 @@ h1[tabindex='-1']:focus-visible {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: var(--control-h);
-  min-height: var(--control-h);
+  min-width: 44px;
+  min-height: 44px;
   padding: 0;
   background: transparent;
   color: var(--accent-text);
   border: 0;
-  border-radius: var(--radius-1);
+  border-radius: var(--radius-pill);
   cursor: pointer;
 }
 
@@ -228,7 +231,7 @@ h1[tabindex='-1']:focus-visible {
   display: inline-flex;
   margin-top: var(--space-1);
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius-1);
+  border-radius: var(--radius-2);
   overflow: hidden;
 }
 
@@ -238,7 +241,7 @@ h1[tabindex='-1']:focus-visible {
   align-items: center;
   justify-content: center;
   min-width: 6rem;
-  min-height: var(--control-h);
+  min-height: 44px;
   padding: 0 var(--space-4);
   background: var(--surface);
   font-size: var(--text-sm);
@@ -297,7 +300,7 @@ h1[tabindex='-1']:focus-visible {
 }
 
 .batch-row {
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-4);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-2);
@@ -403,7 +406,7 @@ h1[tabindex='-1']:focus-visible {
 
 .compare-details {
   max-width: var(--measure);
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-2) var(--space-4);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-2);
@@ -411,7 +414,7 @@ h1[tabindex='-1']:focus-visible {
 
 .compare-details > summary {
   cursor: pointer;
-  min-height: var(--control-h);
+  min-height: 44px;
   display: flex;
   align-items: center;
   font-weight: 600;
@@ -435,12 +438,12 @@ h1[tabindex='-1']:focus-visible {
 }
 
 /* Capture detail: exhibit card, verdict line, check extras, actions. */
+/* The capture's facts: a plain card (orange is only for things you can press). */
 .exhibit {
   max-width: var(--measure);
-  padding: var(--space-5);
+  padding: var(--space-4);
   background: var(--surface);
   border: 1px solid var(--border);
-  border-top: 4px solid var(--accent);
   border-radius: var(--radius-2);
 }
 
@@ -449,7 +452,7 @@ h1[tabindex='-1']:focus-visible {
   font-family: var(--font-display);
   font-size: var(--text-xl);
   line-height: var(--lh-xl);
-  font-weight: 600;
+  font-weight: 800;
 }
 
 .exhibit-list {
@@ -535,8 +538,8 @@ h1[tabindex='-1']:focus-visible {
 }
 
 .verdict-pending {
-  color: var(--info);
-  background: var(--info-bg);
+  color: var(--na);
+  background: var(--na-bg);
 }
 
 .why-witness {
@@ -582,7 +585,7 @@ h1[tabindex='-1']:focus-visible {
   background: var(--text);
   color: var(--bg);
   font-weight: 600;
-  border-radius: var(--radius-1);
+  border-radius: var(--radius-pill);
   font-size: var(--text-sm);
   line-height: var(--lh-sm);
   box-shadow: var(--shadow-2);
@@ -592,6 +595,13 @@ h1[tabindex='-1']:focus-visible {
   .container {
     padding-left: var(--space-5);
     padding-right: var(--space-5);
+  }
+}
+
+@media (min-width: 900px) {
+  .container {
+    padding-left: var(--space-6);
+    padding-right: var(--space-6);
   }
 }
 
@@ -607,9 +617,17 @@ h1[tabindex='-1']:focus-visible {
   }
 
   h1 {
-    font-size: var(--text-2xl);
-    line-height: var(--lh-2xl);
+    font-size: 28px;
+    line-height: 1.15;
   }
+
+  /* Section titles stay one step below the 28 px page title. */
+  .section-title,
+  .exhibit-title {
+    font-size: 20px;
+    line-height: 28px;
+  }
+
 }
 
 a.btn {
@@ -662,7 +680,7 @@ a.btn-secondary:hover {
 .skeleton {
   height: var(--space-6);
   background: var(--surface-sunken);
-  border-radius: var(--radius-1);
+  border-radius: var(--radius-2);
 }
 
 .timeline {
@@ -677,7 +695,7 @@ a.btn-secondary:hover {
 
 .tl-item {
   position: relative;
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-4);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-2);
@@ -696,8 +714,8 @@ a.btn-secondary:hover {
   top: var(--space-4);
   width: 10px;
   height: 10px;
-  background: var(--citrus);
-  border: 2px solid var(--text);
+  background: var(--bg);
+  border: 2px solid var(--text-muted);
   border-radius: 50%;
 }
 
@@ -706,7 +724,7 @@ a.btn-secondary:hover {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: var(--space-1) var(--space-3);
   align-items: center;
-  min-height: var(--control-h);
+  min-height: 44px;
   color: var(--text);
   text-decoration: none;
 }
@@ -719,7 +737,7 @@ a.btn-secondary:hover {
   font-family: var(--font-display);
   font-size: var(--text-lg);
   line-height: var(--lh-lg);
-  font-weight: 600;
+  font-weight: 700;
   overflow-wrap: anywhere;
 }
 
@@ -781,7 +799,7 @@ a.btn-secondary:hover {
   display: inline-flex;
   align-items: center;
   gap: var(--space-3);
-  min-height: var(--control-h);
+  min-height: 44px;
   padding: 0;
   background: none;
   border: 0;
@@ -799,7 +817,7 @@ a.btn-secondary:hover {
   padding: 2px;
   background: var(--surface-sunken);
   border: 1px solid var(--border-strong);
-  border-radius: 12px;
+  border-radius: var(--radius-pill);
 }
 
 .switch-thumb {
@@ -848,7 +866,7 @@ a.btn-secondary:hover {
 
 .diff-text {
   max-width: var(--measure);
-  padding: var(--space-3);
+  padding: var(--space-4);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-2);
@@ -941,7 +959,7 @@ a.btn-secondary:hover {
 /* Checks panel: a card with the one-line summary; the rows open under it. */
 .checks-panel {
   max-width: var(--measure);
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-4);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-2);
@@ -1000,7 +1018,7 @@ a.btn-secondary:hover {
 }
 
 .panel {
-  padding: var(--space-5);
+  padding: var(--space-4);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-2);
@@ -1032,6 +1050,10 @@ a.btn-secondary:hover {
     padding: var(--space-4);
   }
 
+  .checks-panel .checks-body {
+    padding-top: var(--space-3);
+  }
+
   .search-form .btn {
     width: 100%;
   }
@@ -1040,4 +1062,10 @@ a.btn-secondary:hover {
 /* Notices read as part of the text column, not as full-width banners. */
 .page .notice {
   max-width: var(--measure);
+}
+
+/* "Not connected. Check the ID…" reuses .inline-ok in the TSX; with a warning icon it is amber. */
+.inline-ok:has(svg.lucide-triangle-alert),
+.inline-ok:has(svg.lucide-alert-triangle) {
+  color: var(--warn);
 }
