@@ -91,15 +91,16 @@ body {
 
 .popup-footer {
   flex: none;
-  padding: var(--space-3) var(--space-4) var(--space-4);
+  /* Compact: the one action and one short line, so the scrolling body keeps most of the popup. */
+  padding: var(--space-2) var(--space-4) var(--space-3);
   background: var(--bg);
   border-top: 1px solid var(--border);
 }
 
 .popup-helper {
-  margin-top: var(--space-2);
-  font-size: var(--text-xs);
-  line-height: var(--lh-xs);
+  margin-top: var(--space-1);
+  font-size: 12px;
+  line-height: 16px;
   text-align: center;
 }
 
