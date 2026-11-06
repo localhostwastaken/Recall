@@ -21,11 +21,12 @@ person who captured it: you trust the witness key you pin, and by default that i
 >   (steps under [Run it](#run-it)). Nothing to configure. No xBZZ? Pick **Use free storage instead**
 >   on the publish page (the Swarm gateway stores it; nobody can extend it, so it is for trying Recall).
 >   Brave: set `brave://settings/web3` > Default Ethereum wallet to "Extensions (no fallback)" so MetaMask answers.
-> - **The app on Swarm (browse and verify):** <https://recallapp.eth.limo> and <https://recallapp.bzz.link>
+> - **The app on Swarm (browse, verify and publish):** <https://recallapp.eth.limo> and <https://recallapp.bzz.link>
 >   (ENS `recallapp.eth` points at the Swarm feed manifest
 >   `e002e9ab0bee50f874a8ee461fe053aca71c7e3be502b941d8933008e357f9e0`, one address that survives
->   republishing). Any Bee node also serves it at `/bzz/<feed manifest>/`. Details under
->   [The web app](#the-web-app).
+>   republishing). It can publish with the release extension too: in the popup, Settings > Advanced
+>   settings > Recall app > **Swarm**. GitHub Pages stays the default. Any Bee node also serves it at
+>   `/bzz/<feed manifest>/` (browse and verify there). Details under [The web app](#the-web-app).
 > - **Run the Arkiv query:** `pnpm install && pnpm arkiv:query` (see [Writer wallets](#writer-wallets)),
 >   or the keyless `curl` there.
 > - **Arkiv prize docs:** [arkiv/](arkiv/): [schema](arkiv/schema.md), [how we use Arkiv](arkiv/how-you-use-arkiv.md),
@@ -97,8 +98,12 @@ The app is also live on Swarm, so the verifier survives if GitHub Pages goes awa
 - **The public download gateway serves the files, but as downloads.**
   download.gateway.ethswarm.org answers `/bzz/...` with `Content-Disposition: attachment`, so a
   browser saves `index.html` instead of showing the app.
-- **Browse and verify only.** Capturing and publishing use the GitHub Pages app: the release
-  extension accepts messages from the Pages app only.
+- **It can publish too, by name.** The release extension accepts messages from exactly three
+  hosts: the GitHub Pages app, recallapp.eth.limo and recallapp.bzz.link (only the owner of
+  `recallapp.eth` decides what the last two serve; no `*.bzz.link` wildcard, because every Swarm site
+  has a bzz.link subdomain). Pick **Swarm** under Recall app in the popup's Advanced settings and the
+  publish tab opens on recallapp.eth.limo. GitHub Pages stays the default. A raw `/bzz/<hash>/`
+  address on a Bee node is for browsing and verifying (the extension does not talk to it).
 
 ## Demo
 
@@ -218,8 +223,10 @@ pnpm extension:zip     # release build (Mozilla roots, no dev hooks) -> dist/rec
 - Hosted: <https://localhostwastaken.github.io/Recall/app/> (live networks).
 - On Swarm: feed manifest `e002e9ab0bee50f874a8ee461fe053aca71c7e3be502b941d8933008e357f9e0` (same build; see "Live"
   above), through any Bee node at `/bzz/<feed manifest>/` (`bash scripts/swarm-reader.sh` starts one
-  at `http://127.0.0.1:1733`). Use it to browse and verify; capture and publish from the GitHub
-  Pages app.
+  at `http://127.0.0.1:1733`), or by name at <https://recallapp.eth.limo> and
+  <https://recallapp.bzz.link>. The named copies can also publish with the release extension (popup
+  Settings > Advanced settings > Recall app > **Swarm**); GitHub Pages stays the default. A raw
+  `/bzz/` address is for browsing and verifying.
 - From source: `pnpm --filter web dev` (local devnet) or `VITE_RECALL_NET=live pnpm --filter web dev`
   (live networks). A build is plain static files (`pnpm --filter web build`), so it can be served
   from anywhere, including Swarm: `pnpm publish:swarm --net live --feed` (that is how the copy above

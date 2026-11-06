@@ -76,9 +76,11 @@ if someone tops the batch up: anyone can, with **Keep alive** on the capture's p
 
 The built web app is a Swarm website, published on 2026-11-06 with
 `pnpm publish:swarm --net live --feed --days 14 --max-xbzz 1.5 --yes`. It is a copy of the GitHub
-Pages app for **browsing and verifying**, and it is a second place the verifier survives. Capturing
-and publishing use the GitHub Pages app: the release extension accepts messages from the Pages app
-only.
+Pages app, and it is a second place the verifier survives. Opened by its ENS name
+(<https://recallapp.eth.limo>, <https://recallapp.bzz.link>) it can also publish: the release
+extension accepts messages from those two exact hosts and the GitHub Pages app (pick **Swarm**
+under Recall app in the popup's Advanced settings; GitHub Pages stays the default). Through a raw
+`/bzz/<hash>/` address it is for browsing and verifying.
 
 - **How to open it:** through any Bee node at `/bzz/e002e9ab0bee50f874a8ee461fe053aca71c7e3be502b941d8933008e357f9e0/`.
   `bash scripts/swarm-reader.sh` starts a read-only one (ultra-light: no wallet, no funds, API on
