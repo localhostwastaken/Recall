@@ -1,3 +1,5 @@
+# Every published port is bound to 127.0.0.1: the devnet (test keys, a dev-CA witness) is for
+# this machine only, never the local network.
 services:
   arkiv:
     image: ghcr.io/arkiv-network/arkiv-reth-dev:v1.0.1
@@ -24,7 +26,7 @@ services:
       - --datadir
       - /data
     ports:
-      - "8545:8545"
+      - "127.0.0.1:8545:8545"
   # bee-compose (started by scripts/devnet-up.sh) publishes its second node on
   # :16331; this forwards it to the :1643 the app config expects.
   swarm-b:
@@ -33,13 +35,13 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "1643:1643"
+      - "127.0.0.1:1643:1643"
   # TLS 1.2-only fixture website the witness captures; reachable on the
   # `recall` network as notice.recall.test:443 and on the host at :443.
   notice:
     build: ../fixtures/notice
     ports:
-      - "443:443"
+      - "127.0.0.1:443:443"
     volumes:
       - ../fixtures/notice/.certs:/app/.certs:ro
     networks:
@@ -53,7 +55,7 @@ services:
   witness:
     build: ../witness
     ports:
-      - "7047:7047"
+      - "127.0.0.1:7047:7047"
     environment:
       WITNESS_PRIVATE_KEY: "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a"
       WITNESS_DEV_CA_DER: /certs/ca.der
