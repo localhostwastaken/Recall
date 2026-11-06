@@ -8,7 +8,7 @@ import { expect, test } from '@playwright/test';
 import { privateKeyToAccount } from 'viem/accounts';
 import { Bee, MantarayNode, feedOwnerOf, feedTopic } from '../../packages/net/src/hosting';
 import { LOCAL } from '../../packages/net/src/index';
-import { BEE_COMPOSE_FAUCET_KEY } from '../fixtures/keys';
+import { BEE_COMPOSE_FAUCET_KEY, OTHER_WALLET_ADDRESS, OTHER_WALLET_KEY } from '../fixtures/keys';
 
 // The app, hosted from Swarm instead of a web server: scripts/publish-swarm.ts builds
 // apps/web, stamps every chunk with a key we hold (a depth-18 batch bought on the local
@@ -226,4 +226,79 @@ test('@p5 live publish spend caps', async () => {
   expect(await fails(['--days', '91'])).toContain('at most 90');
   expect(await fails(['--max-xbzz', '0.000001'])).toContain('--max-xbzz');
   expect(await fails(['--max-xbzz', 'lots'])).toContain('--max-xbzz');
+});
+
+// A live-mode run against the local fork (--net live --gnosis-rpc <fork> --bee <local>, so no real
+// funds): the state file records the batch and the last feed index, a second run takes the next
+// index and a fresh batch, and a run is refused (before anything is bought) when the state says a
+// batch is unfinished or that this machine already wrote a higher feed index than the node reports.
+test('@p5 live-mode state file and feed index memory', async () => {
+  test.setTimeout(600_000);
+  const dir = mkdtempSync(join(tmpdir(), 'recall-state-site-'));
+  try {
+    mkdirSync(join(dir, 'assets'));
+    writeFileSync(join(dir, 'assets', 'app.js'), 'console.log("state test");\n');
+    writeFileSync(join(dir, 'index.html'), '<!doctype html><title>state</title><p>state test</p>');
+    const stateFile = join(dir, 'state.json');
+    const topic = `recall-state-${Date.now()}`;
+    const base = ['--net', 'live', '--gnosis-rpc', LOCAL.gnosis.rpcUrl, '--bee', BEE, '--yes', '--days', '1', '--dir', dir, '--feed', '--feed-topic', topic];
+    // A public test key owns the feed (a live run reads HOSTING_FEED_KEY, and .env.local may hold a real one).
+    const env = { TREASURY_PRIVATE_KEY: BEE_COMPOSE_FAUCET_KEY, HOSTING_FEED_KEY: OTHER_WALLET_KEY, RECALL_STATE_FILE: stateFile };
+    const state = () => JSON.parse(readFileSync(stateFile, 'utf8')) as { batch: Record<string, string>; lastFeed: Record<string, string> };
+    const refused = async () => {
+      const e = await publish(base, env).then(
+        () => undefined,
+        (x: { stdout?: string; stderr?: string }) => x,
+      );
+      expect(e, 'the run must be refused').toBeDefined();
+      expect(e!.stdout ?? '').not.toContain('Batch purchase sent');
+      expect(e!.stdout ?? '').not.toContain('Building apps/web');
+      return e!.stderr ?? '';
+    };
+
+    // First run: a fresh batch, feed index 0.
+    const first = (await publish(base, env)).stdout;
+    expect(first).toMatch(/^Batch purchase sent: 0x[0-9a-f]{64} /m);
+    expect(first).toContain('feed update: index 0');
+    const batchOne = /^batch: (0x[0-9a-f]{64})/m.exec(first)![1];
+    const afterOne = state();
+    expect(afterOne.batch).toMatchObject({ status: 'done', batchId: batchOne });
+    expect(afterOne.batch.txHash).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(afterOne.lastFeed).toMatchObject({ owner: OTHER_WALLET_ADDRESS, topic, index: '0' });
+    expect(first.toLowerCase()).not.toContain(OTHER_WALLET_KEY.slice(2).toLowerCase());
+    expect(first.toLowerCase()).not.toContain(BEE_COMPOSE_FAUCET_KEY.slice(2).toLowerCase());
+
+    // A batch that was bought and not used up blocks a second purchase, and the text names it.
+    const fake = `0x${'ab'.repeat(32)}`;
+    writeFileSync(stateFile, JSON.stringify({ ...afterOne, batch: { status: 'bought', batchId: fake, dir, at: 't' } }));
+    const stuck = await refused();
+    expect(stuck).toContain('not paying again');
+    expect(stuck).toContain(`--batch ${fake}`);
+    expect(stuck).toContain('--new-batch');
+
+    // A purchase that was only sent (no batch id yet) blocks too, pointing at its transaction.
+    writeFileSync(stateFile, JSON.stringify({ ...afterOne, batch: { status: 'sent', txHash: `0x${'12'.repeat(32)}`, dir, at: 't' } }));
+    const sent = await refused();
+    expect(sent).toContain(`tx 0x${'12'.repeat(32)}`);
+    expect(sent).toContain('gnosisscan');
+
+    // The state remembers update 5 was written; the node reports index 1: refused before buying.
+    writeFileSync(stateFile, JSON.stringify({ ...afterOne, lastFeed: { ...afterOne.lastFeed, index: '5' } }));
+    const stale = await refused();
+    expect(stale).toContain('already wrote update 5');
+    expect(stale).toContain('Nothing was bought');
+
+    // Back to the true state: the next run takes index 1 on a NEW batch, with a fresh record.
+    writeFileSync(stateFile, JSON.stringify(afterOne));
+    const second = (await publish(base, env)).stdout;
+    expect(second).toContain('feed update: index 1');
+    const batchTwo = /^batch: (0x[0-9a-f]{64})/m.exec(second)![1];
+    expect(batchTwo).not.toBe(batchOne);
+    const afterTwo = state();
+    expect(afterTwo.batch).toMatchObject({ status: 'done', batchId: batchTwo });
+    expect(afterTwo.batch.txHash).not.toBe(afterOne.batch.txHash);
+    expect(afterTwo.lastFeed.index).toBe('1');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

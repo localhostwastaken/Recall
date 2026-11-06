@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,5 +53,28 @@ describe('pnpm feed:keygen', () => {
     await run(f, '--force');
     expect(readFileSync(f, 'utf8')).not.toContain('0x1111');
     expect(readFileSync(f, 'utf8')).toMatch(/^HOSTING_FEED_KEY=0x[0-9a-f]{64}\n$/);
+  });
+
+  it('sees an exported or indented HOSTING_FEED_KEY as a key that is set', async () => {
+    for (const text of [
+      'export HOSTING_FEED_KEY=0x1111111111111111111111111111111111111111111111111111111111111111\n',
+      '  HOSTING_FEED_KEY=0x1111111111111111111111111111111111111111111111111111111111111111\n',
+      '\texport HOSTING_FEED_KEY="0x1111111111111111111111111111111111111111111111111111111111111111"\n',
+    ]) {
+      const f = tmpEnv(text);
+      await expect(run(f)).rejects.toMatchObject({ stderr: expect.stringContaining('already set') });
+      expect(readFileSync(f, 'utf8')).toBe(text);
+      await run(f, '--force');
+      const after = readFileSync(f, 'utf8');
+      expect(after).not.toContain('0x1111');
+      expect(after.match(/HOSTING_FEED_KEY=/g)).toHaveLength(1); // replaced, not appended
+    }
+  });
+
+  it('writes through a temporary file that is renamed over the target (nothing left behind, mode kept)', async () => {
+    const f = tmpEnv('TREASURY_PRIVATE_KEY=0xabc\n');
+    await run(f);
+    expect(readdirSync(dirname(f))).toEqual(['.env.local']);
+    expect(statSync(f).mode & 0o777).toBe(0o600);
   });
 });

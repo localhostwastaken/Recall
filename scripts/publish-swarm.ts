@@ -28,9 +28,12 @@
 //                      createFeedManifest stores, and an update is what makeFeedWriter(...)
 //                      .uploadReference sends; only the stamp is made here.
 //   --max-xbzz <n>     Refuse a batch that costs more than this many xBZZ (default 5).
-//   --new-batch        Live runs record their batch in .publish-state.json (gitignored) and refuse
-//                      to buy another while it is unfinished (resume it instead: see below).
-//                      --days is at most 90.
+//   --new-batch        Live runs record their batch in .publish-state.json (gitignored; the file
+//                      can be moved with RECALL_STATE_FILE) and refuse to buy another while it is
+//                      unfinished (resume it instead: see below). The same file remembers the last
+//                      feed index written, so a lagging node can never make the script reuse one.
+//   (--days is at most 90.)
+//
 // How it works. No Bee node owns the batch, so every chunk is stamped here, on the client:
 // each file is split into chunks, each chunk is stamped with the batch owner's key (`Stamper`)
 // and pushed with `POST /chunks`. The mantaray manifest that maps paths to files (index
@@ -77,6 +80,7 @@ import {
   Reference,
   DEFAULT_FEED_TOPIC,
   builtNetOf,
+  feedIndexProblem,
   feedManifest,
   feedOwnerOf,
   feedTopic,
@@ -87,6 +91,8 @@ import {
   pushChunk,
   pushFeedUpdate,
   readFeed,
+  recordBatch,
+  recordFeed,
   refuseNewBuy,
   REQUEST_TIMEOUT_MS,
   resumeCommand,
@@ -108,7 +114,7 @@ const MAX_DAYS = 90;
 /** The most xBZZ one run may pay for a batch unless --max-xbzz says otherwise. */
 const DEFAULT_MAX_XBZZ = '5';
 /** Where a live run records its batch (gitignored): the money must never be spent twice by accident. */
-const STATE_FILE = join(ROOT, '.publish-state.json');
+const STATE_FILE = process.env.RECALL_STATE_FILE ?? join(ROOT, '.publish-state.json');
 
 // Common web types; anything else is served as a download. Bee returns this metadata as the
 // Content-Type header, and a browser refuses a module script that is not a JavaScript type.
@@ -333,6 +339,9 @@ async function main() {
   if (feedSigner) {
     preIndex = await lookupIndex().catch((e: Error) => fail(`${e.message}. The feed cannot be updated through ${beeUrl}; nothing was bought.`));
     say(`Feed preflight: the next update takes index ${preIndex}.`);
+    // The state file is the out-of-band memory: a node that lags must not make us reuse an index.
+    const stale = feedIndexProblem({ index: preIndex, last: live ? readState().lastFeed : undefined, owner: privateKeyToAccount(feedKey!).address, topic: topicName });
+    if (stale) fail(`${stale}. Nothing was bought.`);
   }
 
   // Everything else that can refuse the run comes next, before the build and before any spend.
@@ -388,7 +397,7 @@ async function main() {
   // is shown (and, live, saved) as soon as it has a hash.
   const now = () => new Date().toISOString();
   const saveBatch = (b: NonNullable<PublishState['batch']>) => {
-    if (live) updateState((s) => ({ ...s, batch: { ...s.batch, ...b } }));
+    if (live) updateState((s) => recordBatch(s, b));
   };
   if (!batchId) {
     const wallet = createWalletClient({ account, chain: gnosis, transport });
@@ -412,7 +421,7 @@ async function main() {
       const why = e instanceof Error ? e.message : String(e);
       fail(
         sentTx
-          ? `${why}. The purchase transaction ${sentTx} was sent and may still be mined: check it on gnosisscan before buying again (a live run refuses a second purchase while ${relative(ROOT, STATE_FILE)} shows it; --new-batch overrides).`
+          ? `${why}. The purchase transaction ${sentTx} was sent and may still be mined. Find the batch id from tx ${sentTx} on gnosisscan (its BatchCreated event), then resume without paying again:\n  ${resumeCommand({ net, batchId: '<batch id>', dir: webDir, bee: values.bee, feedTopic: feedKey ? topicName : undefined })}\n(a live run refuses a second purchase while ${relative(ROOT, STATE_FILE)} shows this one; --new-batch overrides)`
           : why,
       );
     }
@@ -551,9 +560,18 @@ async function main() {
           `Warning: the feed was NOT updated, because the site could not be read back yet. When it can, run:\n  ${resume}`,
         );
       } else {
-        // The index is read again right before the push: another update may have landed since the preflight.
+        // The index is read again right before the push: another update may have landed since the
+        // preflight. It must not be lower than then, nor at or below what this machine wrote.
         const index = await lookupIndex();
-        if (preIndex !== undefined && index !== preIndex) {
+        const stale = feedIndexProblem({
+          index,
+          preIndex,
+          last: live ? readState().lastFeed : undefined,
+          owner: privateKeyToAccount(feedKey).address,
+          topic: topicName,
+        });
+        if (stale) throw new Error(stale);
+        if (preIndex !== undefined && index > preIndex) {
           console.warn(`Warning: the next feed index is ${index}, it was ${preIndex} at the preflight (another update landed); using ${index}.`);
         }
         const update = feedUpdate(feedSigner.owner, topic, index, reference);
@@ -562,6 +580,13 @@ async function main() {
           ...policy,
           retryable,
         });
+        // The update is out: remember its index now, before anything else can fail.
+        if (live) {
+          // The feed manifest is a pure function of owner and topic: its reference is known without a push.
+          const { reference: known } = await feedManifest(feedSigner.owner, topic).core.saveRecursively(async () => undefined);
+          const manifestRef = Buffer.from(known).toString('hex');
+          updateState((st) => recordFeed(st, { owner: privateKeyToAccount(feedKey).address, topic: topicName, manifestRef, index }));
+        }
         const { reference: fref } = await feedManifest(feedSigner.owner, topic).core.saveRecursively(async (chunk: Pushable) => put(chunk));
         await settle();
         feed = { owner: privateKeyToAccount(feedKey).address, index, manifestRef: Buffer.from(fref).toString('hex') };
@@ -612,11 +637,10 @@ async function main() {
       say(`feed bzz.link (path form): https://bzz.link/bzz/${feed.manifestRef}/`);
     }
     if (live) {
-      updateState((s) => ({
-        ...s,
-        batch: { ...s.batch!, status: unconfirmed.length ? 'uploaded' : 'done', siteRef: ref, at: now() },
-        ...(feed ? { lastFeed: { owner: feed.owner, topic: topicName, manifestRef: feed.manifestRef, index: String(feed.index) } } : {}),
-      }));
+      updateState((st) => {
+        const done = recordBatch(st, { status: unconfirmed.length ? 'uploaded' : 'done', siteRef: ref, at: now() });
+        return feed ? recordFeed(done, { owner: feed.owner, topic: topicName, manifestRef: feed.manifestRef, index: feed.index }) : done;
+      });
     }
   }
 }

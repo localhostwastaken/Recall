@@ -198,13 +198,17 @@ const MAX_PROBE = 64;
  * The index the next update of the feed takes (0 for a feed with no update).
  *
  * The node's own lookup (`GET /feeds`) is asked first: 200 names the next index. A 404 whose
- * message says "no update found" means the feed is empty. Bee 2.8 answers 404 "lookup at failed"
- * both for an empty feed and for one whose newest update it cannot reach yet (it also asks the
- * network for the index after the newest), so that answer proves nothing: the update chunks are
- * probed instead (`GET /chunks/<soc address of index i>`), and the first index whose chunk is
- * missing twice in a row (`confirmDelayMs` apart) is the next one. Anything else (another 404, a
- * 5xx, a network error) throws, and the caller retries or stops: guessing 0 for a feed that
- * has updates would try to overwrite one.
+ * message says "no update found" means the feed is empty, but a lagging node can say that about
+ * a feed that has updates, so it is asked a second time (`confirmDelayMs` later) and only two
+ * such answers in a row give 0. Even then 0 is a claim of the node, not a proof: the publish
+ * script checks the result against the last index it wrote itself (`feedIndexProblem`).
+ *
+ * Bee 2.8 answers 404 "lookup at failed" both for an empty feed and for one whose newest update
+ * it cannot reach yet (it also asks the network for the index after the newest), so that answer
+ * proves nothing: the update chunks are probed instead (`GET /chunks/<soc address of index i>`),
+ * and the first index whose chunk is missing twice in a row is the next one. Anything else
+ * (another 404, a 5xx, a network error) throws, and the caller retries or stops: guessing 0 for
+ * a feed that has updates would try to overwrite one.
  */
 export async function nextFeedIndex(
   beeUrl: string,
@@ -213,20 +217,33 @@ export async function nextFeedIndex(
   opts: { signal?: AbortSignal; confirmDelayMs?: number } = {},
 ): Promise<bigint> {
   const base = beeUrl.replace(/\/+$/, '');
-  const res = await fetch(`${base}/feeds/${owner.toHex()}/${topic.toHex()}`, { signal: opts.signal });
-  if (res.ok) {
-    const next = res.headers.get('swarm-feed-index-next');
-    const current = res.headers.get('swarm-feed-index');
-    await res.body?.cancel().catch(() => undefined);
-    if (next && /^[0-9a-f]{1,16}$/i.test(next)) return BigInt(`0x${next}`);
-    if (current && /^[0-9a-f]{1,16}$/i.test(current)) return BigInt(`0x${current}`) + 1n;
-    throw new Error('GET /feeds answered without a feed index');
-  }
-  const err = await failureOf(res, 'GET /feeds');
-  if (res.status === 404 && /no update found/i.test(err.message)) return 0n;
-  if (res.status !== 404 || !/lookup (at )?failed/i.test(err.message)) throw err;
-
   const wait = opts.confirmDelayMs ?? 1000;
+  const pause = () => new Promise((r) => setTimeout(r, wait));
+  type Look = { kind: 'next'; next: bigint } | { kind: 'empty' } | { kind: 'unclear' };
+  const look = async (): Promise<Look> => {
+    const res = await fetch(`${base}/feeds/${owner.toHex()}/${topic.toHex()}`, { signal: opts.signal });
+    if (res.ok) {
+      const next = res.headers.get('swarm-feed-index-next');
+      const current = res.headers.get('swarm-feed-index');
+      await res.body?.cancel().catch(() => undefined);
+      if (next && /^[0-9a-f]{1,16}$/i.test(next)) return { kind: 'next', next: BigInt(`0x${next}`) };
+      if (current && /^[0-9a-f]{1,16}$/i.test(current)) return { kind: 'next', next: BigInt(`0x${current}`) + 1n };
+      throw new Error('GET /feeds answered without a feed index');
+    }
+    const err = await failureOf(res, 'GET /feeds');
+    if (res.status === 404 && /no update found/i.test(err.message)) return { kind: 'empty' };
+    if (res.status === 404 && /lookup (at )?failed/i.test(err.message)) return { kind: 'unclear' };
+    throw err;
+  };
+
+  let first = await look();
+  if (first.kind === 'empty') {
+    await pause();
+    first = await look();
+    if (first.kind === 'empty') return 0n;
+  }
+  if (first.kind === 'next') return first.next;
+
   const present = async (i: number): Promise<boolean> => {
     const addr = socAddress(feedIdentifier(topic, BigInt(i)), owner).toHex();
     const r = await fetch(`${base}/chunks/${addr}`, { signal: opts.signal });
@@ -241,10 +258,37 @@ export async function nextFeedIndex(
   };
   for (let i = 0; i < MAX_PROBE; i++) {
     if (await present(i)) continue;
-    await new Promise((r) => setTimeout(r, wait));
+    await pause();
     if (!(await present(i))) return BigInt(i);
   }
   throw new Error(`the feed lookup fails and ${MAX_PROBE} updates exist: not guessing the next index`);
+}
+
+/**
+ * Why `index` must not be the next feed update, or undefined. The index never goes down and is
+ * never reused: it must not be lower than what this run read before it bought anything, and (when
+ * the state file remembers the last update this machine wrote for the same owner and topic) it
+ * must be above that one. This is the out-of-band memory that a lagging node cannot fake.
+ */
+export function feedIndexProblem(o: {
+  index: bigint;
+  /** What the preflight read, when this check runs again right before the push. */
+  preIndex?: bigint;
+  last?: PublishState['lastFeed'];
+  owner: string;
+  topic: string;
+}): string | undefined {
+  if (o.preIndex !== undefined && o.index < o.preIndex) {
+    return `the feed's next index is ${o.index} now, but it was ${o.preIndex} before: a node that lags behind. The index never goes down; not pushing`;
+  }
+  const l = o.last;
+  if (l && l.topic === o.topic && l.owner.toLowerCase() === o.owner.toLowerCase() && /^\d+$/.test(l.index)) {
+    const mustBeAtLeast = BigInt(l.index) + 1n;
+    if (o.index < mustBeAtLeast) {
+      return `this machine already wrote update ${l.index} of the feed (owner ${l.owner}, topic "${l.topic}"), but the node says the next index is ${o.index}: it lags or lost the update. Reusing an index would try to overwrite an update. Wait and retry, or ask another node`;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -259,7 +303,9 @@ export async function readFeed(
   owner: EthAddress,
   topic: Topic,
 ): Promise<{ reference: string; index: string } | undefined> {
-  const res = await fetch(`${beeUrl.replace(/\/+$/, '')}/feeds/${owner.toHex()}/${topic.toHex()}`).catch(() => undefined);
+  const res = await fetch(`${beeUrl.replace(/\/+$/, '')}/feeds/${owner.toHex()}/${topic.toHex()}`, {
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  }).catch(() => undefined);
   if (!res?.ok) {
     await res?.body?.cancel().catch(() => undefined);
     return undefined;
@@ -388,16 +434,36 @@ export type PublishState = {
 /**
  * The reason a new batch must not be bought now, or undefined. A batch from an earlier run that
  * was paid for (or whose payment was sent) but never finished may still be unused: resume it
- * instead of paying again. `--new-batch` is the explicit way past this.
+ * instead of paying again. `--new-batch` is the explicit way past this. `resume` is the command
+ * for the recorded batch; for a purchase that was only sent there is no batch id yet.
  */
 export function refuseNewBuy(state: PublishState | undefined, resume: string | undefined): string | undefined {
   const b = state?.batch;
   if (!b || b.status === 'done') return undefined;
-  const what =
-    b.status === 'sent'
-      ? `a batch purchase was sent (tx ${b.txHash ?? 'unknown'}) and may have been mined`
-      : `batch ${b.batchId ?? 'unknown'} was bought and not used up (${b.status})`;
+  if (b.status === 'sent' && !b.batchId) {
+    return `a batch purchase was sent (tx ${b.txHash ?? 'unknown'}) and may have been mined; not paying again. Find its batch id from tx ${b.txHash ?? '(see the state file)'} on gnosisscan (the BatchCreated event), then resume with --batch <id>${b.dir ? ` --dir ${b.dir}` : ''} --no-wait. Pass --new-batch to buy another one anyway.`;
+  }
+  const what = `batch ${b.batchId ?? 'unknown'} was bought and not used up (${b.status})`;
   return `${what}; not paying again. ${resume ? `Resume: ${resume}. ` : ''}Pass --new-batch to buy another one anyway.`;
+}
+
+/**
+ * The state after `b` is recorded. A purchase that has just been SENT is a new batch: nothing of
+ * an earlier record carries over (its batch id would otherwise sit next to the new transaction
+ * and a later resume hint could name an old, used batch). Later records of the same run
+ * (`bought`, `uploaded`, `done`) merge into it, unless they name a different batch id, which
+ * starts a fresh record too.
+ */
+export function recordBatch(state: PublishState, b: BatchRecord): PublishState {
+  if (b.status === 'sent') return { ...state, batch: b };
+  const prev = state.batch;
+  const sameBatch = prev !== undefined && (b.batchId === undefined || prev.batchId === undefined || prev.batchId === b.batchId);
+  return { ...state, batch: sameBatch ? { ...prev, ...b } : b };
+}
+
+/** The state after a feed update was sent: the index this machine has used (it never goes back). */
+export function recordFeed(state: PublishState, f: { owner: string; topic: string; manifestRef: string; index: bigint }): PublishState {
+  return { ...state, lastFeed: { owner: f.owner, topic: f.topic, manifestRef: f.manifestRef, index: String(f.index) } };
 }
 
 /** The command that continues a publish on a batch that is already paid for. */

@@ -13,6 +13,7 @@ import {
   HttpError,
   builtNetOf,
   feedIdentifier,
+  feedIndexProblem,
   feedManifest,
   feedOwnerOf,
   feedTopic,
@@ -23,6 +24,8 @@ import {
   parseRetryAfter,
   pushChunk,
   pushFeedUpdate,
+  recordBatch,
+  recordFeed,
   refuseNewBuy,
   resumeCommand,
   retryWithBackoff,
@@ -217,10 +220,30 @@ describe('nextFeedIndex', () => {
     expect(n.seen).toHaveLength(1);
   });
 
-  it('accepts a 404 only as "no update found" for an empty feed, without probing', async () => {
+  it('takes "no update found" for an empty feed only when a second look says it again, without probing', async () => {
     const n = await node(() => json(404, 'no update found'));
     expect(await nextFeedIndex(n.url, owner, topic, opts)).toBe(0n);
-    expect(n.seen).toHaveLength(1);
+    expect(n.seen).toHaveLength(2); // two looks, no chunk probe
+    expect(n.seen.every((r) => r.url.startsWith('/feeds/'))).toBe(true);
+  });
+
+  it('a lagging "no update found" followed by a real answer gives the real answer', async () => {
+    let looks = 0;
+    const n = await node(() =>
+      ++looks === 1 ? json(404, 'no update found') : { status: 200, headers: { 'swarm-feed-index': '0000000000000004', 'swarm-feed-index-next': '0000000000000005' } },
+    );
+    expect(await nextFeedIndex(n.url, owner, topic, opts)).toBe(5n);
+    expect(looks).toBe(2);
+  });
+
+  it('a "no update found" followed by the ambiguous answer goes on to the chunk probe', async () => {
+    let looks = 0;
+    const have = new Set([chunkOf(0)]);
+    const n = await node((r) => {
+      if (lookup(r)) return ++looks === 1 ? json(404, 'no update found') : json(404, 'lookup at failed');
+      return have.has(r.url.replace('/chunks/', '')) ? { status: 200, body: 'chunk' } : json(500, 'read chunk failed');
+    });
+    expect(await nextFeedIndex(n.url, owner, topic, opts)).toBe(1n);
   });
 
   it('refuses any other 404 and a 500 instead of guessing 0', async () => {
@@ -358,7 +381,11 @@ describe('the live purchase safety rails', () => {
       expect(why).toContain('--new-batch');
       expect(why).toContain(resume);
     }
-    expect(refuseNewBuy(batch({ status: 'sent', txHash: '0x12' }), undefined)).toContain('0x12');
+    // A purchase that was only sent has no batch id yet: the text sends the person to the transaction.
+    const sent = refuseNewBuy({ batch: { status: 'sent', txHash: '0x12', dir: '/site', at: 't' } }, undefined)!;
+    expect(sent).toContain('tx 0x12');
+    expect(sent).toContain('gnosisscan');
+    expect(sent).toContain('--batch <id> --dir /site --no-wait');
   });
 
   it('allows a purchase after a finished publish or with no record', () => {
@@ -408,5 +435,75 @@ describe('the live purchase safety rails', () => {
     const err = await buyBatch(wallet, { owner: wallet.account!.address, depth: 18, days: 30, quotedTotal: quoted }).catch((e: Error) => e);
     expect((err as Error).message).not.toMatch(/price rose/);
     expect(methods.some((m) => m !== 'eth_call')).toBe(true); // it moved on to sending the approval
+  });
+});
+
+describe('the feed index never goes down and is never reused', () => {
+  const OWNER = '0xAbCdEf0123456789aBcDeF0123456789AbCdEf01';
+  const last = { owner: OWNER, topic: 'website', manifestRef: 'ab'.repeat(32), index: '3' };
+  const check = (o: { index: bigint; preIndex?: bigint; last?: typeof last; owner?: string; topic?: string }) =>
+    feedIndexProblem({ owner: OWNER, topic: 'website', ...o });
+
+  it('refuses an index lower than the one read before the purchase', () => {
+    expect(check({ index: 2n, preIndex: 3n })).toContain('never goes down');
+    expect(check({ index: 3n, preIndex: 3n })).toBeUndefined();
+    expect(check({ index: 4n, preIndex: 3n })).toBeUndefined(); // another update landed: fine, it goes up
+  });
+
+  it('requires an index above the last one this machine wrote (same owner and topic)', () => {
+    expect(check({ index: 4n, last })).toBeUndefined();
+    expect(check({ index: 3n, last })).toContain('already wrote update 3'); // reuse
+    expect(check({ index: 0n, last })).toContain('lags or lost'); // a lagging node saying "empty"
+    expect(check({ index: 9n, last })).toBeUndefined();
+  });
+
+  it('compares the owner case-insensitively and ignores another owner, another topic, or a bad record', () => {
+    expect(check({ index: 0n, last: { ...last, owner: OWNER.toLowerCase() } })).toBeDefined();
+    expect(check({ index: 0n, last, owner: '0x1111111111111111111111111111111111111111' })).toBeUndefined();
+    expect(check({ index: 0n, last, topic: 'another' })).toBeUndefined();
+    expect(check({ index: 0n, last: { ...last, index: 'not a number' } })).toBeUndefined();
+    expect(check({ index: 0n })).toBeUndefined(); // a first feed
+  });
+
+  it('records the index as a string and keeps the batch record', () => {
+    const state: PublishState = { batch: { status: 'bought', batchId: `0x${'aa'.repeat(32)}`, at: 't' } };
+    const next = recordFeed(state, { owner: OWNER, topic: 'website', manifestRef: 'cd'.repeat(32), index: 7n });
+    expect(next.lastFeed).toEqual({ owner: OWNER, topic: 'website', manifestRef: 'cd'.repeat(32), index: '7' });
+    expect(next.batch).toEqual(state.batch);
+  });
+});
+
+describe('recordBatch (the live state file)', () => {
+  const A = `0x${'aa'.repeat(32)}` as Hex;
+  const B = `0x${'bb'.repeat(32)}` as Hex;
+  const lastFeed = { owner: '0x1', topic: 'website', manifestRef: 'ee'.repeat(32), index: '2' };
+  const old: PublishState = { batch: { status: 'done', batchId: A, txHash: '0xaa', depth: 18, siteRef: 'ff'.repeat(32), dir: '/old', at: 'old' }, lastFeed };
+
+  it('a purchase that was just sent starts a fresh record: nothing of the previous batch stays', () => {
+    const next = recordBatch(old, { status: 'sent', txHash: '0xbb', dir: '/new', at: 'now' });
+    expect(next.batch).toEqual({ status: 'sent', txHash: '0xbb', dir: '/new', at: 'now' });
+    expect(next.batch?.batchId).toBeUndefined(); // an old id next to the new tx would point a resume at a used batch
+    expect(next.lastFeed).toEqual(lastFeed); // the feed memory outlives batches
+  });
+
+  it('the records of the same run merge: sent, then bought, then uploaded, then done', () => {
+    let st = recordBatch(old, { status: 'sent', txHash: '0xbb', dir: '/new', at: 't1' });
+    st = recordBatch(st, { status: 'bought', txHash: '0xbb', batchId: B, depth: 18, dir: '/new', at: 't2' });
+    expect(st.batch).toMatchObject({ status: 'bought', txHash: '0xbb', batchId: B, dir: '/new' });
+    st = recordBatch(st, { status: 'uploaded', siteRef: '11'.repeat(32), at: 't3' });
+    expect(st.batch).toMatchObject({ status: 'uploaded', batchId: B, siteRef: '11'.repeat(32) });
+    st = recordBatch(st, { status: 'done', siteRef: '11'.repeat(32), at: 't4' });
+    expect(st.batch).toMatchObject({ status: 'done', batchId: B, txHash: '0xbb', dir: '/new' });
+  });
+
+  it('a resume on another batch id starts a fresh record instead of mixing two batches', () => {
+    const next = recordBatch(old, { status: 'bought', batchId: B, depth: 18, dir: '/new', at: 'now' });
+    expect(next.batch).toEqual({ status: 'bought', batchId: B, depth: 18, dir: '/new', at: 'now' });
+    expect(next.batch?.txHash).toBeUndefined();
+    expect(recordBatch(old, { status: 'bought', batchId: A, dir: '/old', at: 'again' }).batch).toMatchObject({ txHash: '0xaa', batchId: A });
+  });
+
+  it('works on an empty state', () => {
+    expect(recordBatch({}, { status: 'uploaded', siteRef: '11'.repeat(32), at: 't' }).batch).toEqual({ status: 'uploaded', siteRef: '11'.repeat(32), at: 't' });
   });
 });
