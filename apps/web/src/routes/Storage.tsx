@@ -555,7 +555,7 @@ export function Storage() {
             disabled={locked}
           />
           <p className="field-helper">
-            Buy once. Every capture after that needs one MetaMask confirmation until the storage runs out.
+            Each batch holds one capture. Buy a few now, and every capture after that needs just one MetaMask confirmation.
           </p>
         </div>
         <Field
