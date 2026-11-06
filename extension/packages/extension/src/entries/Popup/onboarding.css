@@ -1,0 +1,171 @@
+/* The first-run guide: a full-popup dialog, three steps with numbered markers. Tokens only. */
+.ob-help {
+  flex: none;
+  width: 44px;
+  height: 44px;
+}
+
+.ob {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-dialog);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  background: var(--bg);
+  overflow-y: auto;
+}
+
+.ob-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: var(--control-h);
+}
+
+.ob-count {
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ob-skip {
+  padding: 0 var(--space-3);
+}
+
+/* 1 - 2 - 3, joined by a line; done steps show a check. */
+.ob-markers {
+  display: flex;
+  align-items: center;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ob-marker {
+  position: relative;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 2px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-family: var(--font-display);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.ob-marker + .ob-marker {
+  margin-left: 40px;
+}
+
+.ob-marker + .ob-marker::before {
+  content: '';
+  position: absolute;
+  right: 100%;
+  top: 50%;
+  width: 40px;
+  height: 2px;
+  background: var(--border-strong);
+}
+
+.ob-marker-done {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.ob-marker.ob-marker-done::before,
+.ob-marker.ob-marker-active::before {
+  background: var(--accent);
+}
+
+.ob-marker-active {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.ob-card {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-3);
+  padding: var(--space-5);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+}
+
+.ob-icon {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-2);
+  background: var(--exhibit);
+  color: var(--accent);
+}
+
+.ob-title {
+  font-size: var(--text-xl);
+  line-height: var(--lh-xl);
+  letter-spacing: -0.03em;
+  font-weight: 700;
+}
+
+.ob-title:focus {
+  outline: none;
+}
+
+.ob-title:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.ob-body {
+  font-size: var(--text-md);
+  line-height: var(--lh-md);
+  color: var(--text);
+}
+
+.ob-tip {
+  width: 100%;
+  padding: var(--space-3);
+  background: var(--citrus-soft);
+  border: 1px solid var(--citrus);
+  border-radius: var(--radius-1);
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+  overflow-wrap: anywhere;
+}
+
+.ob-link {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+
+.ob-link:hover {
+  color: var(--accent-hover);
+}
+
+.ob-actions {
+  display: flex;
+  gap: var(--space-3);
+  margin-top: auto;
+}
+
+.ob-next {
+  flex: 1;
+}
