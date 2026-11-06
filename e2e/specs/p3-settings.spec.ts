@@ -48,6 +48,20 @@ const ZERO_BATCH = `0x${'0'.repeat(64)}` as Hex;
 const SETTINGS_KEY = 'recall.web.settings.v1';
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * The page follows the system colour scheme (this spec runs with a light system): <html> carries
+ * data-theme="light", turns "dark" when the system turns dark, and back. Nothing stored in the
+ * settings (an older version's `theme`) decides it; only the system or the header toggle does.
+ */
+async function expectFollowsSystemTheme(page: Page) {
+  const html = page.locator('html');
+  await expect(html).toHaveAttribute('data-theme', 'light');
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await expect(html).toHaveAttribute('data-theme', 'dark');
+  await page.emulateMedia({ colorScheme: 'light' });
+  await expect(html).toHaveAttribute('data-theme', 'light');
+}
+
 type Seen = { method: string; url: string; headers: Record<string, string | string[] | undefined> };
 
 /**
@@ -543,8 +557,9 @@ test.describe('@p3 settings web', () => {
     await expect(page.getByRole('button', { name: 'Reset all', exact: true })).toBeDisabled();
     await expect(page.getByRole('button', { name: 'Add witness' })).toBeDisabled();
     await expect(page.getByLabel('Witness address (0x…)')).toBeDisabled();
-    // The app is light only: the planted "dark" changes nothing, and there is no theme chooser.
-    await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+    // The planted theme "dark" decides nothing: the page follows the system (light here, dark
+    // when the system turns dark), and the settings offer no theme chooser of their own.
+    await expectFollowsSystemTheme(page);
     await expect(page.getByRole('radio', { name: 'Dark' })).toHaveCount(0);
 
     // The same evidence on the app's own address, with the witness really added by the person:
@@ -681,8 +696,9 @@ test.describe('@p3 settings web', () => {
     const list = page.getByRole('list', { name: 'Trusted witnesses' });
     await expect(list).toContainText('Recall Witness (default)');
     await expect(list).toContainText('Neighbour');
-    // Light only: no theme chooser on the page or in the header.
-    await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+    // The theme follows the system; no theme radio group on the page and no theme menu in the header
+    // (the header's sun/moon button is a single toggle).
+    await expectFollowsSystemTheme(page);
     await expect(page.getByRole('radio', { name: 'Dark' })).toHaveCount(0);
     await expect(page.locator('.theme-menu')).toHaveCount(0);
 
@@ -757,7 +773,8 @@ test.describe('@p3 settings web', () => {
     await dialog.getByRole('button', { name: 'Reset all' }).click();
     await expect(dialog).toBeHidden();
     await expect(page.getByLabel('Gnosis RPC URL')).toHaveValue(LOCAL.gnosis.rpcUrl);
-    await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+    // Resetting the settings does not touch the theme: still the system's.
+    await expectFollowsSystemTheme(page);
     expect(await stored(page)).toBeNull();
   });
 
