@@ -7,7 +7,7 @@ import type { Hex } from 'viem';
 import type { EvidenceFile } from '@recall/evidence';
 import type { UploadMode } from './settings';
 import type { AttachmentSummary } from './gitRepo';
-import { deleteAttachment } from './attachmentStore';
+import { deleteAttachment, pruneAttachments } from './attachmentStore';
 
 export const PENDING_PREFIX = 'recall.pending.';
 /** After markPublished: a small tombstone (no evidence), so a repeated mark stays ok. */
@@ -183,10 +183,12 @@ export async function prunePending(area: PendingArea, now = Date.now()): Promise
   pending.sort((a, b) => b.at - a.at);
   drop.push(...pending.slice(PENDING_MAX).map((p) => p.key));
   if (drop.length) await area.remove(drop);
-  // Their repository snapshots go too (best effort; never throws).
-  for (const key of drop) {
-    if (key.startsWith(PENDING_PREFIX)) await deleteAttachment(key.slice(PENDING_PREFIX.length));
-  }
+  // Their repository snapshots go too, and any other snapshot no pending record names
+  // (best effort; never throws). Called right after a record is saved, so the capture that
+  // just stored its snapshot is in `keep`.
+  const dropped = new Set(drop);
+  const keep = pending.filter((p) => !dropped.has(p.key)).map((p) => p.key.slice(PENDING_PREFIX.length));
+  await pruneAttachments(new Set(keep));
 }
 
 /** The pending record for exactly this captureId, or null (malformed ids never reach storage). */

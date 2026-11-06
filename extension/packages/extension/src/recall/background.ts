@@ -7,8 +7,11 @@ import {
   dismissCapture,
   onCaptureResult,
   onCaptureStep,
+  readCaptureState,
   startCapture,
 } from './job';
+import { allPending } from './pending';
+import { pruneAttachments } from './attachmentStore';
 import { onPendingUploadProgress, onPendingUploadResult } from './pendingUpload';
 import { initExternalApi } from './external';
 import { earlierCaptures, resolveWitness } from './lookup';
@@ -36,6 +39,17 @@ export function initRecallBackground(): void {
 
   // Registered at load, so an app message that wakes the worker is never missed.
   initExternalApi();
+
+  // Repository snapshots whose pending capture is gone (best effort). Not while a capture runs:
+  // its snapshot is stored before its pending record is.
+  void (async () => {
+    try {
+      if ((await readCaptureState())?.status === 'running') return;
+      await pruneAttachments(new Set((await allPending()).map((r) => r.captureId)));
+    } catch (err) {
+      console.error('[recall] pruning repository snapshots failed', err);
+    }
+  })();
 
   chrome.runtime.onMessage.addListener((raw: unknown, sender, sendResponse) => {
     if (!fromOwnPage(sender)) return;
