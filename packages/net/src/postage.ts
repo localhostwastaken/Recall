@@ -1,4 +1,6 @@
 import {
+  BaseError,
+  ContractFunctionRevertedError,
   createPublicClient,
   custom,
   erc20Abi,
@@ -18,11 +20,16 @@ export const BUCKET_DEPTH = 16;
 export const BLOCK_SECONDS = 5n;
 export const BLOCKS_PER_DAY = 17280n;
 
+/** The batch id a capture records when its evidence went to a gateway's free storage (no stamp, no batch). */
+export const FREE_BATCH_ID: Hex = `0x${'0'.repeat(64)}`;
+export const isFreeBatch = (batchId: string): boolean => /^0x0{64}$/i.test(batchId);
+
 const postageAbi = parseAbi([
   'function createBatch(address _owner, uint256 _initialBalancePerChunk, uint8 _depth, uint8 _bucketDepth, bytes32 _nonce, bool _immutable) returns (bytes32)',
   'function topUp(bytes32 _batchId, uint256 _topupAmountPerChunk)',
   'function lastPrice() view returns (uint64)',
   'function remainingBalance(bytes32 _batchId) view returns (uint256)',
+  'function batches(bytes32) view returns (address owner, uint8 depth, uint8 bucketDepth, bool immutableFlag, uint256 normalisedBalance, uint256 lastUpdatedBlockNumber)',
   'function batchOwner(bytes32 _batchId) view returns (address)',
   'function batchDepth(bytes32 _batchId) view returns (uint8)',
   'event BatchCreated(bytes32 indexed batchId, uint256 totalAmount, uint256 normalisedBalance, address owner, uint8 depth, uint8 bucketDepth, bool immutableFlag)',
@@ -91,17 +98,71 @@ export async function buyBatch(
   throw new Error('BatchCreated event not found');
 }
 
-/** Permissionless: anyone may extend any batch. */
-export async function topUp(wallet: WalletClient, batchId: Hex, days: number): Promise<Hex> {
+export type BatchInfo = {
+  owner: Address;
+  depth: number;
+  bucketDepth: number;
+  immutable: boolean;
+  normalisedBalance: bigint;
+};
+
+/**
+ * The batch as the postage contract stores it, or null when no batch has this id (never created,
+ * or expired and removed). A record names its batch id freely, so anything that pays for a batch
+ * reads it first.
+ */
+export async function readBatch(pub: PublicClient, batchId: Hex): Promise<BatchInfo | null> {
+  const [owner, depth, bucketDepth, immutable, normalisedBalance] = await pub.readContract({
+    address: POSTAGE_STAMP, abi: postageAbi, functionName: 'batches', args: [batchId],
+  });
+  if (/^0x0+$/.test(owner)) return null;
+  return { owner, depth, bucketDepth, immutable, normalisedBalance };
+}
+
+export class BatchNotFoundError extends Error {
+  constructor(readonly batchId: Hex) {
+    super(`batch ${batchId} was not found on the postage contract`);
+    this.name = 'BatchNotFoundError';
+  }
+}
+
+/** What topping a batch up by `days` costs: the batch's depth sets how many chunk slots are paid for. */
+export async function topUpCost(
+  pub: PublicClient,
+  batchId: Hex,
+  days: number,
+): Promise<{ perChunk: bigint; depth: number; total: bigint }> {
+  const batch = await readBatch(pub, batchId);
+  if (!batch) throw new BatchNotFoundError(batchId);
+  const perChunk = await perChunkFor(pub, days);
+  return { perChunk, depth: batch.depth, total: perChunk * 2n ** BigInt(batch.depth) };
+}
+
+/**
+ * Permissionless: anyone may extend any batch. Approves the xBZZ first only when the wallet's
+ * allowance for the postage contract is short, so a second top-up is one wallet prompt.
+ * `onApproved` fires once the approval is mined (before the top-up prompt), so a caller can tell
+ * a rejection of the approval from a rejection of the top-up.
+ */
+export async function topUp(
+  wallet: WalletClient,
+  batchId: Hex,
+  days: number,
+  opts: { onApproved?: (approveHash: Hex) => void } = {},
+): Promise<Hex> {
   const { account, chain } = requireAccount(wallet);
   const pub = publicFrom(wallet);
-  const perChunk = await perChunkFor(pub, days);
-  const depth = await pub.readContract({ address: POSTAGE_STAMP, abi: postageAbi, functionName: 'batchDepth', args: [batchId] });
-  const total = perChunk * 2n ** BigInt(depth);
-  const approveHash = await wallet.writeContract({
-    account, chain, address: XBZZ, abi: erc20Abi, functionName: 'approve', args: [POSTAGE_STAMP, total],
+  const { perChunk, total } = await topUpCost(pub, batchId, days);
+  const allowance = await pub.readContract({
+    address: XBZZ, abi: erc20Abi, functionName: 'allowance', args: [account.address, POSTAGE_STAMP],
   });
-  await pub.waitForTransactionReceipt({ hash: approveHash });
+  if (allowance < total) {
+    const approveHash = await wallet.writeContract({
+      account, chain, address: XBZZ, abi: erc20Abi, functionName: 'approve', args: [POSTAGE_STAMP, total],
+    });
+    await pub.waitForTransactionReceipt({ hash: approveHash });
+    opts.onApproved?.(approveHash);
+  }
   const hash = await wallet.writeContract({
     account, chain, address: POSTAGE_STAMP, abi: postageAbi, functionName: 'topUp', args: [batchId, perChunk],
   });
@@ -110,12 +171,35 @@ export async function topUp(wallet: WalletClient, batchId: Hex, days: number): P
   return hash;
 }
 
-/** Remaining lifetime in seconds, or null when the batch is unknown or expired. */
+/**
+ * True only when the contract itself reverted (PostageStamp reverts `remainingBalance` for a
+ * batch that does not exist or has expired). Transport and node trouble (HTTP 429, timeouts,
+ * no network, an internal node error) is not a revert and says nothing about the batch. viem
+ * also files a bare -32603 "internal error" under reverts, so a revert needs 0x-hex return data
+ * of at least 4 bytes (an error selector) or its own word for it in the reason.
+ */
+export function isContractRevert(err: unknown): boolean {
+  if (!(err instanceof BaseError)) return false;
+  const hit = err.walk((e) => e instanceof ContractFunctionRevertedError) as ContractFunctionRevertedError | null;
+  if (!hit) return false;
+  return /^0x[0-9a-fA-F]{8,}$/.test(hit.raw ?? '') || /revert/i.test(hit.reason ?? '');
+}
+
+/**
+ * Remaining lifetime in seconds, or null when the batch is unknown or expired. Only a contract
+ * revert means "expired": any other RPC error (rate limit, timeout, node fault) is thrown, so a
+ * caller can tell a dead batch from a node that did not answer.
+ */
 export async function batchTtlSeconds(pub: PublicClient, batchId: Hex): Promise<bigint | null> {
   const owner = await pub.readContract({ address: POSTAGE_STAMP, abi: postageAbi, functionName: 'batchOwner', args: [batchId] });
   if (/^0x0+$/.test(owner)) return null;
   const [remaining, price] = await Promise.all([
-    pub.readContract({ address: POSTAGE_STAMP, abi: postageAbi, functionName: 'remainingBalance', args: [batchId] }).catch(() => 0n),
+    pub
+      .readContract({ address: POSTAGE_STAMP, abi: postageAbi, functionName: 'remainingBalance', args: [batchId] })
+      .catch((err: unknown) => {
+        if (!isContractRevert(err)) throw err;
+        return 0n;
+      }),
     pub.readContract({ address: POSTAGE_STAMP, abi: postageAbi, functionName: 'lastPrice' }),
   ]);
   if (remaining === 0n || price === 0n) return null;

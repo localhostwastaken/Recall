@@ -1,5 +1,5 @@
 import type { CheckResult, VerifiedFacts } from '@recall/evidence';
-import { CaptureSchema, arkivPublic, batchTtlSeconds, downloadBytes, type NetConfig } from '@recall/net';
+import { CaptureSchema, arkivPublic, batchTtlSeconds, downloadBytes, isFreeBatch, type NetConfig } from '@recall/net';
 import { useCallback, useEffect, useState } from 'react';
 import { createPublicClient, http, type Address, type Hex } from 'viem';
 import { gnosis } from 'viem/chains';
@@ -50,6 +50,11 @@ export type VerifiedCapture = {
   /** The evidence file exactly as Swarm served it (its root hash was verified), or null. */
   evidenceBytes: Uint8Array | null;
   retry: () => void;
+  /**
+   * Re-reads the record's expiry and the batch TTL and updates check E from those reads only
+   * (never from what a keep-alive meant to do). E shows "Checking…" until the reads are back.
+   */
+  refreshStorage: () => Promise<void>;
 };
 
 type Load =
@@ -131,11 +136,28 @@ const STORAGE_UNREADABLE: { check: CheckResult; info: StorageInfo | null } = {
   info: null,
 };
 
-/** Reads the batch TTL on Gnosis and the Arkiv block timing. A failed read is "Not checked", never a pass. */
+/**
+ * Evidence on a gateway's free storage has no batch, so there is no end date to read and the
+ * check can never be a pass (and is not "expired" either: there is no batch that could expire).
+ */
+function freeStorageCheck(arkivEndsAt: Date | null): CheckResult {
+  return {
+    status: 'unavailable',
+    detail: `This capture used the gateway's free storage, which has no known end date.${
+      arkivEndsAt ? ` Record on Arkiv until ${formatDay(arkivEndsAt)}.` : ''
+    }`,
+  };
+}
+
+/**
+ * Reads the batch TTL on Gnosis and the Arkiv block timing. A failed read is "Not checked",
+ * never a pass, and never "expired": only a contract revert means expired (see `batchTtlSeconds`).
+ */
 async function readStorage(cfg: NetConfig, record: CaptureRecord): Promise<{ check: CheckResult; info: StorageInfo | null }> {
+  const free = isFreeBatch(record.batchId);
   const gnosisClient = createPublicClient({ chain: gnosis, transport: http(cfg.gnosis.rpcUrl) });
   const [ttl, timing] = await Promise.allSettled([
-    batchTtlSeconds(gnosisClient, record.batchId),
+    free ? Promise.resolve(null) : batchTtlSeconds(gnosisClient, record.batchId),
     arkivPublic(cfg).getBlockTiming(),
   ]);
   if (ttl.status === 'rejected') return STORAGE_UNREADABLE;
@@ -151,7 +173,7 @@ async function readStorage(cfg: NetConfig, record: CaptureRecord): Promise<{ che
     swarmExpiresAt: ttl.value !== null && ttl.value > 0n ? new Date(now + Number(ttl.value) * 1000) : null,
     arkivExpiresAt: arkivSecondsLeft !== null && Number.isFinite(arkivSecondsLeft) ? new Date(now + arkivSecondsLeft * 1000) : null,
   };
-  return { check: storageCheck(info), info };
+  return { check: free ? freeStorageCheck(info.arkivExpiresAt) : storageCheck(info), info };
 }
 
 /**
@@ -256,6 +278,17 @@ export function useVerifiedCapture(entityKey: Hex, userFile?: Uint8Array): Verif
   }, [load, userFile]);
 
   const retry = useCallback(() => setAttempt((n) => n + 1), []);
+  const refreshStorage = useCallback(async () => {
+    setStorage({ phase: 'pending' });
+    try {
+      const cfg = getNetConfig();
+      // The expiry block moves when a record is extended, so read the record again too.
+      const fresh = await fetchCapture(cfg, entityKey);
+      setStorage({ phase: 'done', ...(await readStorage(cfg, fresh)) });
+    } catch {
+      setStorage({ phase: 'done', ...STORAGE_UNREADABLE });
+    }
+  }, [entityKey]);
   const record = load.phase === 'record' ? load.record : null;
   return {
     phase: load.phase === 'record' ? 'ready' : load.phase,
@@ -266,6 +299,7 @@ export function useVerifiedCapture(entityKey: Hex, userFile?: Uint8Array): Verif
     storage,
     evidenceBytes: load.phase === 'record' && load.evidence.state === 'ok' ? load.evidence.bytes : null,
     retry,
+    refreshStorage,
   };
 }
 

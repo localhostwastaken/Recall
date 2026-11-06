@@ -1,1 +1,1 @@
-export default ['packages/*', 'fixtures/*'];
+export default ['packages/*', 'apps/*', 'fixtures/*'];

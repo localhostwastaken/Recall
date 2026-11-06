@@ -2,6 +2,7 @@ import { Copy, Download, History } from 'lucide-react';
 import { useState } from 'react';
 import type { Hex } from 'viem';
 import { ExhibitCard } from '../components/ExhibitCard';
+import { KeepAlive } from '../components/KeepAlive';
 import { Preview } from '../components/Preview';
 import { evidenceFileName, saveBytes } from '../download';
 import { Notice } from '../ui/Notice';
@@ -10,7 +11,8 @@ import { captureTitle } from '../verify/captureTitle';
 import { CheckPanel, TechnicalDetails, VerdictLine, WhyWitness } from '../verify/CheckPanel';
 import { readFile, peekComparisonFile, type GivenFile } from '../verify/handoff';
 import { useVerifiedCapture, type VerifiedCapture } from '../verify/useVerifiedCapture';
-import { verdictOf } from '../verify/verify';
+import { isVerifiedReport, verdictOf } from '../verify/verify';
+import { ConfirmationRecord } from './Confirmation';
 
 /** `recall-<urlHash8>-<signedAt>.json`, from the verified facts when there are any. */
 function evidenceFilename(v: VerifiedCapture): string {
@@ -69,13 +71,19 @@ export function Capture({ entityKey }: { entityKey: Hex }) {
     );
   }
   if (v.phase === 'not-capture') {
+    // A confirmation record has its own small page; anything else is not ours.
     return (
-      <>
-        <h1 tabIndex={-1}>Capture</h1>
-        <Notice kind="error" title="This is not a capture record">
-          The record with this key is not a Recall capture, so there is nothing to check.
-        </Notice>
-      </>
+      <ConfirmationRecord
+        entityKey={entityKey}
+        fallback={
+          <>
+            <h1 tabIndex={-1}>Capture</h1>
+            <Notice kind="error" title="This is not a capture record">
+              The record with this key is not a Recall capture, so there is nothing to check.
+            </Notice>
+          </>
+        }
+      />
     );
   }
   if (v.phase === 'error') {
@@ -154,11 +162,20 @@ export function Capture({ entityKey }: { entityKey: Hex }) {
             View timeline
           </a>
         ) : null}
+        {v.record && isVerifiedReport(v.report) ? (
+          <KeepAlive
+            target={{ entityKeys: [v.record.entityKey], batchId: v.record.batchId }}
+            onChanged={v.refreshStorage}
+          />
+        ) : null}
         <button type="button" className="btn btn-secondary" onClick={copyLink}>
           <Copy size={16} strokeWidth={1.75} aria-hidden="true" />
           Copy link
         </button>
       </div>
+      {v.report && !isVerifiedReport(v.report) ? (
+        <p className="ka-hint">Keep-alive is offered only for captures whose checks A to C passed.</p>
+      ) : null}
     </>
   );
 }

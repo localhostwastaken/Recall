@@ -1,4 +1,5 @@
 import type { CheckResult } from '@recall/evidence';
+import { isFreeBatch } from '@recall/net';
 import { CircleCheck, CircleDashed, CircleX, LoaderCircle, TriangleAlert, type LucideIcon } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { sha256 } from 'viem';
@@ -188,10 +189,15 @@ function rowE(storage: StorageState | 'offline', batchId?: string): RowModel {
 }
 
 function storageHow(check: CheckResult, info: StorageInfo | null, batchId?: string): ReactNode {
+  const free = batchId !== undefined && isFreeBatch(batchId);
   return how(
     'Read live: the Swarm storage batch on Gnosis and the Arkiv record expiry. This check does not count toward the verdict.',
-    batchId ? <>Storage batch: <MonoValue value={batchId} /></> : null,
-    info ? `Swarm time left: ${info.ttlSeconds === null ? 'none (expired or not found)' : formatTtl(info.ttlSeconds)}` : check.detail,
+    free ? "Storage batch: none (the gateway's free storage)" : batchId ? <>Storage batch: <MonoValue value={batchId} /></> : null,
+    free
+      ? null
+      : info
+        ? `Swarm time left: ${info.ttlSeconds === null ? 'none (expired or not found)' : formatTtl(info.ttlSeconds)}`
+        : check.detail,
     info ? `Arkiv record expires at block ${info.arkivExpiresAtBlock}` : null,
   );
 }

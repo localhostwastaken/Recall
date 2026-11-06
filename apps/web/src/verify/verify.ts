@@ -158,3 +158,11 @@ export function verdictOf(report: VerifiedReport | null, file?: Uint8Array): Ver
     text: `Checks passed. The witness saw these exact bytes from ${f.serverName} at ${formatUtc(f.signedAt)}.`,
   };
 }
+
+/**
+ * True only when checks A, B and C all passed on a real, in-range capture and the record agrees
+ * with its evidence: the verdict without any file ("Checks passed"). What an action that vouches
+ * for a record, such as paying to keep it alive, has to require.
+ */
+export const isVerifiedReport = (report: VerifiedReport | null): report is VerifiedReport =>
+  verdictOf(report).kind === 'pass';

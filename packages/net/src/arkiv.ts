@@ -1,4 +1,4 @@
-import { createPublicClient, createWalletClient, ExpirationTime } from '@arkiv-network/sdk';
+import { createPublicClient, createWalletClient, ExpirationTime, MAX_LIFETIME } from '@arkiv-network/sdk';
 import { localhost, rabdi } from '@arkiv-network/sdk/chains';
 import { and, asc, eq, gt } from '@arkiv-network/sdk/query';
 import { addr, bytes, defineSchema, i32, key, str, u64 } from '@arkiv-network/sdk/schema';
@@ -242,9 +242,86 @@ export async function latestWitnessUrl(pub: ArkivPublic, witness: Address): Prom
   return latest.url.value;
 }
 
+/**
+ * Sets the entity to expire `days` from NOW. The chain only accepts a later expiry
+ * (`ExpiryNotExtended` otherwise), so on a record that already has more than `days` left this
+ * reverts. The keep-alive uses `extendEntities`, which adds days on top of the current expiry.
+ */
 export async function extendEntity(w: ArkivWallet, entityKey: Hex, days: number): Promise<Hex> {
   const { txHash } = await w.extendEntity({ entityKey, expiration: ExpirationTime.fromDays(days) });
   return txHash;
+}
+
+/** The SDK counts lifetimes in blocks of a nominal 2 s (the chain's real pace comes from `getBlockTiming`). */
+export const NOMINAL_BLOCK_SECONDS = 2;
+/** The longest an entity may live, counted from the block an extension lands in: about 182 days. */
+export const MAX_LIFETIME_BLOCKS: bigint = MAX_LIFETIME;
+
+/** A number of days as whole blocks of the nominal 2 s. */
+export function blocksForDays(days: number): bigint {
+  if (!(days > 0)) throw new Error('days must be positive');
+  return BigInt(Math.round((days * 86_400) / NOMINAL_BLOCK_SECONDS));
+}
+
+export type ExtensionPlan = {
+  /** The expiry to ask for: the current one plus the days, or the chain maximum when that is less. */
+  toBlock: bigint;
+  /** True when the maximum, not the days, set `toBlock`. */
+  capped: boolean;
+  /**
+   * False when there is nothing worth sending: the record is already at (or past) `toBlock`, or the
+   * maximum would add less than a day (at the maximum the cap moves up a block at a time).
+   */
+  extends: boolean;
+};
+
+/** Below this gain, an extension that hit the chain maximum is not worth a transaction fee. */
+const MIN_USEFUL_GAIN_BLOCKS = blocksForDays(1);
+
+/** Where an extension by `days` lands: on top of the current expiry, never past the chain maximum. */
+export function planExtension(a: { expiresAtBlock: bigint; currentBlock: bigint; days: number }): ExtensionPlan {
+  const wanted = a.expiresAtBlock + blocksForDays(a.days);
+  const cap = a.currentBlock + MAX_LIFETIME_BLOCKS;
+  const toBlock = wanted > cap ? cap : wanted;
+  const capped = wanted > cap;
+  const gain = toBlock - a.expiresAtBlock;
+  return { toBlock, capped, extends: capped ? gain >= MIN_USEFUL_GAIN_BLOCKS : gain > 0n };
+}
+
+export type ArkivExpiry = { entityKey: Hex; expiresAtBlock: bigint; currentBlock: bigint; blockSeconds: number };
+
+/** Reads the live expiry block of each entity, with the chain's block and its real block time. */
+export async function readArkivExpiry(pub: ArkivPublic, entityKeys: Hex[]): Promise<ArkivExpiry[]> {
+  const [timing, entities] = await Promise.all([pub.getBlockTiming(), Promise.all(entityKeys.map((k) => pub.getEntity(k)))]);
+  return entities.map((e, i) => ({
+    entityKey: entityKeys[i]!,
+    expiresAtBlock: e.$expiresAt,
+    currentBlock: timing.currentBlock,
+    blockSeconds: timing.blockDuration,
+  }));
+}
+
+/**
+ * Keep-alive for Arkiv records: each entity gets `days` on top of its own current expiry (capped
+ * at the chain maximum), all in ONE transaction, so there is one wallet prompt for any number of
+ * records. A record already at the maximum is skipped; with nothing to send, `txHash` is null.
+ * Anyone may do this to a record created with `permissionlessExtension`.
+ */
+export async function extendEntities(
+  w: ArkivWallet,
+  pub: ArkivPublic,
+  entityKeys: Hex[],
+  days: number,
+): Promise<{ txHash: Hex | null; plans: (ExtensionPlan & { entityKey: Hex })[] }> {
+  const unique = [...new Set(entityKeys.map((k) => k.toLowerCase() as Hex))];
+  const current = await readArkivExpiry(pub, unique);
+  const plans = current.map((c) => ({ entityKey: c.entityKey, ...planExtension({ ...c, days }) }));
+  const todo = plans.filter((p) => p.extends);
+  if (todo.length === 0) return { txHash: null, plans };
+  const { txHash } = await w.executeBatch({
+    extensions: todo.map((p) => ({ entityKey: p.entityKey, expiration: ExpirationTime.atBlock(p.toBlock) })),
+  });
+  return { txHash, plans };
 }
 
 function hexToBytesSafe(v: Hex | Uint8Array): Uint8Array {

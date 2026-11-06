@@ -145,11 +145,17 @@ export class Rig {
     private readonly writerKey: Hex,
   ) {}
 
-  static async create(): Promise<Rig> {
+  /**
+   * `payerKey` pays for the batch (default: the bee-compose faucet) and `writerKey` writes the Arkiv
+   * entities (default: a fresh key funded from DEV). A spec that runs next to others on the same
+   * devnet passes its own wallet for both, so it never sends from the shared faucet or DEV keys.
+   * A given `writerKey` must already hold Arkiv gas.
+   */
+  static async create(opts: { payerKey?: Hex; writerKey?: Hex } = {}): Promise<Rig> {
     const stampKey = generatePrivateKey();
     const gnosisTransport = http(LOCAL.gnosis.rpcUrl);
     const payer = createWalletClient({
-      account: privateKeyToAccount(BEE_COMPOSE_FAUCET_KEY),
+      account: privateKeyToAccount(opts.payerKey ?? BEE_COMPOSE_FAUCET_KEY),
       chain: gnosis,
       transport: gnosisTransport,
     });
@@ -161,16 +167,18 @@ export class Rig {
     });
     await waitBatchUsable(LOCAL.swarm.uploadUrl, batchId, 240_000);
 
-    const writerKey = generatePrivateKey();
-    const pub = arkivPublic(LOCAL);
-    const bank = createWalletClient({
-      account: privateKeyToAccount(DEV_PRIVATE_KEY),
-      chain: pub.chain,
-      transport: http(LOCAL.arkiv.rpcUrl),
-    });
-    await pub.waitForTransactionReceipt({
-      hash: await bank.sendTransaction({ to: privateKeyToAccount(writerKey).address, value: parseEther('1') }),
-    });
+    const writerKey = opts.writerKey ?? generatePrivateKey();
+    if (!opts.writerKey) {
+      const pub = arkivPublic(LOCAL);
+      const bank = createWalletClient({
+        account: privateKeyToAccount(DEV_PRIVATE_KEY),
+        chain: pub.chain,
+        transport: http(LOCAL.arkiv.rpcUrl),
+      });
+      await pub.waitForTransactionReceipt({
+        hash: await bank.sendTransaction({ to: privateKeyToAccount(writerKey).address, value: parseEther('1') }),
+      });
+    }
     return new Rig(batchId, Stamper.fromBlank(stampKey, batchId, 17), writerKey);
   }
 
