@@ -1,0 +1,59 @@
+/* Keep alive on a library card. Tokens only. */
+.lib-ka {
+  display: inline-flex;
+}
+
+/* The keep-alive trigger (the only direct button child; the dialog's buttons are deeper) drawn as
+   the card's orange-outline pill: 36 px tall with a 44 px hit area, like .btn-card. */
+.lib-ka > .btn {
+  position: relative;
+  height: 36px;
+  min-height: 36px;
+  padding: 0 var(--space-4);
+  border: 1.5px solid var(--accent);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--accent-text);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.lib-ka > .btn::before {
+  content: '';
+  position: absolute;
+  inset: -4px;
+}
+
+.lib-ka > .btn:hover:not(:disabled),
+.lib-ka > .btn:active:not(:disabled) {
+  background: var(--accent-soft);
+}
+
+.lib-ka > .btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* A kept-alive card: a brief ring in the colour of time left. */
+.ccard.lib-ka-glow {
+  animation: lib-ka-glow 600ms var(--ease-out);
+}
+
+@keyframes lib-ka-glow {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--life) 0%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--life) 35%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--life) 0%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ccard.lib-ka-glow {
+    animation: none;
+  }
+}

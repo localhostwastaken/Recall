@@ -4,6 +4,7 @@ import type { Hex } from 'viem';
 import { Duo } from '../brand/Duo';
 import { CaptureCard, type CardStatus } from '../components/CaptureCard';
 import { filterSort, type PageEntry } from '../library/model';
+import { LibraryKeepAlive, useKeepAliveLibrary } from '../library/LibraryKeepAlive';
 import { useLibrary, type LibraryData } from '../library/useLibrary';
 import { libraryHash, type LibrarySort, type LibraryType, type LibraryView } from '../router';
 import { goToSection } from '../sectionNav';
@@ -12,7 +13,7 @@ import { Segmented } from '../ui/Segmented';
 import { Switch } from '../ui/Switch';
 import './library.css';
 
-export const KEEP_ALIVE_HINT = 'Available after this capture is checked';
+export { KEEP_ALIVE_HINT } from '../library/LibraryKeepAlive';
 
 const TYPES: { value: LibraryType; label: string }[] = [
   { value: 'all', label: 'All' },
@@ -28,27 +29,12 @@ const SEARCH_DEBOUNCE_MS = 200;
 const SKELETON_CARDS = 6;
 
 /**
- * The card's one action. Until the page has its own keep-alive flow, a verified card links to
- * the capture page (which has it); a card not verified yet has a disabled button that says why.
+ * The card's one action: keep-alive for the page's newest capture, in place. A card not verified
+ * yet has a disabled button that says why. `lib` must come from `useKeepAliveLibrary`, so the
+ * card counts up and the grid re-ranks once the new days are read.
  */
-export function keepAliveSlot(entry: PageEntry, verified: boolean, hintId: string, _lib: LibraryData): ReactNode {
-  if (verified) {
-    return (
-      <a className="btn-card" href={`#/c/${entry.newest.entityKey}`}>
-        Keep alive
-      </a>
-    );
-  }
-  return (
-    <span className="lib-keep" title={KEEP_ALIVE_HINT}>
-      <button type="button" className="btn-card" disabled aria-describedby={hintId}>
-        Keep alive
-      </button>
-      <span id={hintId} className="visually-hidden">
-        {KEEP_ALIVE_HINT}
-      </span>
-    </span>
-  );
+export function keepAliveSlot(entry: PageEntry, verified: boolean, _hintId: string, lib: LibraryData): ReactNode {
+  return <LibraryKeepAlive entry={entry} verified={verified} onExtended={lib.refreshDays} />;
 }
 
 /**
@@ -207,7 +193,7 @@ const plural = (n: number, one: string, many: string) => `${n.toLocaleString('en
  * checked the page's newest capture; cards in view are checked, three at a time.
  */
 export function Library({ q = '', type = 'all', sort = 'time' }: Partial<LibraryView>) {
-  const lib = useLibrary();
+  const lib = useKeepAliveLibrary(useLibrary());
   const [text, setText] = useState(q);
   const [query, setQuery] = useState(q);
   const [kind, setKind] = useState<LibraryType>(type);

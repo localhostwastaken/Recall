@@ -1,6 +1,7 @@
 import { ArrowRight } from 'lucide-react';
 import { useId, type ReactNode } from 'react';
 import { filterSort, type PageEntry } from '../library/model';
+import { useKeepAliveLibrary } from '../library/LibraryKeepAlive';
 import { useLibrary, type LibraryData } from '../library/useLibrary';
 import { LibraryCardItem, LibraryEmpty, LibraryError, SkeletonGrid, keepAliveSlot, useCheckOnView } from '../routes/Library';
 import '../routes/library.css';
@@ -28,7 +29,7 @@ export function useLibraryCounts(): { captures: number; sites: number; repos: nu
  * failed ones never show here), and the way into the full library.
  */
 export function LibraryPreview({ id = 'library-preview' }: { id?: string }) {
-  const lib = useLibrary();
+  const lib = useKeepAliveLibrary(useLibrary());
   const observe = useCheckOnView(lib.requestCheck);
   const titleId = useId();
   const listed = lib.entries.filter((e) => lib.check.get(e.urlHash) !== 'unverified');
