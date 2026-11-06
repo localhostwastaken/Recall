@@ -219,4 +219,20 @@ describe('landing page', () => {
     expect(hrefs).toContain('https://github.com/localhostwastaken/Recall/releases/tag/v0.1.0-mumbai');
     expect(hrefs).toContain('https://hub.arkiv.network/faucet');
   });
+
+  it('shows a screenshot on each install step, sized up front and loaded lazily', () => {
+    render();
+    const steps = [...host.querySelectorAll('#install .inst-step')];
+    expect(steps.map((s) => s.querySelector('h3')?.textContent)).toEqual(['Download', 'Load it', 'Capture']);
+    steps.forEach((step, i) => {
+      const img = step.querySelector('img')!;
+      // Relative, because the app is served from a subfolder (GitHub Pages) and from Swarm.
+      expect(img.getAttribute('src')).toBe(`./install/step-${i + 1}.webp`);
+      expect(img.getAttribute('alt')!.length).toBeGreaterThan(20);
+      expect(img.getAttribute('width')).toBe('760');
+      expect(img.getAttribute('height')).toBe('475');
+      expect(img.getAttribute('loading')).toBe('lazy');
+    });
+    expect(steps[1].querySelector('img')!.getAttribute('alt')).toContain('Load unpacked');
+  });
 });
