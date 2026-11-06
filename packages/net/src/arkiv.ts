@@ -613,3 +613,80 @@ function hexToBytesSafe(v: Hex | Uint8Array): Uint8Array {
   for (let i = 0; i < out.length; i++) out[i] = parseInt(h.slice(i * 2, i * 2 + 2), 16);
   return out;
 }
+
+/** A capture record as listed by `listAllCaptures`: the indexed claims plus who wrote it and when it expires. */
+export type ListedCapture = CaptureRow & { entityKey: Hex; owner: Address; creator: Address; expiresAtBlock: bigint };
+
+/**
+ * Every capture record on Arkiv, whoever wrote it (the public library). Anyone can write rows
+ * with this schema tag, so every field is an unverified claim and the read has a row budget:
+ * `truncated` says more rows existed than `maxRows`. Keyset-paged on `$key` like `listByUrl`.
+ */
+export async function listAllCaptures(
+  pubOrCfg: ArkivPublic | NetConfig,
+  opts: { pageSize?: number; maxRows?: number } = {},
+): Promise<{ rows: ListedCapture[]; truncated: boolean }> {
+  const pub = asPublic(pubOrCfg);
+  const { entities, truncated } = await collectPages(
+    (after, limit) => {
+      const q = pub.select().from(CaptureSchema);
+      return (after ? q.where(gt('$key', key(after))) : q).orderBy(asc('$key')).limit(limit).fetch();
+    },
+    opts.pageSize ?? 100,
+    opts.maxRows ?? 1000,
+  );
+  const rows = entities.map(
+    (e): ListedCapture => ({
+      entityKey: e.$key,
+      owner: e.$owner as Address,
+      creator: e.$creator as Address,
+      expiresAtBlock: e.$expiresAt,
+      urlHash: e.urlHash.value,
+      bodySha256: e.bodySha256.value,
+      serverName: e.serverName.value,
+      witness: e.witness.value as Address,
+      signedAt: e.signedAt.value,
+      httpStatus: Number(e.httpStatus.value),
+      batchId: e.batchId.value,
+      evidenceRef: e.evidenceRef.value,
+      canonicalUrl: bytesToString(hexToBytesSafe(e.canonicalUrl.value)),
+    }),
+  );
+  return { rows, truncated };
+}
+
+/** Every attachment record on Arkiv, whoever wrote it (unverified claims), keyset-paged with a row budget. */
+export async function listAllAttachments(
+  pubOrCfg: ArkivPublic | NetConfig,
+  opts: { pageSize?: number; maxRows?: number } = {},
+): Promise<{ rows: ListedAttachment[]; truncated: boolean }> {
+  const pub = asPublic(pubOrCfg);
+  const { entities, truncated } = await collectPages(
+    (after, limit) => {
+      const q = pub.select().from(AttachmentSchema);
+      return (after ? q.where(gt('$key', key(after))) : q).orderBy(asc('$key')).limit(limit).fetch();
+    },
+    opts.pageSize ?? 100,
+    opts.maxRows ?? 1000,
+  );
+  const rows = entities.map(
+    (e): ListedAttachment => ({
+      entityKey: e.$key,
+      owner: e.$owner as Address,
+      creator: e.$creator as Address,
+      expiresAtBlock: e.$expiresAt,
+      parentCaptureKey: e.parentCaptureKey.value,
+      urlHash: e.urlHash.value,
+      sha256: e.sha256.value,
+      kind: e.kind.value,
+      commitSha: e.commitSha.value,
+      treeSha: e.treeSha.value,
+      proofLevel: Number(e.proofLevel.value),
+      evidenceRef: e.evidenceRef.value,
+      batchId: e.batchId.value,
+      size: e.size.value,
+      contentType: e.contentType.value,
+    }),
+  );
+  return { rows, truncated };
+}
