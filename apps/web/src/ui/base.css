@@ -126,6 +126,16 @@ progress {
   color: var(--on-accent);
 }
 
+/* A primary that cannot be pressed yet is not orange (orange means "press this", spec 4.2):
+   a neutral pill with readable muted text, the same as a busy button. */
+.btn-primary:disabled,
+.btn-primary[aria-disabled='true'] {
+  opacity: 1;
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+  border-color: var(--border-strong);
+}
+
 .btn-primary:active:not(:disabled) { background: var(--accent-hover); }
 .btn-secondary:active:not(:disabled) { background: var(--border); }
 

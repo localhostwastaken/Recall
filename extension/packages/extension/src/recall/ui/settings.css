@@ -94,9 +94,10 @@
   border-radius: var(--radius-2);
 }
 
+/* The chosen option is a state, not an action: neutral ink, never orange (spec 4.2). */
 .sp-radio:has(input:checked) {
-  border-color: var(--accent);
-  background: var(--accent-soft);
+  border-color: var(--text);
+  background: var(--surface-sunken);
 }
 
 .sp-radio:has(input:focus-visible) {
@@ -106,7 +107,7 @@
 
 .sp-radio input {
   margin: var(--space-1) 0 0;
-  accent-color: var(--accent);
+  accent-color: var(--text);
 }
 
 .sp-radio-name {

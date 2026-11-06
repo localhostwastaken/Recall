@@ -261,15 +261,18 @@ h1[tabindex='-1']:focus-visible {
   cursor: inherit;
 }
 
+/* The selected option is a state, not an action: neutral ink, never orange (spec 4.2). */
 .segmented-option:has(input:checked) {
-  background: var(--accent);
-  color: var(--on-accent);
+  background: var(--text);
+  color: var(--bg);
   font-weight: 600;
 }
 
-.segmented-option:has(input:focus-visible) {
-  outline: 2px solid var(--focus);
-  outline-offset: -4px;
+/* The ring goes round the whole group (the same 3 px ring as every control), so it stays visible
+   on the dark selected option and on the light ones. */
+.segmented-options:has(input:focus-visible) {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
 }
 
 /* Buy storage. */
@@ -646,12 +649,15 @@ a.btn-secondary:hover {
 }
 
 .tech-details > summary {
+  padding: var(--space-2) 0;
   cursor: pointer;
   color: var(--accent-text);
 }
 
+/* Raw error text: the code font everywhere (the capture page and the library alike). */
 .tech-details > p {
   margin-top: var(--space-1);
+  font-family: var(--font-mono);
   overflow-wrap: anywhere;
 }
 
@@ -828,13 +834,14 @@ a.btn-secondary:hover {
   transition: transform var(--dur-fast) var(--ease-out);
 }
 
+/* On is a state, not an action: neutral ink like the selected segment, never orange (spec 4.2). */
 .switch[aria-checked='true'] .switch-track {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--text);
+  border-color: var(--text);
 }
 
 .switch[aria-checked='true'] .switch-thumb {
-  background: var(--on-accent);
+  background: var(--bg);
   transform: translateX(16px);
 }
 
