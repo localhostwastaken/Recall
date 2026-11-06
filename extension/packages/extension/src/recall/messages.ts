@@ -2,12 +2,12 @@
 // All of them stay inside the extension (it has no content scripts). The web app's
 // messages (chrome.runtime.onMessageExternal) are in external.ts.
 import type { CaptureOutcome, CaptureOverrides, CaptureStep } from './captureParts';
-import type { OffscreenUpload, UploadResultMessage } from './uploadParts';
+import type { OffscreenUpload, UploadProgressMessage, UploadResultMessage } from './uploadParts';
 import type { OffscreenReadEntity } from './arkivRead';
 import type { OffscreenHistory, OffscreenWitnessUrl } from './historyRead';
 import type { OffscreenRepoSnapshot, RepoProgressMessage } from './repoSnapshot';
 
-export type { OffscreenUpload, UploadResultMessage } from './uploadParts';
+export type { OffscreenUpload, UploadProgressMessage, UploadResultMessage } from './uploadParts';
 export type { OffscreenReadEntity } from './arkivRead';
 export type { OffscreenHistory, OffscreenWitnessUrl } from './historyRead';
 export type { ExternalRequest } from './external';
@@ -62,4 +62,5 @@ export type RecallMessage =
   | CaptureStepMessage
   | CaptureResultMessage
   | UploadResultMessage
+  | UploadProgressMessage
   | PopupRequest;

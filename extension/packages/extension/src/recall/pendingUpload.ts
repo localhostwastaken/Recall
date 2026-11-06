@@ -98,7 +98,7 @@ export async function usableBatches(settings: Settings, pool?: PoolBatch[]): Pro
 }
 
 export type UploadAnswer =
-  | { status: 'uploading'; mode: 'stamped' | 'free' }
+  | { status: 'uploading'; mode: 'stamped' | 'free'; progress?: { done: number; total: number } }
   | { status: 'uploaded'; evidenceRef: Hex; batchId: Hex; attachmentRef?: Hex }
   | { error: string };
 
@@ -182,6 +182,26 @@ function failed(captureId: string, attempt: string, reason: string, mode: 'stamp
       : { ...rec, upload: { status: 'failed', reason, at: Date.now(), mode } },
   );
 }
+
+/**
+ * Offscreen progress of `<captureId>.<attempt>` (the repository snapshot's chunks): stored on the
+ * uploading record for the publish tab, and it keeps the attempt from counting as lost.
+ */
+export async function onPendingUploadProgress(id: string, done: number, total: number): Promise<void> {
+  const [captureId, attempt] = id.split('.');
+  if (!captureId || !attempt || !CAPTURE_ID.test(captureId)) return;
+  if (!Number.isSafeInteger(done) || !Number.isSafeInteger(total) || done < 0 || total < done) return;
+  const until = inFlight.get(id);
+  if (until !== undefined) inFlight.set(id, Math.max(until, Date.now() + UPLOAD_PROGRESS_GRACE_MS));
+  await updatePending(captureId, (rec) =>
+    rec.upload?.status === 'uploading' && rec.upload.attempt === attempt && !isUploaded(rec)
+      ? { ...rec, upload: { ...rec.upload, at: Date.now(), progress: { done, total } } }
+      : null,
+  );
+}
+
+/** After a progress message, an upload counts as running at least this long. */
+const UPLOAD_PROGRESS_GRACE_MS = 5 * 60_000;
 
 /**
  * Offscreen upload result for `<captureId>.<attempt>`. What the attempt learned about each batch

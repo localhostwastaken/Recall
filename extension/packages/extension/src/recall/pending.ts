@@ -19,7 +19,8 @@ export const CAPTURE_ID = /^[0-9a-f]{32}$/;
 /** The upload the publish tab started (captures only). Uploaded = evidenceRef and batchId are set. */
 export type StoredUpload =
   /** `attempt`: this upload's id; only its own result may end it (an older attempt's late result is ignored). */
-  | { status: 'uploading'; mode: UploadMode; at: number; attempt: string }
+  /** `at` is refreshed by progress; `progress`: chunks of the repository snapshot accepted so far. */
+  | { status: 'uploading'; mode: UploadMode; at: number; attempt: string; progress?: UploadProgress }
   /** `mode`: the storage the person chose, so "Try upload again" uses it again. */
   | { status: 'failed'; reason: string; at: number; mode: UploadMode };
 
@@ -49,10 +50,13 @@ export type PendingRecord = {
   attachmentRef?: Hex;
 };
 
+/** Chunks of the repository snapshot the storage node accepted so far, of all of them. */
+export type UploadProgress = { done: number; total: number };
+
 /** What `recall.getPending` reports about the upload of a pending capture. */
 export type PendingUploadState =
   | { status: 'none' }
-  | { status: 'uploading'; mode: UploadMode }
+  | { status: 'uploading'; mode: UploadMode; progress?: UploadProgress }
   | { status: 'uploaded'; evidenceRef: Hex; batchId: Hex; attachmentRef?: Hex }
   | { status: 'failed'; reason: string; mode: UploadMode };
 
@@ -62,7 +66,7 @@ export type PendingUploadState =
  */
 export const UPLOAD_LOST_AFTER_MS = 5 * 60_000;
 /** The same for an upload that carries a repository snapshot (up to 25 MB, bounded at 10 min). */
-export const ATTACHMENT_UPLOAD_LOST_AFTER_MS = 15 * 60_000;
+export const ATTACHMENT_UPLOAD_LOST_AFTER_MS = 20 * 60_000;
 
 export const lostAfter = (rec: PendingRecord) =>
   rec.attachment ? ATTACHMENT_UPLOAD_LOST_AFTER_MS : UPLOAD_LOST_AFTER_MS;
@@ -86,7 +90,7 @@ export function pendingUploadState(rec: PendingRecord, now = Date.now()): Pendin
   const mode: UploadMode = u?.mode === 'free' ? 'free' : 'stamped';
   if (u?.status === 'uploading') {
     return now - u.at < lostAfter(rec)
-      ? { status: 'uploading', mode }
+      ? { status: 'uploading', mode, ...(u.progress ? { progress: u.progress } : {}) }
       : { status: 'failed', reason: 'the upload did not finish', mode };
   }
   if (u?.status === 'failed') return { status: 'failed', reason: u.reason, mode };

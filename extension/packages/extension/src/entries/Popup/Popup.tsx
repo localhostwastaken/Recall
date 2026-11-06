@@ -20,6 +20,7 @@ import {
   REPO_BUTTON,
   approveUrl,
   repoSubline,
+  uploadProgressText,
   earlierCopy,
   type EarlierCaptures,
   checkLines,
@@ -452,6 +453,34 @@ export function Popup() {
   );
 }
 
+/**
+ * The repository snapshot's upload progress of a pending capture, read live from its pending
+ * record (the publish tab started the upload). Null when there is none.
+ */
+function useUploadProgress(captureId: string | undefined): { done: number; total: number } | null {
+  const [p, setP] = useState<{ done: number; total: number } | null>(null);
+  useEffect(() => {
+    if (!captureId) return;
+    const key = `recall.pending.${captureId}`;
+    const read = (raw: unknown) => {
+      try {
+        const u = typeof raw === 'string' ? (JSON.parse(raw) as { upload?: { status?: string; progress?: unknown } }).upload : undefined;
+        const g = u?.status === 'uploading' ? (u.progress as { done?: unknown; total?: unknown } | undefined) : undefined;
+        setP(g && typeof g.done === 'number' && typeof g.total === 'number' ? { done: g.done, total: g.total } : null);
+      } catch {
+        setP(null);
+      }
+    };
+    chrome.storage.local.get(key).then((r) => read(r[key])).catch(() => undefined);
+    const onChanged = (changes: Record<string, chrome.storage.StorageChange>) => {
+      if (key in changes) read(changes[key].newValue);
+    };
+    chrome.storage.local.onChanged.addListener(onChanged);
+    return () => chrome.storage.local.onChanged.removeListener(onChanged);
+  }, [captureId]);
+  return p;
+}
+
 function CaptureResult({
   job,
   copied,
@@ -467,6 +496,7 @@ function CaptureResult({
   const v = verdict(lines, job.checks);
   const up = job.upload ? uploadCopy(job.upload, v.kind === 'success') : null;
   const u = job.upload;
+  const progress = useUploadProgress(u?.status === 'pending' ? u.captureId : undefined);
   const openApprove = () => {
     if (u?.status === 'pending' || u?.status === 'confirmation') {
       // The capture's publish tab if it is open, else a new one (one tab per capture).
@@ -502,6 +532,11 @@ function CaptureResult({
           >
             {up.body}
           </Notice>
+          {progress ? (
+            <p className="muted tabular" role="status">
+              {uploadProgressText(progress)}
+            </p>
+          ) : null}
         </div>
       ) : null}
       <Notice

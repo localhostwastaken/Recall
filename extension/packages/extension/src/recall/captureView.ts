@@ -38,6 +38,12 @@ export const CODE_CHECK_STEP = 'Checking the code against the commit';
 /** The primary button on a GitHub repository page, and its sub-line. */
 export const REPO_BUTTON = 'Capture this repository';
 export const PAGE_BUTTON = 'Capture this page';
+/** "Uploading the code… 1,234 / 3,800" (the repository snapshot's chunks accepted so far). */
+export function uploadProgressText(p: { done: number; total: number }): string {
+  const n = (x: number) => x.toLocaleString('en-US');
+  return `Uploading the code… ${n(p.done)} / ${n(p.total)}`;
+}
+
 export function repoSubline(branch: string): string {
   return `branch ${branch} · notarizes GitHub's commit, then checks the code`;
 }

@@ -19,6 +19,7 @@ import type {
   OffscreenUpload,
   RecallMessage,
   RepoProgressMessage,
+  UploadProgressMessage,
   UploadResultMessage,
 } from '../../recall/messages';
 
@@ -32,7 +33,9 @@ proveManager().catch((err) => logger.error('[recall] prover init failed', err));
 
 const running = new Map<string, AbortController>();
 
-function send(msg: CaptureStepMessage | CaptureResultMessage | UploadResultMessage | RepoProgressMessage): void {
+function send(
+  msg: CaptureStepMessage | CaptureResultMessage | UploadResultMessage | RepoProgressMessage | UploadProgressMessage,
+): void {
   chrome.runtime
     .sendMessage(msg)
     .catch((err) => logger.warn('[recall] message to service worker failed', err));
@@ -93,7 +96,14 @@ function upload(req: OffscreenUpload): void {
   const run = async () => {
     let outcome: UploadOutcome;
     try {
-      outcome = await uploadEvidence(req, {}, ctl.signal);
+      // Progress of a big (repository snapshot) upload, at most once a second, plus the last.
+      let last = 0;
+      const onProgress = (done: number, total: number) => {
+        if (done < total && Date.now() - last < 1_000) return;
+        last = Date.now();
+        send({ type: 'recall.upload.progress', id: req.id, done, total });
+      };
+      outcome = await uploadEvidence(req, { onProgress }, ctl.signal);
     } catch (err) {
       outcome = {
         ok: false,

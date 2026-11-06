@@ -9,7 +9,7 @@ import {
   onCaptureStep,
   startCapture,
 } from './job';
-import { onPendingUploadResult } from './pendingUpload';
+import { onPendingUploadProgress, onPendingUploadResult } from './pendingUpload';
 import { initExternalApi } from './external';
 import { earlierCaptures, resolveWitness } from './lookup';
 import { stampKey } from './stamp';
@@ -72,6 +72,9 @@ export function initRecallBackground(): void {
         return;
       case 'recall.capture.result':
         void onCaptureResult(msg.id, msg.outcome);
+        return;
+      case 'recall.upload.progress':
+        void onPendingUploadProgress(msg.id, msg.done, msg.total);
         return;
       case 'recall.upload.result':
         // Uploads run only for pending captures, started from the publish tab (R44).
