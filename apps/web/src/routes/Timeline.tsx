@@ -173,7 +173,7 @@ export function Timeline({ urlHash }: { urlHash: Hex }) {
   const confirmations = tl.versions.reduce((n, v) => n + v.confirmations.length, 0);
   const settled = t.phase === 'ready' && tl.pending.length === 0;
   return (
-    <>
+    <div className="record record-timeline">
       <h1 tabIndex={-1}>{first ? first.facts.serverName : 'Captures of this page'}</h1>
       <p className="tl-address">
         {first ? (
@@ -185,104 +185,111 @@ export function Timeline({ urlHash }: { urlHash: Hex }) {
           </>
         )}
       </p>
-      {first ? (
-        <p className="tl-summary" data-summary>
-          {plural(tl.versions.length, 'version', 'versions')} · {plural(confirmations, 'confirmation', 'confirmations')} ·{' '}
-          {t.truncated ? 'earliest shown' : 'first captured'} <When seconds={first.facts.signedAt} />
-        </p>
-      ) : null}
-      <div className="page-actions">
-        <button type="button" className="btn btn-secondary" onClick={copyLink}>
-          <Copy size={16} strokeWidth={1.75} aria-hidden="true" />
-          Copy link
-        </button>
+      <div className="record-main">
+        {t.truncated ? (
+          <Notice kind="warn" title="Results may be incomplete">
+            <p>Too many records for this URL (possible spam); some may be hidden.</p>
+            <p>
+              Anyone can publish records for any address, so spam can push real captures out of this list. To check one
+              capture directly, open its link or drop its evidence file.
+            </p>
+          </Notice>
+        ) : null}
+
+        {t.phase === 'loading' ? <Loading /> : null}
+
+        {t.phase === 'ready' && t.rows.length === 0 ? (
+          <Notice kind="info" title="No captures of this page yet.">
+            Capture it with the Recall extension.
+          </Notice>
+        ) : null}
+
+        {t.phase === 'ready' && t.rows.length > 0 ? (
+          <>
+            {tl.pending.length > 0 ? (
+              <p className="muted tl-checking" role="status">
+                <LoaderCircle size={16} strokeWidth={1.75} aria-hidden="true" className="spin" />
+                Checking {plural(tl.pending.length, 'record', 'records')} in your browser…
+              </p>
+            ) : null}
+            {tl.unchecked.length > 0 ? (
+              <Notice
+                kind="info"
+                title={`${plural(tl.unchecked.length, 'record', 'records')} not checked yet`}
+                actions={
+                  <button type="button" className="btn btn-secondary" onClick={t.checkMore}>
+                    Check the next {Math.min(t.batch, tl.unchecked.length)}
+                  </button>
+                }
+              >
+                Checked {t.checked.size} of {t.rows.length} records so far. A record that has not been
+                checked is not listed as a capture: it has not passed its checks.
+              </Notice>
+            ) : null}
+            {settled && tl.versions.length === 0 && tl.unchecked.length === 0 ? (
+              <Notice kind="info" title="No capture of this page passed its checks.">
+                {plural(tl.unverified.length, 'record', 'records')} didn't pass {tl.unverified.length === 1 ? 'its' : 'their'} checks. Turn on
+                “Show unverified ({tl.unverified.length})” to see why.
+              </Notice>
+            ) : null}
+            {tl.versions.length > 0 || tl.pending.length > 0 ? (
+              <section aria-labelledby="versions-title">
+                <h2 className="section-title" id="versions-title">
+                  Versions
+                </h2>
+                <ol className="timeline" data-timeline>
+                  {tl.versions.map((v) => (
+                    <VersionItem key={v.entityKey} v={v} />
+                  ))}
+                  <Paged items={tl.pending} render={(p) => <PendingItem key={p.entityKey} p={p} />} />
+                </ol>
+              </section>
+            ) : null}
+            {tl.versions.length >= 2 ? <Diff versions={tl.versions} /> : null}
+            {tl.unverified.length > 0 ? (
+              <div className="tl-unverified">
+                <Switch
+                  label={`Show unverified (${tl.unverified.length})`}
+                  checked={showUnverified}
+                  onChange={setShowUnverified}
+                />
+                {showUnverified ? (
+                  <section aria-labelledby="unverified-title">
+                    <h2 className="section-title" id="unverified-title">
+                      Unverified records
+                    </h2>
+                    <p className="muted">
+                      These records did not pass their checks, so nothing they say is shown as fact, and they are not
+                      counted above.
+                    </p>
+                    <ul className="timeline" data-timeline-unverified>
+                      <Paged items={tl.unverified} render={(u) => <UnverifiedItem key={u.entityKey} u={u} />} />
+                    </ul>
+                  </section>
+                ) : null}
+              </div>
+            ) : null}
+          </>
+        ) : null}
       </div>
-
-      {t.truncated ? (
-        <Notice kind="warn" title="Results may be incomplete">
-          <p>Too many records for this URL (possible spam); some may be hidden.</p>
-          <p>
-            Anyone can publish records for any address, so spam can push real captures out of this list. To check one
-            capture directly, open its link or drop its evidence file.
-          </p>
-        </Notice>
-      ) : null}
-
-      {t.phase === 'loading' ? <Loading /> : null}
-
-      {t.phase === 'ready' && t.rows.length === 0 ? (
-        <Notice kind="info" title="No captures of this page yet.">
-          Capture it with the Recall extension.
-        </Notice>
-      ) : null}
-
-      {t.phase === 'ready' && t.rows.length > 0 ? (
-        <>
-          {tl.pending.length > 0 ? (
-            <p className="muted tl-checking" role="status">
-              <LoaderCircle size={16} strokeWidth={1.75} aria-hidden="true" className="spin" />
-              Checking {plural(tl.pending.length, 'record', 'records')} in your browser…
+      {/* The versions on the left; the counts and Copy link beside them on a desktop (under the
+          address on a phone). */}
+      <aside className="record-side" aria-label="This page">
+        <div className="record-panel">
+          {first ? (
+            <p className="tl-summary" data-summary>
+              {plural(tl.versions.length, 'version', 'versions')} · {plural(confirmations, 'confirmation', 'confirmations')} ·{' '}
+              {t.truncated ? 'earliest shown' : 'first captured'} <When seconds={first.facts.signedAt} />
             </p>
           ) : null}
-          {tl.unchecked.length > 0 ? (
-            <Notice
-              kind="info"
-              title={`${plural(tl.unchecked.length, 'record', 'records')} not checked yet`}
-              actions={
-                <button type="button" className="btn btn-secondary" onClick={t.checkMore}>
-                  Check the next {Math.min(t.batch, tl.unchecked.length)}
-                </button>
-              }
-            >
-              Checked {t.checked.size} of {t.rows.length} records so far. A record that has not been
-              checked is not listed as a capture: it has not passed its checks.
-            </Notice>
-          ) : null}
-          {settled && tl.versions.length === 0 && tl.unchecked.length === 0 ? (
-            <Notice kind="info" title="No capture of this page passed its checks.">
-              {plural(tl.unverified.length, 'record', 'records')} didn't pass {tl.unverified.length === 1 ? 'its' : 'their'} checks. Turn on
-              “Show unverified ({tl.unverified.length})” to see why.
-            </Notice>
-          ) : null}
-          {tl.versions.length > 0 || tl.pending.length > 0 ? (
-            <section aria-labelledby="versions-title">
-              <h2 className="section-title" id="versions-title">
-                Versions
-              </h2>
-              <ol className="timeline" data-timeline>
-                {tl.versions.map((v) => (
-                  <VersionItem key={v.entityKey} v={v} />
-                ))}
-                <Paged items={tl.pending} render={(p) => <PendingItem key={p.entityKey} p={p} />} />
-              </ol>
-            </section>
-          ) : null}
-          {tl.versions.length >= 2 ? <Diff versions={tl.versions} /> : null}
-          {tl.unverified.length > 0 ? (
-            <div className="tl-unverified">
-              <Switch
-                label={`Show unverified (${tl.unverified.length})`}
-                checked={showUnverified}
-                onChange={setShowUnverified}
-              />
-              {showUnverified ? (
-                <section aria-labelledby="unverified-title">
-                  <h2 className="section-title" id="unverified-title">
-                    Unverified records
-                  </h2>
-                  <p className="muted">
-                    These records did not pass their checks, so nothing they say is shown as fact, and they are not
-                    counted above.
-                  </p>
-                  <ul className="timeline" data-timeline-unverified>
-                    <Paged items={tl.unverified} render={(u) => <UnverifiedItem key={u.entityKey} u={u} />} />
-                  </ul>
-                </section>
-              ) : null}
-            </div>
-          ) : null}
-        </>
-      ) : null}
-    </>
+          <div className="page-actions">
+            <button type="button" className="btn btn-secondary" onClick={copyLink}>
+              <Copy size={16} strokeWidth={1.75} aria-hidden="true" />
+              Copy link
+            </button>
+          </div>
+        </div>
+      </aside>
+    </div>
   );
 }
