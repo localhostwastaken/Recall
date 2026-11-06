@@ -3,7 +3,7 @@
 // only when the git tree hash recomputed from its files equals T. Nothing here trusts the
 // extension or an Arkiv record: the branch comes from the page's own verified facts, and the
 // tarball is downloaded and recomputed in this browser.
-import { gitTreeFromTarGz, githubBranchFromFacts, urlHash, type GitHubBranch, type VerifiedFacts } from '@recall/evidence';
+import { gitTreeFromTarGz, githubBranchFromFacts, urlHash, type GitHubBranch, type GitTree, type VerifiedFacts } from '@recall/evidence';
 import { ATTACHMENT_MAX_DOWNLOAD_BYTES, attachmentMatches, isFreeBatch, swarmRootOf, type ListedAttachment } from '@recall/net';
 import type { Hex } from 'viem';
 import { getNetName } from '../defaults';
@@ -89,9 +89,35 @@ export async function sha256Hex(bytes: Uint8Array): Promise<Hex> {
 /** What this browser computed from a downloaded tarball. */
 export type CodeComputed = { treeSha: string; files: number; sha256: Hex; size: number };
 
+type TreeReply = { ok: true; tree: GitTree } | { ok: false; error: string };
+
+/**
+ * gitTreeFromTarGz in a Web Worker (a copy of the bytes goes there; the caller keeps its own).
+ * A tarball the parser refuses throws its error; only when the worker itself can't run does the
+ * main thread compute it instead (same function, same result).
+ */
+async function treeOf(bytes: Uint8Array): Promise<GitTree> {
+  if (typeof Worker === 'undefined') return gitTreeFromTarGz(bytes);
+  let worker: Worker;
+  try {
+    const { default: TreeWorker } = await import('./tree.worker?worker');
+    worker = new TreeWorker();
+  } catch {
+    return gitTreeFromTarGz(bytes);
+  }
+  const reply = await new Promise<TreeReply | null>((resolve) => {
+    worker.onmessage = (e: MessageEvent<TreeReply>) => resolve(e.data);
+    worker.onerror = () => resolve(null);
+    worker.postMessage(bytes);
+  }).finally(() => worker.terminate());
+  if (!reply) return gitTreeFromTarGz(bytes);
+  if (!reply.ok) throw new Error(reply.error);
+  return reply.tree;
+}
+
 /** Recomputes the tree hash and the file hash of a tarball; throws when it can't be read unambiguously. */
 export async function computeCode(bytes: Uint8Array): Promise<CodeComputed> {
-  const tree = gitTreeFromTarGz(bytes);
+  const tree = await treeOf(bytes);
   return { treeSha: tree.treeSha, files: tree.files, sha256: await sha256Hex(bytes), size: bytes.length };
 }
 

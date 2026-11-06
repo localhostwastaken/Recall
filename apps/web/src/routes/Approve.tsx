@@ -205,6 +205,10 @@ async function checkStored(
 }
 
 const CODE_STEP = 'Checking the uploaded code…';
+/** Public gateways can take 30 to 90 s to serve a 15 MB file just uploaded: wait that long, backing off. */
+const CODE_WAIT_MS = 90_000;
+const CODE_BACKOFF_MS = [3_000, 5_000, 8_000, 12_000, 15_000];
+const CODE_WAITING = 'Waiting for Swarm to serve the code…';
 
 /**
  * R46: downloads the uploaded tarball (25 MB cap; the Swarm root is checked for a stamped
@@ -223,18 +227,28 @@ async function checkUploadedCode(
   onStep(CODE_STEP);
   let bytes: Uint8Array | null = null;
   let last: unknown;
-  // A gateway can take a moment to serve a file just uploaded.
-  for (let attempt = 0; attempt < 3 && !bytes; attempt++) {
-    if (attempt > 0) await sleep(4_000);
+  // A gateway can take a while to serve a file just uploaded: retry with backoff for up to
+  // CODE_WAIT_MS, saying so, before "Try upload again" is offered.
+  const deadline = Date.now() + CODE_WAIT_MS;
+  for (let attempt = 1; !bytes; attempt++) {
+    if (attempt > 1) {
+      const wait = CODE_BACKOFF_MS[Math.min(attempt - 2, CODE_BACKOFF_MS.length - 1)]!;
+      if (Date.now() + wait > deadline) break;
+      onStep(`${CODE_WAITING} (try ${attempt})`);
+      await sleep(wait);
+    }
     try {
-      bytes = (await downloadCode(ref, up.batchId, getNetConfig().swarm.downloadUrls, onProgress ? { onProgress } : {})).bytes;
+      bytes = (
+        await downloadCode(ref, up.batchId, getNetConfig().swarm.downloadUrls, {
+          signal: AbortSignal.timeout(120_000),
+          ...(onProgress ? { onProgress } : {}),
+        })
+      ).bytes;
     } catch (e) {
       last = e;
     }
   }
   if (!bytes) return { reason: `The uploaded code couldn't be downloaded to check it: ${reasonOf(last)}.`, retry: true };
-  // Let the step paint before the (synchronous) tree recomputation.
-  await sleep(30);
   let computed: CodeComputed;
   try {
     computed = await computeCode(bytes);
@@ -581,7 +595,7 @@ type Save =
   | { state: 'buying'; how: 'buy'; step: BuyStep }
   | { state: 'uploading'; how: SaveHow }
   /** `code`: downloading and recomputing the uploaded repository snapshot (R46). */
-  | { state: 'checking'; how: SaveHow; code?: { received: number; total: number | null } }
+  | { state: 'checking'; how: SaveHow; code?: { received: number; total: number | null; note?: string } }
   | { state: 'error'; how: SaveHow; stage: 'buy' | 'upload'; title: string; body: string; retryLabel: string; technical?: string };
 /** The ?ext= rule (as on Storage): an extension only the link names owns nothing bought until the person says so. */
 type ExtAsk = { state: 'none' } | { state: 'ask'; address: Address | null | 'error' } | { state: 'ok'; address: Address };
@@ -852,10 +866,17 @@ export function Approve({ captureId }: { captureId: string | null }) {
       const stored = await checkStored(
         up,
         r.bytes,
-        (step) => step === CODE_STEP && setSave({ state: 'checking', how, code: { received: 0, total: r.repo?.summary.size ?? null } }),
+        (step) =>
+          (step === CODE_STEP || step.startsWith(CODE_WAITING)) &&
+          setSave({
+            state: 'checking',
+            how,
+            code: { received: 0, total: r.repo?.summary.size ?? null, ...(step === CODE_STEP ? {} : { note: step }) },
+          }),
         r.repo,
         (received, total) => {
-          if (received - lastPaint < 256 * 1024 && received !== total) return;
+          // A new try starts again from 0.
+          if (received >= lastPaint && received - lastPaint < 256 * 1024 && received !== total) return;
           lastPaint = received;
           setSave({ state: 'checking', how, code: { received, total: total ?? r.repo?.summary.size ?? null } });
         },
@@ -1244,7 +1265,9 @@ export function Approve({ captureId }: { captureId: string | null }) {
           ? 'Uploading to free storage…'
           : 'Uploading the evidence…'
         : save.state === 'checking'
-          ? save.code
+          ? save.code?.note
+            ? save.code.note
+            : save.code
             ? `Checking the uploaded code${save.code.received > 0 ? ` (${(save.code.received / 1024 / 1024).toFixed(1)}${save.code.total ? ` of ${(save.code.total / 1024 / 1024).toFixed(1)}` : ''} MB)` : ''}…`
             : 'Checking the upload…'
           : publish.state === 'connecting'
