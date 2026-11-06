@@ -1,7 +1,8 @@
 import { canonicalUrl, decodeEvidence, urlHash } from '@recall/evidence';
-import { arkivPublic, downloadBytes, listByUrl } from '@recall/net';
+import { arkivPublic, listByUrl } from '@recall/net';
 import { useEffect, useState } from 'react';
 import { sha256 } from 'viem';
+import { downloadEvidence } from '../download';
 import { getNetConfig } from '../net';
 import { DropZone } from '../ui/DropZone';
 import { Field } from '../ui/Field';
@@ -141,7 +142,7 @@ function CompareFile() {
       // hash, so open the first one whose evidence really verifies and holds this exact file.
       for (const m of matches.slice(0, MAX_CANDIDATES)) {
         try {
-          const { bytes } = await downloadBytes(m.evidenceRef, cfg.swarm.downloadUrls);
+          const { bytes } = await downloadEvidence(cfg, m);
           const report = await verifyRecordEvidence(m, bytes, given.bytes);
           if (report.D?.status === 'pass' && verdictOf(report).kind !== 'fail') {
             setComparisonFile(m.entityKey, given);

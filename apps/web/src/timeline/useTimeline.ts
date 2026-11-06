@@ -1,6 +1,7 @@
-import { DEFAULT_MAX_DOWNLOAD_BYTES, arkivPublic, downloadBytes, listByUrl, type Listed, type NetConfig } from '@recall/net';
+import { DEFAULT_MAX_DOWNLOAD_BYTES, arkivPublic, listByUrl, type Listed, type NetConfig } from '@recall/net';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Hex } from 'viem';
+import { downloadEvidence } from '../download';
 import { checkBatch, listOptions } from '../limits';
 import { getNetConfig } from '../net';
 import { verifyRecordEvidence } from '../verify/useVerifiedCapture';
@@ -51,7 +52,7 @@ async function checkRow(cfg: NetConfig, row: Listed, urlHash: Hex, controllers: 
     controllers.add(ac);
     const timer = setTimeout(() => ac.abort(), DOWNLOAD_MS);
     try {
-      bytes = (await downloadBytes(row.evidenceRef, cfg.swarm.downloadUrls, { signal: ac.signal })).bytes;
+      bytes = (await downloadEvidence(cfg, row, { signal: ac.signal })).bytes;
     } catch {
       return unverified(COULDNT_DOWNLOAD);
     } finally {

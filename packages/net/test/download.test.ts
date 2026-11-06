@@ -135,3 +135,59 @@ describe('downloadBytes limits', () => {
     await expect.poll(() => closed, { timeout: 2000 }).toBe(true);
   });
 });
+
+describe('downloadBytes verifyRoot', () => {
+  // A public gateway's /bytes can return a reference that differs from the locally computed
+  // Swarm root for files over 4 KB (R13). Only free-mode captures may skip the root check.
+  it('verifies the root by default, and an explicit true behaves the same', async () => {
+    const url = await serve((_q, res) => res.writeHead(200).end(Buffer.from('other bytes')));
+    const ref = await refOf(new Uint8Array(randomBytes(6000)));
+    await expect(downloadBytes(ref, [url])).rejects.toThrow(/mismatch/);
+    await expect(downloadBytes(ref, [url], { verifyRoot: true })).rejects.toThrow(/mismatch/);
+    await expect(downloadBytes(ref, [url], {})).rejects.toThrow(/mismatch/);
+  });
+
+  it('verifyRoot:false returns the gateway bytes without comparing the root', async () => {
+    const served = new Uint8Array(randomBytes(6000));
+    const url = await serve((_q, res) => res.writeHead(200).end(Buffer.from(served)));
+    const someOtherRef = await refOf(new Uint8Array(randomBytes(6000)));
+    const got = await downloadBytes(someOtherRef, [url], { verifyRoot: false });
+    expect(Buffer.from(got.bytes).equals(Buffer.from(served))).toBe(true);
+    expect(got.from).toBe(url);
+    expect(got.rootVerified).toBe(false);
+  });
+
+  it('reports rootVerified:true when the root was checked', async () => {
+    const data = new Uint8Array(randomBytes(5000));
+    const url = await serve((_q, res) => res.writeHead(200).end(Buffer.from(data)));
+    expect((await downloadBytes(await refOf(data), [url])).rootVerified).toBe(true);
+  });
+
+  it('only a literal false skips the check (undefined, 0 and "" do not)', async () => {
+    const url = await serve((_q, res) => res.writeHead(200).end(Buffer.from('other bytes')));
+    const ref = await refOf(new Uint8Array(randomBytes(5000)));
+    for (const v of [undefined, 0, '', null] as unknown[]) {
+      await expect(downloadBytes(ref, [url], { verifyRoot: v as boolean })).rejects.toThrow(/mismatch/);
+    }
+  });
+
+  it('keeps every other limit with verifyRoot:false: size cap, status, bad reference, abort', async () => {
+    const big = await serve((_q, res) => res.writeHead(200, { 'content-length': 9_000_000 }).end());
+    const gone = await serve((_q, res) => res.writeHead(404).end());
+    const ref = await refOf(new Uint8Array(10));
+    await expect(downloadBytes(ref, [big], { verifyRoot: false, maxBytes: 1000 })).rejects.toThrow(/limit/);
+    await expect(downloadBytes(ref, [gone], { verifyRoot: false })).rejects.toThrow(/404/);
+    await expect(downloadBytes('0x1234', [gone], { verifyRoot: false })).rejects.toThrow(/invalid swarm reference/);
+    const ac = new AbortController();
+    ac.abort();
+    await expect(downloadBytes(ref, [gone], { verifyRoot: false, signal: ac.signal })).rejects.toThrow(/aborted/);
+  });
+
+  it('a gateway that fails is skipped and the next one answers, with the check still off', async () => {
+    const data = new Uint8Array(randomBytes(300));
+    const gone = await serve((_q, res) => res.writeHead(500).end());
+    const good = await serve((_q, res) => res.writeHead(200).end(Buffer.from(data)));
+    const got = await downloadBytes(await refOf(new Uint8Array(10)), [gone, good], { verifyRoot: false });
+    expect(got.from).toBe(good);
+  });
+});

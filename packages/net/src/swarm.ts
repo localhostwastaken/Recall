@@ -45,6 +45,15 @@ export type DownloadOptions = {
   signal?: AbortSignal;
   /** Refuses responses larger than this many bytes (default 2 MB). */
   maxBytes?: number;
+  /**
+   * Compares the locally recomputed Swarm root with the reference (default: true). Only a literal
+   * `false` turns it off. This is an explicit opt-out for evidence uploaded to a gateway's free
+   * storage (`POST /bytes`): for files over 4 KB that gateway returns a reference that differs
+   * from the locally computed root, so the root cannot bind the bytes. Callers must use it only
+   * for records whose batch id is all zeros (free mode) and must bind the bytes another way
+   * (the evidence checks A to C plus the record cross-check). Every other limit still applies.
+   */
+  verifyRoot?: boolean;
 };
 
 class TooLarge extends Error {}
@@ -90,16 +99,19 @@ async function readCapped(res: Response, maxBytes: number): Promise<Uint8Array> 
  * Tries each gateway's `/bytes/{ref}` in order and returns the first response
  * whose locally recomputed root reference equals `ref`; gateways are not trusted.
  * A response over `maxBytes` (default 2 MB) is cut off and counts as a failure of that
- * gateway. Aborting `signal` stops everything and throws.
+ * gateway. Aborting `signal` stops everything and throws. `verifyRoot: false` (free-mode
+ * records only, see `DownloadOptions`) skips the root comparison; `rootVerified` in the result
+ * says whether the root was compared.
  */
 export async function downloadBytes(
   ref: string,
   urls: string[],
   opts: DownloadOptions = {},
-): Promise<{ bytes: Uint8Array; from: string }> {
+): Promise<{ bytes: Uint8Array; from: string; rootVerified: boolean }> {
   if (!/^(0x)?[0-9a-f]{64}$/i.test(ref)) throw new Error('invalid swarm reference');
   const want = bare(ref).toLowerCase();
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_DOWNLOAD_BYTES;
+  const checkRoot = opts.verifyRoot !== false;
   const errors: string[] = [];
   for (const url of urls) {
     opts.signal?.throwIfAborted();
@@ -111,7 +123,8 @@ export async function downloadBytes(
         continue;
       }
       const bytes = await readCapped(res, maxBytes);
-      if ((await swarmRootOf(bytes)) === want) return { bytes, from: url };
+      if (!checkRoot) return { bytes, from: url, rootVerified: false };
+      if ((await swarmRootOf(bytes)) === want) return { bytes, from: url, rootVerified: true };
       errors.push(`${url}: reference mismatch (returned bytes do not hash to ${want})`);
     } catch (e) {
       if (opts.signal?.aborted) throw new Error(`download of ${want} aborted`);

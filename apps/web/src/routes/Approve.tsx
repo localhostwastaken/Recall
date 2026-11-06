@@ -10,7 +10,6 @@ import {
   CaptureSchema,
   arkivPublic,
   arkivWallet,
-  downloadBytes,
   swarmRootOf,
   writeCapture,
   writeConfirmation,
@@ -19,6 +18,7 @@ import { LoaderCircle } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { custom, type Account, type Address, type Hex } from 'viem';
 import { ExhibitCard } from '../components/ExhibitCard';
+import { downloadEvidence, isFreeModeBatch } from '../download';
 import { ExtError, ext } from '../ext';
 import { formatDay, formatUtc } from '../format';
 import { getNetConfig } from '../net';
@@ -148,7 +148,11 @@ async function loadPending(captureId: string, extensionId: string | undefined, o
     }
     onStep('Checking the uploaded evidence reference…');
     // The Swarm reference is a hash of the bytes, so it is checked here without a download.
-    if ((await swarmRootOf(bytes)) !== pending.evidenceRef.slice(2).toLowerCase()) {
+    // A free-mode capture (all-zero batch id: the evidence went to a gateway's own storage) is
+    // the one case where that does not hold: for files over 4 KB the gateway's reference differs
+    // from the locally computed root (R13). Its evidence is bound by checks A to C above, and by
+    // the record being built from the facts of this very evidence. Every other batch id keeps the root check.
+    if (!isFreeModeBatch(pending.batchId) && (await swarmRootOf(bytes)) !== pending.evidenceRef.slice(2).toLowerCase()) {
       return { phase: 'refused', reason: "The uploaded evidence reference doesn't match this capture's evidence.", report };
     }
     return { phase: 'ready', pending, bytes, report, facts };
@@ -163,7 +167,7 @@ async function loadPending(captureId: string, extensionId: string | undefined, o
   }
   onStep('Checking the earlier capture…');
   const cfg = getNetConfig();
-  let claims;
+  let claims: { urlHash: Hex; bodySha256: Hex; witness: Address; signedAt: bigint; evidenceRef: Hex; batchId: Hex };
   try {
     const e = await arkivPublic(cfg).getEntity(pending.captureKey, CaptureSchema);
     claims = {
@@ -172,6 +176,7 @@ async function loadPending(captureId: string, extensionId: string | undefined, o
       witness: e.witness.value as Address,
       signedAt: e.signedAt.value,
       evidenceRef: e.evidenceRef.value,
+      batchId: e.batchId.value,
     };
   } catch (e) {
     if (/not found|NoEntityFound|does not exist/i.test(String(e))) {
@@ -181,11 +186,11 @@ async function loadPending(captureId: string, extensionId: string | undefined, o
   }
   let earlierBytes: Uint8Array;
   try {
-    earlierBytes = (await downloadBytes(claims.evidenceRef, cfg.swarm.downloadUrls)).bytes;
+    earlierBytes = (await downloadEvidence(cfg, claims)).bytes;
   } catch (e) {
     return { phase: 'offline', message: reasonOf(e) };
   }
-  const { evidenceRef: _ref, ...recordClaims } = claims;
+  const { evidenceRef: _ref, batchId: _batch, ...recordClaims } = claims;
   const earlier = await verifyRecordEvidence(recordClaims, earlierBytes);
   const ef = earlier.facts;
   const ok =
