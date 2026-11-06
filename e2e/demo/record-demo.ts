@@ -631,7 +631,7 @@ async function run(context: BrowserContext, stage: Stage, o: Opts): Promise<void
       outcome = await narrate(
         stage,
         [
-          { caption: "TLSNotary: GitHub's answer is recorded through an independent witness, without trusting us" },
+          { caption: "TLSNotary: GitHub's own answer is recorded and signed by a witness. You choose which witnesses to trust" },
           {
             caption: 'Checking the downloaded code against the commit GitHub reported',
             when: async () =>
