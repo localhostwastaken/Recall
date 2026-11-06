@@ -218,6 +218,8 @@ var options = {
       __EXTENSION_VERSION__: JSON.stringify(require('./package.json').version),
       __RECALL_DEV__: JSON.stringify(RECALL_DEV),
       __RECALL_DEV_CA_DER_B64__: JSON.stringify(RECALL_DEV_CA_DER_B64),
+      // R30: the default Arkiv access key of a release build, from the build's environment only.
+      __RECALL_ARKIV_KEY__: JSON.stringify(RECALL_DEV ? '' : (process.env.ARKIV_ACCESS_KEY || '').trim()),
     }),
     new CopyWebpackPlugin({
       patterns: [

@@ -1,7 +1,7 @@
 // The extension's API for the Recall web app (chrome.runtime.onMessageExternal). Only
 // origins in the manifest's externally_connectable can call it, but those include
 // gateways that serve anyone's content, so nothing here trusts the caller (ruling R27):
-// - recall.getStampAddress  -> {address}                 public, read-only
+// - recall.getStampAddress  -> {address, version}        public, read-only (version: the extension's)
 // - recall.addBatches       -> {pool} | {error, pool, rejected}  each batch checked on Gnosis
 // - recall.getPending       -> PendingRecord | {error}   exact unguessable captureId only
 // - recall.markPublished    -> {ok:true} | {error}       only after the Arkiv record matches
@@ -49,7 +49,7 @@ export async function handleExternal(raw: unknown): Promise<Answer> {
   const msg = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   switch (msg.type) {
     case 'recall.getStampAddress':
-      return { address: await stampAddress() };
+      return { address: await stampAddress(), version: chrome.runtime.getManifest().version };
 
     case 'recall.addBatches': {
       const ids = parseBatchIds(msg.batchIds);

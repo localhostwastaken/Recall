@@ -33,6 +33,10 @@ describe('settings', () => {
       witnessUrl: 'http://localhost:7047',
       pinnedWitnesses: [],
       appUrl: 'http://localhost:5173',
+      uploadMode: 'stamped',
+      arkivRpcUrl: 'http://localhost:8545',
+      arkivAccessKey: '',
+      uploadUrl: 'http://localhost:1633',
     });
   });
 
@@ -82,6 +86,8 @@ describe('settings', () => {
     expect(isWitnessUrl('https://witness.example.org/')).toBe(true);
     for (const bad of [
       'javascript:alert(1)',
+      'data:text/html,x',
+      'http://witness.example.org', // plain http is for localhost and 127.0.0.1 only
       'ws://localhost:7047',
       'file:///etc/passwd',
       'localhost:7047',

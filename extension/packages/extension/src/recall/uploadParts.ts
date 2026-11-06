@@ -46,6 +46,18 @@ export function canonicalEvidence(e: EvidenceFile): EvidenceFile {
   return decodeEvidence(encodeEvidence(e));
 }
 
+/**
+ * The batch id a capture records when its evidence went to a gateway's free storage (free upload
+ * mode): no batch was used, so there is none to extend. The web app treats exactly this value as
+ * "free mode" (no Swarm root check, no keep-alive for Swarm). One definition, shared with the app.
+ */
+export { FREE_BATCH_ID } from '@recall/net/postage';
+
+/** Whether a capture is uploaded after its checks: free mode needs no batch, stamped needs one in the pool. */
+export function uploadIsPlanned(mode: 'stamped' | 'free', unusedBatches: number): boolean {
+  return mode === 'free' || unusedBatches > 0;
+}
+
 /** A batch the offscreen document may upload with. */
 export type UploadCandidate = {
   batchId: Hex;
@@ -58,9 +70,11 @@ export type UploadCandidate = {
 export type OffscreenUpload = {
   type: 'recall.offscreen.upload';
   id: string;
+  /** `free`: POST /bytes to the gateway (no stamp key, no batch). Default `stamped`. */
+  mode?: 'stamped' | 'free';
   evidence: EvidenceFile;
-  /** The stamp key. Extension-internal only; never logged, never sent to a page. */
-  stampKey: Hex;
+  /** The stamp key (stamped mode only). Extension-internal only; never logged, never sent to a page. */
+  stampKey?: Hex;
   candidates: UploadCandidate[];
   uploadUrl: string;
   gnosisRpcUrl: string;

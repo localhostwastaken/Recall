@@ -1,22 +1,27 @@
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page, type Worker } from '@playwright/test';
 import { randomBytes } from 'node:crypto';
 import { createServer, request as httpRequest, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { createPublicClient, createWalletClient, http, parseEther, sha256, type Hex } from 'viem';
+import { createPublicClient, createWalletClient, erc20Abi, http, parseEther, sha256, type Address, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
+import { gnosis } from 'viem/chains';
 import { canonicalUrl, encodeEvidence, parseResponse, urlHash as hashUrl, type EvidenceFile } from '../../packages/evidence/src/index';
 import {
   LOCAL,
+  XBZZ,
   arkivPublic,
   arkivWallet,
+  buyBatch,
   swarmRootOf,
   uploadFree,
   waitBatchUsable,
   writeCapture,
   type CaptureRow,
 } from '../../packages/net/src/index';
-import { DEVNET_WITNESS_ADDRESS, DEV_PRIVATE_KEY } from '../fixtures/keys';
+import { BEE_COMPOSE_FAUCET_KEY, DEVNET_WITNESS_ADDRESS, DEV_PRIVATE_KEY } from '../fixtures/keys';
+import { launchWithExtension, type ExtensionSession } from '../fixtures/extension';
 import { allowLocalArkiv } from '../fixtures/localCors';
+import { installMockWallet } from '../fixtures/mockWallet';
 import { NOTICE_HOST, record, signEvidence, tamperEvidence } from '../fixtures/verifyRig';
 
 // Settings (§4.8) and the free upload mode's read side (R13), against the REAL local devnet
@@ -43,8 +48,21 @@ const ZERO_BATCH = `0x${'0'.repeat(64)}` as Hex;
 const SETTINGS_KEY = 'recall.web.settings.v1';
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** A gateway stand-in: POST /bytes goes to the local Bee node under the node's own batch. */
-async function startGateway(batchId: Hex): Promise<{ server: Server; url: string }> {
+type Seen = { method: string; url: string; headers: Record<string, string | string[] | undefined> };
+
+/**
+ * A gateway stand-in. `POST /bytes` goes to the local Bee node under the node's own batch (what a
+ * public gateway's free /bytes endpoint does) and `GET /bytes/<ref>` is served from the node.
+ * With `rewriteRefs` the reference it answers is NOT the Swarm root of the bytes (the live finding:
+ * a public gateway's reference differs from the local root for files over 4 KB); it still serves
+ * the bytes under that reference. `seen` records every request it receives.
+ */
+async function startGateway(
+  batchId: Hex,
+  opts: { rewriteRefs?: boolean } = {},
+): Promise<{ server: Server; url: string; seen: Seen[]; realRef(fake: string): string | undefined }> {
+  const seen: Seen[] = [];
+  const real = new Map<string, string>(); // reference answered -> the node's real reference
   const server = createServer((req, res) => {
     const cors = {
       'access-control-allow-origin': '*',
@@ -52,13 +70,24 @@ async function startGateway(batchId: Hex): Promise<{ server: Server; url: string
       'access-control-allow-methods': 'GET, POST, OPTIONS',
     };
     if (req.method === 'OPTIONS') return void res.writeHead(204, cors).end();
+    seen.push({ method: req.method ?? '', url: req.url ?? '', headers: { ...req.headers } });
+    const target = new URL(NODE);
+    const get = /^\/bytes\/([0-9a-f]{64})$/.exec(req.url ?? '');
+    if (req.method === 'GET' && get) {
+      const ref = real.get(get[1]!) ?? get[1]!;
+      const up = httpRequest({ host: target.hostname, port: target.port, path: `/bytes/${ref}`, method: 'GET' }, (back) => {
+        res.writeHead(back.statusCode ?? 502, { ...cors, 'content-type': 'application/octet-stream' });
+        back.pipe(res);
+      });
+      up.on('error', () => res.writeHead(502, cors).end());
+      return void up.end();
+    }
     if (req.method !== 'POST' || req.url !== '/bytes') return void res.writeHead(404, cors).end();
-    const target = new URL(`${NODE}/bytes`);
     const up = httpRequest(
       {
         host: target.hostname,
         port: target.port,
-        path: target.pathname,
+        path: '/bytes',
         method: 'POST',
         headers: {
           'content-type': 'application/octet-stream',
@@ -67,13 +96,26 @@ async function startGateway(batchId: Hex): Promise<{ server: Server; url: string
           'swarm-deferred-upload': 'false',
         },
       },
-      (back) => res.writeHead(back.statusCode ?? 502, { ...cors, 'content-type': 'application/json' }) && back.pipe(res),
+      (back) => {
+        const chunks: Buffer[] = [];
+        back.on('data', (c: Buffer) => chunks.push(c));
+        back.on('end', () => {
+          let body = Buffer.concat(chunks);
+          if (opts.rewriteRefs && back.statusCode === 201) {
+            const { reference } = JSON.parse(body.toString()) as { reference: string };
+            const fake = randomBytes(32).toString('hex');
+            real.set(fake, reference);
+            body = Buffer.from(JSON.stringify({ reference: fake }));
+          }
+          res.writeHead(back.statusCode ?? 502, { ...cors, 'content-type': 'application/json' }).end(body);
+        });
+      },
     );
     up.on('error', () => res.writeHead(502, cors).end());
     req.pipe(up);
   });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
-  return { server, url: `http://127.0.0.1:${(server.address() as AddressInfo).port}` };
+  return { server, url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, seen, realRef: (f) => real.get(f) };
 }
 
 /** Buys a batch from the Bee node's own wallet: the "gateway's own batch". */
@@ -130,7 +172,7 @@ async function ensureArkivGas(): Promise<void> {
 }
 
 let gatewayBatch: Hex;
-let gateway: { server: Server; url: string };
+let gateway: Awaited<ReturnType<typeof startGateway>>;
 /** A capture whose evidence really is on Swarm (uploaded through the gateway stand-in), batch id 0x00…00. */
 let free: Fixture;
 let other: Fixture;
@@ -707,5 +749,351 @@ test.describe('@p3 settings web', () => {
     await saveButton(page).click();
     await expect(statusLine).toContainText('Not connected. Check the ID matches chrome://extensions.');
     await page.evaluate((k) => localStorage.removeItem(k), SETTINGS_KEY);
+  });
+});
+
+const gnosisChain = { ...gnosis, rpcUrls: { default: { http: [LOCAL.gnosis.rpcUrl] } } };
+
+/** Gives the settings wallet xBZZ and xDAI on the Gnosis fork (from the faucet, retrying a lost nonce race). */
+async function fundWallet9(): Promise<void> {
+  const pub = createPublicClient({ transport: http(LOCAL.gnosis.rpcUrl) });
+  const faucet = privateKeyToAccount(BEE_COMPOSE_FAUCET_KEY);
+  const wallet = createWalletClient({ account: faucet, chain: gnosisChain, transport: http(LOCAL.gnosis.rpcUrl) });
+  const send = async (go: (nonce: number) => Promise<Hex>) => {
+    for (let attempt = 0; attempt < 12; attempt++) {
+      const nonce = await pub.getTransactionCount({ address: faucet.address, blockTag: 'pending' });
+      try {
+        await pub.waitForTransactionReceipt({ hash: await go(nonce) });
+        return;
+      } catch (e) {
+        if (!/nonce|already known|underpriced/i.test(String(e))) throw e;
+        await sleep(200 + Math.random() * 300);
+      }
+    }
+    throw new Error('could not fund the settings wallet');
+  };
+  if ((await pub.getBalance({ address: SETTINGS_WALLET_ADDRESS })) < parseEther('0.5')) {
+    await send((nonce) => wallet.sendTransaction({ to: SETTINGS_WALLET_ADDRESS, value: parseEther('1'), nonce }));
+  }
+  const want = 5n * 10n ** 15n; // 0.5 xBZZ: a depth-17 batch for 10 days costs about a tenth of it
+  const have = await pub.readContract({ address: XBZZ, abi: erc20Abi, functionName: 'balanceOf', args: [SETTINGS_WALLET_ADDRESS] });
+  if (have < want) {
+    await send((nonce) =>
+      wallet.writeContract({ address: XBZZ, abi: erc20Abi, functionName: 'transfer', args: [SETTINGS_WALLET_ADDRESS, want - have], nonce }),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The extension's settings (popup panel): upload mode, trusted witnesses, endpoints. Needs the dev
+// build of the extension (see e2e/fixtures/extension.ts) and the devnet witness on :7047.
+// ---------------------------------------------------------------------------------------------
+
+const POPUP_PAGE = `https://${NOTICE_HOST}/notice?run=settings-${Math.random().toString(36).slice(2, 8)}`;
+const OTHER_WITNESS = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8';
+
+let ext: ExtensionSession;
+
+function sw(): Worker {
+  const live = ext.context.serviceWorkers().filter((w) => w.url().includes(ext.extensionId));
+  return live[live.length - 1] ?? ext.serviceWorker;
+}
+
+async function getLocal<T = unknown>(key: string): Promise<T | undefined> {
+  return sw().evaluate(async (k) => {
+    const s = (globalThis as unknown as { chrome: { storage: { local: { get(k: string): Promise<Record<string, unknown>> } } } }).chrome
+      .storage.local;
+    return (await s.get(k))[k];
+  }, key) as Promise<T | undefined>;
+}
+
+async function setLocal(key: string, value: unknown): Promise<void> {
+  await sw().evaluate(
+    async ([k, v]) => {
+      const s = (globalThis as unknown as { chrome: { storage: { local: { set(i: object): Promise<void> } } } }).chrome.storage.local;
+      await s.set({ [k]: v });
+    },
+    [key, value] as const,
+  );
+}
+
+type ExtSettings = {
+  uploadMode: 'stamped' | 'free';
+  pinnedWitnesses: string[];
+  witnessUrl?: string;
+  appUrl: string;
+  arkivRpcUrl: string;
+  arkivAccessKey: string;
+  uploadUrl: string;
+};
+const extSettings = () => getLocal<ExtSettings>('recall.settings');
+
+/** Opens the popup on a tab that shows `page`. */
+async function openPopup(page = POPUP_PAGE): Promise<{ tab: Page; popup: Page }> {
+  const tab = await ext.context.newPage();
+  await tab.goto(page);
+  const id = await sw().evaluate(async (u) => {
+    const tabs = (globalThis as unknown as { chrome: { tabs: { query(q: object): Promise<{ id?: number; url?: string }[]> } } }).chrome
+      .tabs;
+    return (await tabs.query({})).find((t) => t.url === u)?.id ?? null;
+  }, page);
+  expect(id, `a tab showing ${page}`).not.toBeNull();
+  const popup = await ext.context.newPage();
+  await popup.goto(`chrome-extension://${ext.extensionId}/popup.html?tab=${id}`);
+  return { tab, popup };
+}
+
+const openPanel = async (popup: Page) => {
+  await popup.getByRole('button', { name: 'Settings', exact: true }).click();
+  await expect(popup.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
+};
+
+test.describe('@p3 settings extension', () => {
+  test.beforeAll(async () => {
+    test.setTimeout(120_000);
+    ext = await launchWithExtension({ dev: true });
+  });
+  test.afterAll(async () => {
+    await ext?.context.close();
+  });
+  test.beforeEach(async () => {
+    // Every test starts from the dev defaults, with the devnet witness pinned.
+    await setLocal('recall.settings', {
+      net: 'local',
+      witnessUrl: 'http://localhost:7047',
+      pinnedWitnesses: [DEVNET_WITNESS_ADDRESS],
+      appUrl: APP,
+    });
+  });
+
+  test('@p3 settings extension popup: switching the upload mode persists', async () => {
+    const { popup } = await openPopup();
+    await openPanel(popup);
+    const stamped = popup.getByRole('radio', { name: /Prepaid storage/ });
+    const freeMode = popup.getByRole('radio', { name: /Gateway free storage/ });
+    await expect(stamped).toBeChecked();
+    await expect(popup.getByText('Saved in this browser only.')).toBeVisible();
+    // What free mode means is said next to the choice.
+    await expect(popup.getByText(/no batch is taken from your pool/i)).toBeVisible();
+
+    await freeMode.check();
+    await popup.getByRole('button', { name: 'Save settings' }).click();
+    await expect(popup.getByText('Settings saved')).toBeVisible();
+    expect((await extSettings())?.uploadMode).toBe('free');
+
+    // A new popup (a later visit) reads it back.
+    await popup.close();
+    const again = await openPopup();
+    await openPanel(again.popup);
+    await expect(again.popup.getByRole('radio', { name: /Gateway free storage/ })).toBeChecked();
+
+    // And back.
+    await again.popup.getByRole('radio', { name: /Prepaid storage/ }).check();
+    await again.popup.getByRole('button', { name: 'Save settings' }).click();
+    await expect(again.popup.getByText('Settings saved')).toBeVisible();
+    expect((await extSettings())?.uploadMode).toBe('stamped');
+  });
+
+  test('@p3 settings extension popup: an invalid witness address or URL is rejected with the brief copy', async () => {
+    const { popup } = await openPopup();
+    await openPanel(popup);
+    const ADDRESS = 'Enter a 0x address (42 characters).';
+    const URL_COPY = 'Enter a full address starting with https://';
+    const address = popup.getByLabel('Witness address (0x…)');
+    const list = popup.getByRole('list', { name: 'Trusted witnesses' });
+    await expect(list.getByRole('listitem')).toHaveCount(1);
+
+    // 0x7099...: flipping the case of one letter breaks the checksum.
+    const wrongChecksum = OTHER_WITNESS.replace('C51812dc', 'c51812dc');
+    expect(wrongChecksum).not.toBe(OTHER_WITNESS);
+    for (const bad of ['0x1234', 'vitalik.eth', `${OTHER_WITNESS}0`, wrongChecksum]) {
+      await address.fill(bad);
+      await address.blur();
+      await expect(popup.getByText(ADDRESS), bad).toBeVisible();
+      await expect(address).toHaveAttribute('aria-invalid', 'true');
+      await popup.getByRole('button', { name: 'Add witness' }).click();
+      await expect(list.getByRole('listitem')).toHaveCount(1);
+    }
+    // A witness already in the list is not added twice.
+    await address.fill(DEVNET_WITNESS_ADDRESS);
+    await popup.getByRole('button', { name: 'Add witness' }).click();
+    await expect(popup.getByText('That witness is already in the list.')).toBeVisible();
+    await expect(list.getByRole('listitem')).toHaveCount(1);
+
+    // URLs: https only (plain http for localhost / 127.0.0.1), never javascript: or data:.
+    const rpc = popup.getByLabel('Arkiv RPC URL');
+    for (const bad of ['javascript:alert(1)', 'data:text/html,x', 'http://example.org', 'rpc.example.org', 'https://u:p@rpc.example.org']) {
+      await rpc.fill(bad);
+      await rpc.blur();
+      await expect(popup.getByText(URL_COPY).first(), bad).toBeVisible();
+      await expect(rpc).toHaveAttribute('aria-invalid', 'true');
+    }
+    await popup.getByLabel('Witness URL').fill('javascript:alert(1)');
+    await popup.getByLabel('Arkiv access key').fill('two words');
+    const before = await extSettings();
+    await popup.getByRole('button', { name: 'Save settings' }).click();
+    await expect(popup.getByText('Settings saved')).toHaveCount(0);
+    await expect(popup.getByText('Paste only the key, without spaces and not as an address.')).toBeVisible();
+    expect(await extSettings()).toEqual(before); // nothing was saved
+
+    // A good address is added to the draft and saved with the rest.
+    await rpc.fill('http://127.0.0.1:8545');
+    await popup.getByLabel('Witness URL').fill('http://localhost:7047');
+    await popup.getByLabel('Arkiv access key').fill('');
+    await address.fill(OTHER_WITNESS.toLowerCase());
+    await popup.getByRole('button', { name: 'Add witness' }).click();
+    await expect(list.getByRole('listitem')).toHaveCount(2);
+    await popup.getByRole('button', { name: 'Save settings' }).click();
+    await expect(popup.getByText('Settings saved')).toBeVisible();
+    const saved = await extSettings();
+    expect(saved?.pinnedWitnesses).toEqual([DEVNET_WITNESS_ADDRESS, OTHER_WITNESS]);
+    expect(saved?.arkivRpcUrl).toBe('http://127.0.0.1:8545');
+  });
+
+  test('@p3 settings extension popup: changing the pinned witnesses re-runs the witness check', async () => {
+    const { popup } = await openPopup();
+    await expect(popup.getByText('Witness online')).toBeVisible({ timeout: 20_000 });
+    await openPanel(popup);
+
+    // Pin another witness only: the one at the witness URL signs with a key that is no longer pinned.
+    await popup.getByLabel('Witness address (0x…)').fill(OTHER_WITNESS);
+    await popup.getByRole('button', { name: 'Add witness' }).click();
+    await popup.getByRole('button', { name: new RegExp(`^Remove ${DEVNET_WITNESS_ADDRESS}`) }).click();
+    await popup.getByRole('button', { name: 'Save settings' }).click();
+    await expect(popup.getByText('Settings saved')).toBeVisible();
+    await expect(popup.getByText('Witness offline')).toBeVisible({ timeout: 20_000 });
+    expect((await extSettings())?.pinnedWitnesses).toEqual([OTHER_WITNESS]);
+
+    // Pin it again: online.
+    await popup.getByLabel('Witness address (0x…)').fill(DEVNET_WITNESS_ADDRESS.toLowerCase());
+    await popup.getByRole('button', { name: 'Add witness' }).click();
+    await popup.getByRole('button', { name: 'Save settings' }).click();
+    await expect(popup.getByText('Witness online')).toBeVisible({ timeout: 20_000 });
+  });
+
+  test('@p3 settings extension free upload mode uploads without consuming a batch and the record verifies through the R13 path', async () => {
+    test.setTimeout(420_000);
+    await ensureArkivGas();
+    gatewayBatch ??= await buyNodeBatch();
+    // A gateway whose references are not the local Swarm root (a public gateway, over 4 KB).
+    const gw = await startGateway(gatewayBatch, { rewriteRefs: true });
+    try {
+      await setLocal('recall.settings', {
+        net: 'local',
+        witnessUrl: 'http://localhost:7047',
+        pinnedWitnesses: [DEVNET_WITNESS_ADDRESS],
+        appUrl: APP,
+        uploadMode: 'free',
+        uploadUrl: gw.url,
+      });
+
+      // The web app's page, to talk to the extension like the real app does.
+      const app = await ext.context.newPage();
+      await allowLocalArkiv(app);
+      await app.goto(`${APP}/#/`);
+      const api = <T = Record<string, unknown>>(msg: object) =>
+        app.evaluate(
+          ([id, m]) =>
+            new Promise<unknown>((resolve) => {
+              const rt = (window as unknown as { chrome?: { runtime?: { sendMessage?: Function; lastError?: { message?: string } } } }).chrome
+                ?.runtime;
+              if (!rt?.sendMessage) return resolve({ lastError: 'chrome.runtime is not exposed to this page' });
+              rt.sendMessage(id, m, (res: unknown) => resolve(res ?? { lastError: rt.lastError?.message ?? 'no answer' }));
+            }),
+          [ext.extensionId, msg] as const,
+        ) as Promise<T>;
+
+      // A real, unused batch in the pool: free mode must leave it alone.
+      await fundWallet9();
+      const stamp = (await api<{ address: Address; version?: string }>({ type: 'recall.getStampAddress' }));
+      expect(stamp.address).toMatch(/^0x[0-9a-fA-F]{40}$/);
+      expect(stamp.version).toMatch(/^\d+(\.\d+)+/); // the extension says which version it is (Settings shows it)
+      const payer = createWalletClient({ account: privateKeyToAccount(SETTINGS_WALLET_KEY), chain: gnosisChain, transport: http(LOCAL.gnosis.rpcUrl) });
+      const { batchId: poolBatch } = await buyBatch(payer, { owner: stamp.address, depth: 17, days: 10 });
+      const added = await api<{ pool?: { batchId: Hex; used: boolean }[] }>({ type: 'recall.addBatches', batchIds: [poolBatch] });
+      expect(added.pool?.map((b) => b.batchId.toLowerCase())).toContain(poolBatch.toLowerCase());
+      const poolBefore = await getLocal('recall.pool');
+      expect(JSON.stringify(poolBefore)).toContain(poolBatch.toLowerCase().slice(2, 12));
+
+      // A real capture through the real prover and witness.
+      const page = `https://${NOTICE_HOST}/notice?run=free-${Math.random().toString(36).slice(2, 10)}`;
+      const run = () =>
+        sw().evaluate(async (u) => {
+          const g = globalThis as unknown as { recall?: { captureForTest?: (url: string) => Promise<unknown> } };
+          if (!g.recall?.captureForTest) return { error: 'no recall.captureForTest in this build' };
+          return g.recall.captureForTest(u);
+        }, page) as Promise<
+          | { evidence: EvidenceFile; upload?: { status: string; captureId?: string; evidenceRef?: Hex; batchId?: Hex; error?: string } }
+          | { error: string }
+        >;
+      let result = await run();
+      if ('error' in result && /witness busy|too many sessions|did not connect in time|timed out/i.test(result.error)) result = await run();
+      if ('error' in result) throw new Error(`capture failed: ${result.error}`);
+      const up = result.upload!;
+      expect(up.status, up.error).toBe('uploaded');
+      expect(up.batchId).toBe(ZERO_BATCH);
+      const ref = up.evidenceRef!;
+
+      // The pool is exactly as it was, and the gateway got one plain POST /bytes: no stamp, no batch.
+      expect(await getLocal('recall.pool')).toEqual(poolBefore);
+      const posts = gw.seen.filter((r) => r.method === 'POST');
+      expect(posts.map((r) => r.url)).toEqual(['/bytes']);
+      expect(posts[0]!.headers['swarm-postage-batch-id']).toBeUndefined();
+      expect(posts[0]!.headers['swarm-postage-stamp']).toBeUndefined();
+      // This gateway's reference is not the local Swarm root: the root check cannot be what binds it.
+      expect(gw.realRef(ref.slice(2))).toBeDefined();
+      expect(ref.slice(2)).not.toBe(await swarmRootOf(encodeEvidence(result.evidence)));
+
+      // The approval tab: the page skips the Swarm reference check for the zero batch id (free
+      // mode) and still checks A-C itself, then MetaMask (a mock with a real key) publishes.
+      let approval: Page | undefined;
+      await expect
+        .poll(() => (approval = ext.context.pages().find((p) => p.url().includes(`#/approve/${up.captureId}`))), { timeout: 15_000 })
+        .toBeTruthy();
+      await installMockWallet(approval!, {
+        privateKey: SETTINGS_WALLET_KEY,
+        rpcByChainId: { 1337: LOCAL.arkiv.rpcUrl, 100: LOCAL.gnosis.rpcUrl },
+        chainId: 1337,
+      });
+      await allowLocalArkiv(approval!);
+      await approval!.reload();
+      await expect(approval!.getByRole('heading', { level: 1 })).toHaveText('Publish this capture');
+      for (const k of ['A', 'B', 'C']) {
+        await expect(approval!.locator(`.approve-check-list [data-check="${k}"] .badge`)).toHaveAttribute('data-status', 'pass');
+      }
+      await approval!.locator('main').getByRole('button', { name: 'Connect MetaMask' }).click();
+      await approval!.getByRole('button', { name: 'Publish record' }).click();
+      await expect(approval!.getByRole('heading', { name: 'Published', exact: true })).toBeVisible({ timeout: 60_000 });
+      const key = (await approval!.locator('.approve-record .mono-value').first().getAttribute('title')) as Hex;
+      expect(key).toMatch(/^0x[0-9a-f]{64}$/i);
+      await approval!.close();
+
+      // The record on Arkiv says "free" (zero batch id) and the gateway's reference.
+      const entity = await arkivPublic(LOCAL).getEntity(key);
+      expect(entity).toBeTruthy();
+
+      // The page the record's address points at, with the DEFAULT download gateway: it does not
+      // have this gateway's reference, so the evidence is unavailable (never a pass).
+      await app.goto(capturePage(key));
+      await expect(status(app, 'A')).toHaveAttribute('data-status', 'unavailable', { timeout: 30_000 });
+      await expect(verdict(app)).not.toHaveAttribute('data-verdict', 'pass');
+
+      // Settings: the gateway as download gateway. The evidence downloads and verifies through the
+      // R13 path (A-C plus the facts matching the record), though the reference is not the root.
+      await openSettings(app);
+      await app.getByLabel('Swarm download gateway').fill(gw.url);
+      await app.getByRole('button', { name: 'Save settings' }).click();
+      await expect(app.getByText('Settings saved')).toBeVisible();
+      await app.goto(capturePage(key));
+      for (const id of ['A', 'B', 'C'] as const) {
+        await expect(status(app, id), `check ${id}`).toHaveAttribute('data-status', 'pass', { timeout: 30_000 });
+      }
+      await expect(verdict(app)).toHaveAttribute('data-verdict', 'pass');
+      expect(gw.seen.some((r) => r.method === 'GET' && r.url === `/bytes/${ref.slice(2)}`)).toBe(true);
+      await app.evaluate((k) => localStorage.removeItem(k), SETTINGS_KEY);
+    } finally {
+      gw.server.closeAllConnections();
+      gw.server.close();
+    }
   });
 });

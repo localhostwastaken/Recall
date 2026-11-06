@@ -19,6 +19,7 @@ import {
   USABLE_WAIT_MS,
   canonicalEvidence,
   uploadGate,
+  uploadIsPlanned,
   type OffscreenUpload,
   type UploadOutcome,
 } from './uploadParts';
@@ -143,8 +144,9 @@ export async function startCapture(
       await finish(failure(base, 'the witness is offline', 'witness_offline'));
       return { id: base.id };
     }
-    // With no batch in the pool the capture is still proved and checked, but not uploaded.
-    const uploadPlanned = unusedBatches(await loadPool()).length > 0;
+    // With no batch in the pool the capture is still proved and checked, but not uploaded
+    // (free upload mode needs no batch, so it is always uploaded).
+    const uploadPlanned = uploadIsPlanned((await loadSettings()).uploadMode, unusedBatches(await loadPool()).length);
     const lookupPlanned = (await loadSettings()).pinnedWitnesses.length > 0;
     await area().set({
       [CAPTURE_STATE_KEY]: {
@@ -323,6 +325,9 @@ const errorText = (err: unknown) => (err instanceof Error ? err.message : String
  * Step 4: hands the checked evidence, the stamp key and the unused batches to the
  * offscreen document, which picks a usable batch, stamps and uploads. Runs inside the
  * state chain. With an empty pool the capture ends without an upload.
+ *
+ * Free upload mode (settings) sends neither the stamp key nor any batch: the offscreen
+ * document posts the evidence to the gateway's own storage, and the pool is not read.
  */
 async function beginUpload(
   base: Base,
@@ -330,8 +335,10 @@ async function beginUpload(
   checks: CheckSummary,
   lookupPlanned?: boolean,
 ): Promise<void> {
-  const candidates = unusedBatches(await loadPool());
-  if (candidates.length === 0) {
+  const settings = await loadSettings();
+  const free = settings.uploadMode === 'free';
+  const candidates = free ? [] : unusedBatches(await loadPool());
+  if (!free && candidates.length === 0) {
     await finishDone(base, evidence, checks, { status: 'no_storage' });
     return;
   }
@@ -348,15 +355,16 @@ async function beginUpload(
     } satisfies CaptureState,
   });
   try {
-    const net = netConfigFor(await loadSettings());
+    const net = netConfigFor(settings);
     await ensureOffscreen();
     const msg: OffscreenUpload = {
       type: 'recall.offscreen.upload',
       id: base.id,
+      mode: free ? 'free' : 'stamped',
       // Already canonical after the checks; a retry reads it back from session storage,
       // whose objects come back with sorted keys, so it is put in canonical form again.
       evidence: canonicalEvidence(evidence),
-      stampKey: await stampKey(),
+      ...(free ? {} : { stampKey: await stampKey() }),
       candidates: candidates.map((b) => ({
         batchId: b.batchId,
         depth: b.depth,

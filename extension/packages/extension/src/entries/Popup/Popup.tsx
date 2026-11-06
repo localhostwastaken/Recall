@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
-import { LoaderCircle } from 'lucide-react';
+import { LoaderCircle, Settings as SettingsIcon } from 'lucide-react';
 import { StatusBadge } from '../../recall/ui/StatusBadge';
 import { WitnessChip, type WitnessState } from '../../recall/ui/WitnessChip';
 import { Notice } from '../../recall/ui/Notice';
 import { Steps, type StepState } from '../../recall/ui/Steps';
 import { CheckRow } from '../../recall/ui/CheckRow';
 import { MonoValue } from '../../recall/ui/MonoValue';
-import { loadSettings } from '../../recall/settings';
+import { SETTINGS_KEY, loadSettings, type UploadMode } from '../../recall/settings';
+import { FREE_BATCH_ID } from '../../recall/uploadParts';
+import { SettingsPanel } from './SettingsPanel';
 import { CAPTURE_STATE_KEY, isLiveRunning, type CaptureState } from '../../recall/jobState';
 import { POOL_KEY, parsePool, storageState, type StorageState } from '../../recall/poolState';
 import type { PopupRequest } from '../../recall/messages';
@@ -93,6 +95,26 @@ function useStorageState(): StorageState | undefined {
   return state;
 }
 
+/** The upload mode of the settings, kept live (the default until the settings are read). */
+function useUploadMode(): UploadMode {
+  const [mode, setMode] = useState<UploadMode>('stamped');
+  useEffect(() => {
+    loadSettings()
+      .then((s) => setMode(s.uploadMode))
+      .catch(() => undefined);
+    const onChanged = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area === 'local' && SETTINGS_KEY in changes) {
+        loadSettings()
+          .then((s) => setMode(s.uploadMode))
+          .catch(() => undefined);
+      }
+    };
+    chrome.storage.onChanged.addListener(onChanged);
+    return () => chrome.storage.onChanged.removeListener(onChanged);
+  }, []);
+  return mode;
+}
+
 /** Opens the web app's Buy storage page in a new tab. */
 async function openBuyStorage(): Promise<void> {
   const { appUrl } = await loadSettings();
@@ -107,7 +129,9 @@ async function openApp(build: (appUrl: string) => string): Promise<void> {
 
 /** The verified history of the page, from the service worker (undefined while loading). */
 function useEarlierCaptures(url: string | undefined): EarlierCaptures | undefined {
-  const [state, setState] = useState<{ url: string; value: EarlierCaptures } | undefined>(undefined);
+  const [state, setState] = useState<{ url: string; value: EarlierCaptures } | undefined>(
+    undefined,
+  );
   useEffect(() => {
     if (!url) return;
     let live = true;
@@ -183,8 +207,12 @@ export function Popup() {
   const [page, setPage] = useState<PageInfo | null | undefined>(undefined);
   const [witness, setWitness] = useState<WitnessState>('checking');
   const [copied, setCopied] = useState(false);
+  const [view, setView] = useState<'main' | 'settings'>('main');
   const job = useCaptureState();
-  const storage = useStorageState();
+  const poolStorage = useStorageState();
+  // Free upload mode takes nothing from the pool, so an empty or expired pool is not a problem.
+  const freeMode = useUploadMode() === 'free';
+  const storage: StorageState | undefined = freeMode ? 'ok' : poolStorage;
   const noStorage = storageNotice(storage);
   // Only pages the extension can capture have a history to look up.
   const capturable = page && !pageBlockedReason(page.url) ? page.url : undefined;
@@ -194,7 +222,9 @@ export function Popup() {
   // settings URL; online needs /info within 2 s from a pinned signer.
   const probeWitness = useCallback(() => {
     send({ type: 'recall.witnessStatus' })
-      .then((r) => setWitness((r as { online?: boolean } | undefined)?.online ? 'online' : 'offline'))
+      .then((r) =>
+        setWitness((r as { online?: boolean } | undefined)?.online ? 'online' : 'offline'),
+      )
       .catch(() => setWitness('offline'));
   }, []);
   const checkWitness = useCallback(() => {
@@ -227,7 +257,8 @@ export function Popup() {
   const cancel = useCallback(() => void send({ type: 'recall.cancelCapture' }), []);
   const retryUpload = useCallback(() => void send({ type: 'recall.retryUpload' }), []);
   const buyStorage = useCallback(() => void openBuyStorage(), []);
-  const openSettings = useCallback(() => void chrome.runtime.openOptionsPage(), []);
+  // The settings are a panel of this popup (the options page has the same form).
+  const openSettings = useCallback(() => setView('settings'), []);
 
   let disabledReason: string | null = null;
   let blocked: string | null;
@@ -245,169 +276,196 @@ export function Popup() {
     <div className="popup">
       <header className="popup-header">
         <h1 className="popup-title">Recall</h1>
-        <WitnessChip state={witness} />
+        <div className="popup-header-tools">
+          <WitnessChip state={witness} />
+          {view === 'main' ? (
+            <button type="button" className="icon-btn" aria-label="Settings" onClick={openSettings}>
+              <SettingsIcon size={20} strokeWidth={1.75} aria-hidden="true" />
+            </button>
+          ) : null}
+        </div>
       </header>
 
-      <main className="popup-body">
-        <section aria-labelledby="this-page">
-          <h2 id="this-page" className="section-label">
-            This page
-          </h2>
-          {page === undefined ? (
-            <p className="muted">Reading the current tab…</p>
-          ) : page === null ? (
-            <p className="muted">No page to capture in this tab.</p>
-          ) : (
-            <>
-              <p className="page-host">{page.host}</p>
-              <p className="page-url mono" title={page.url}>
-                {page.url}
-              </p>
-            </>
-          )}
-        </section>
-
-        <hr className="rule" />
-
-        {mine?.status === 'running' && running ? (
-          <section aria-labelledby="capture-progress">
-            <h2 id="capture-progress" className="section-label">
-              Capture progress
-            </h2>
-            <Steps
-              steps={(({ labels, current }) =>
-                labels.map((label, i) => ({
-                  label,
-                  state: (i < current ? 'done' : i === current ? 'active' : 'waiting') as StepState,
-                })))(jobSteps(mine))}
-            />
-            <progress className="progress" aria-label="Capture progress" />
-            <p className="progress-text">
-              {formatElapsed(now - mine.startedAt)} elapsed · usually 15–30 s
-            </p>
-            {mine.step < 4 ? (
-              <div className="popup-actions">
-                <button type="button" className="btn btn-secondary" onClick={cancel}>
-                  Cancel capture
-                </button>
-              </div>
-            ) : (
-              // Stamped chunks cannot be taken back, so the upload always runs to the end.
-              <p className="popup-note muted">The upload can't be cancelled once it starts.</p>
-            )}
-            <p className="popup-note muted">You can close this popup. The capture keeps running.</p>
-          </section>
-        ) : mine?.status === 'done' ? (
-          <CaptureResult
-            job={mine}
-            storage={storage ?? 'empty'}
-            copied={copied}
-            openSettings={openSettings}
-            onBuyStorage={buyStorage}
-            onRetryUpload={retryUpload}
-            onCopy={() => {
-              const u = mine.upload;
-              void navigator.clipboard
-                .writeText(
-                  JSON.stringify({
-                    url: mine.url,
-                    ...(u?.status === 'failed' ? { error: u.error } : {}),
-                  }),
-                )
-                .then(() => setCopied(true));
+      {view === 'settings' ? (
+        <main className="popup-body">
+          <SettingsPanel
+            onBack={() => setView('main')}
+            onSaved={(_s, info) => {
+              // New pins or a new witness URL: look at the witness again.
+              if (info.witnessChanged) checkWitness();
             }}
           />
-        ) : mine && mine.status !== 'running' ? (
-          <section aria-labelledby="capture-result">
-            <h2 id="capture-result" className="section-label">
-              Capture result
-            </h2>
-            <CaptureError
-              job={mine}
-              host={page?.host ?? ''}
-              copied={copied}
-              onOk={dismiss}
-              onRetry={retry}
-              onSettings={openSettings}
-              onCopy={() => {
-                void navigator.clipboard
-                  .writeText(
-                    JSON.stringify({
-                      url: mine.url,
-                      ...('error' in mine ? { error: mine.error, code: mine.code } : {}),
-                    }),
-                  )
-                  .then(() => setCopied(true));
-              }}
-            />
-          </section>
-        ) : witness === 'offline' ? (
-          <section aria-labelledby="capture-result">
-            <h2 id="capture-result" className="section-label">
-              Witness
-            </h2>
-            <Notice
-              kind="error"
-              title="Witness offline"
-              actions={
+        </main>
+      ) : (
+        <>
+          <main className="popup-body">
+            <section aria-labelledby="this-page">
+              <h2 id="this-page" className="section-label">
+                This page
+              </h2>
+              {page === undefined ? (
+                <p className="muted">Reading the current tab…</p>
+              ) : page === null ? (
+                <p className="muted">No page to capture in this tab.</p>
+              ) : (
                 <>
-                  <button type="button" className="btn btn-secondary" onClick={checkWitness}>
-                    Try again
-                  </button>
-                  <button type="button" className="btn btn-ghost" onClick={openSettings}>
-                    Witness settings
-                  </button>
+                  <p className="page-host">{page.host}</p>
+                  <p className="page-url mono" title={page.url}>
+                    {page.url}
+                  </p>
                 </>
-              }
-            >
-              New captures are paused until the witness is back. Existing captures can still be
-              verified by anyone.
-            </Notice>
-          </section>
-        ) : noStorage ? (
-          <section aria-labelledby="capture-result">
-            <h2 id="capture-result" className="section-label">
-              Storage
-            </h2>
-            <Notice
-              kind="warn"
-              title={noStorage.title}
-              actions={
-                <button type="button" className="btn btn-secondary" onClick={buyStorage}>
-                  Buy storage
-                </button>
-              }
-            >
-              {noStorage.body}
-            </Notice>
-          </section>
-        ) : capturable ? (
-          <EarlierCapturesView value={earlier} />
-        ) : null}
-      </main>
+              )}
+            </section>
 
-      <footer className="popup-footer">
-        <button
-          type="button"
-          className="btn btn-primary btn-block"
-          disabled={busy || disabledReason !== null}
-          aria-busy={busy}
-          aria-describedby="capture-helper"
-          onClick={capture}
-        >
-          {busy ? (
-            <>
-              <LoaderCircle size={16} strokeWidth={1.75} aria-hidden="true" className="spin" />
-              Capturing…
-            </>
-          ) : (
-            'Capture this page'
-          )}
-        </button>
-        <p id="capture-helper" className="popup-helper muted">
-          {helper}
-        </p>
-      </footer>
+            <hr className="rule" />
+
+            {mine?.status === 'running' && running ? (
+              <section aria-labelledby="capture-progress">
+                <h2 id="capture-progress" className="section-label">
+                  Capture progress
+                </h2>
+                <Steps
+                  steps={(({ labels, current }) =>
+                    labels.map((label, i) => ({
+                      label,
+                      state: (i < current
+                        ? 'done'
+                        : i === current
+                          ? 'active'
+                          : 'waiting') as StepState,
+                    })))(jobSteps(mine))}
+                />
+                <progress className="progress" aria-label="Capture progress" />
+                <p className="progress-text">
+                  {formatElapsed(now - mine.startedAt)} elapsed · usually 15–30 s
+                </p>
+                {mine.step < 4 ? (
+                  <div className="popup-actions">
+                    <button type="button" className="btn btn-secondary" onClick={cancel}>
+                      Cancel capture
+                    </button>
+                  </div>
+                ) : (
+                  // Stamped chunks cannot be taken back, so the upload always runs to the end.
+                  <p className="popup-note muted">The upload can't be cancelled once it starts.</p>
+                )}
+                <p className="popup-note muted">
+                  You can close this popup. The capture keeps running.
+                </p>
+              </section>
+            ) : mine?.status === 'done' ? (
+              <CaptureResult
+                job={mine}
+                storage={storage ?? 'empty'}
+                copied={copied}
+                openSettings={openSettings}
+                onBuyStorage={buyStorage}
+                onRetryUpload={retryUpload}
+                onCopy={() => {
+                  const u = mine.upload;
+                  void navigator.clipboard
+                    .writeText(
+                      JSON.stringify({
+                        url: mine.url,
+                        ...(u?.status === 'failed' ? { error: u.error } : {}),
+                      }),
+                    )
+                    .then(() => setCopied(true));
+                }}
+              />
+            ) : mine && mine.status !== 'running' ? (
+              <section aria-labelledby="capture-result">
+                <h2 id="capture-result" className="section-label">
+                  Capture result
+                </h2>
+                <CaptureError
+                  job={mine}
+                  host={page?.host ?? ''}
+                  copied={copied}
+                  onOk={dismiss}
+                  onRetry={retry}
+                  onSettings={openSettings}
+                  onCopy={() => {
+                    void navigator.clipboard
+                      .writeText(
+                        JSON.stringify({
+                          url: mine.url,
+                          ...('error' in mine ? { error: mine.error, code: mine.code } : {}),
+                        }),
+                      )
+                      .then(() => setCopied(true));
+                  }}
+                />
+              </section>
+            ) : witness === 'offline' ? (
+              <section aria-labelledby="capture-result">
+                <h2 id="capture-result" className="section-label">
+                  Witness
+                </h2>
+                <Notice
+                  kind="error"
+                  title="Witness offline"
+                  actions={
+                    <>
+                      <button type="button" className="btn btn-secondary" onClick={checkWitness}>
+                        Try again
+                      </button>
+                      <button type="button" className="btn btn-ghost" onClick={openSettings}>
+                        Witness settings
+                      </button>
+                    </>
+                  }
+                >
+                  New captures are paused until the witness is back. Existing captures can still be
+                  verified by anyone.
+                </Notice>
+              </section>
+            ) : noStorage ? (
+              <section aria-labelledby="capture-result">
+                <h2 id="capture-result" className="section-label">
+                  Storage
+                </h2>
+                <Notice
+                  kind="warn"
+                  title={noStorage.title}
+                  actions={
+                    <button type="button" className="btn btn-secondary" onClick={buyStorage}>
+                      Buy storage
+                    </button>
+                  }
+                >
+                  {noStorage.body}
+                </Notice>
+              </section>
+            ) : capturable ? (
+              <EarlierCapturesView value={earlier} />
+            ) : null}
+          </main>
+
+          <footer className="popup-footer">
+            <button
+              type="button"
+              className="btn btn-primary btn-block"
+              disabled={busy || disabledReason !== null}
+              aria-busy={busy}
+              aria-describedby="capture-helper"
+              onClick={capture}
+            >
+              {busy ? (
+                <>
+                  <LoaderCircle size={16} strokeWidth={1.75} aria-hidden="true" className="spin" />
+                  Capturing…
+                </>
+              ) : (
+                'Capture this page'
+              )}
+            </button>
+            <p id="capture-helper" className="popup-helper muted">
+              {helper}
+            </p>
+          </footer>
+        </>
+      )}
     </div>
   );
 }
@@ -510,8 +568,15 @@ function CaptureResult({
                 Evidence <MonoValue value={job.upload.evidenceRef} />
               </span>
             ) : null}
+            {job.upload?.status === 'uploaded' && job.upload.batchId === FREE_BATCH_ID ? (
+              <span className="upload-ref">
+                Stored on the gateway's free storage: no known end date, and it can't be kept alive.
+              </span>
+            ) : null}
             {job.upload?.status === 'confirmation' ? (
-              <span className="upload-ref">Finish in the approval tab to publish the confirmation.</span>
+              <span className="upload-ref">
+                Finish in the approval tab to publish the confirmation.
+              </span>
             ) : null}
           </Notice>
         </div>

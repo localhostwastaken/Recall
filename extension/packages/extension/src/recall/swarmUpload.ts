@@ -3,7 +3,7 @@
 // service worker, so bee-js never lands in the worker bundle.
 import { createPublicClient, http, type Hex, type PublicClient } from 'viem';
 import { encodeEvidence } from '@recall/evidence';
-import { Stamper, uploadStamped } from '@recall/net/swarm';
+import { Stamper, uploadFree, uploadStamped } from '@recall/net/swarm';
 import { withTimeout } from './captureParts';
 import { formatTtl, lastPrice, ttlSeconds } from './batchChain';
 import {
@@ -14,6 +14,7 @@ import {
   type StamperState,
 } from './poolState';
 import {
+  FREE_BATCH_ID,
   UPLOAD_TIMEOUT_MS,
   type OffscreenUpload,
   type UploadCandidate,
@@ -31,6 +32,8 @@ export type UploadDeps = {
   /** Seconds of storage a batch has left, read on Gnosis; null when expired or unknown. */
   batchTtl: (batchId: Hex) => Promise<bigint | null>;
   upload: typeof uploadStamped;
+  /** Free mode: the gateway's own storage (POST /bytes). */
+  uploadFree: typeof uploadFree;
   sleep: (ms: number) => Promise<void>;
   now: () => number;
 };
@@ -179,6 +182,7 @@ async function stampAndUpload(
 > {
   let real: Stamper;
   try {
+    if (!req.stampKey) throw new Error('no stamp key');
     real = c.stamper?.length
       ? Stamper.fromState(req.stampKey, c.batchId, decodeStamperState(c.stamper), c.depth)
       : Stamper.fromBlank(req.stampKey, c.batchId, c.depth);
@@ -226,6 +230,35 @@ export function ttlReader(pub: PublicClient): (batchId: Hex) => Promise<bigint |
   };
 }
 
+/**
+ * Free upload mode: the evidence goes to the gateway's own free storage with `POST /bytes`.
+ * No batch is read, stamped or marked (the pool is not touched: `updates` is always empty) and
+ * the result carries the all-zero batch id. The reference is whatever the gateway answers (for
+ * files over 4 KB it can differ from the local Swarm root, so it is not compared here: the web
+ * app binds such records another way). Never throws.
+ */
+async function uploadToGateway(
+  uploadUrl: string,
+  bytes: Uint8Array,
+  d: UploadDeps,
+  signal?: AbortSignal,
+): Promise<UploadOutcome> {
+  const fail = (error: string): UploadOutcome => ({ ok: false, code: 'failed', error, updates: [] });
+  if (signal?.aborted) return fail('upload cancelled');
+  try {
+    const ref = await withTimeout(
+      d.uploadFree(bytes, uploadUrl),
+      UPLOAD_TIMEOUT_MS,
+      `the upload did not finish within ${UPLOAD_TIMEOUT_MS / 1000} s`,
+    );
+    if (!/^0x[0-9a-fA-F]{64}$/.test(ref)) return fail('the upload to Swarm failed: the gateway returned no valid reference');
+    return { ok: true, batchId: FREE_BATCH_ID, evidenceRef: ref.toLowerCase() as Hex, updates: [] };
+  } catch (err) {
+    if (signal?.aborted) return fail('upload cancelled');
+    return fail(`the upload to Swarm failed: ${message(err)}`);
+  }
+}
+
 const defaultTtlReader = (gnosisRpcUrl: string) =>
   ttlReader(createPublicClient({ transport: http(gnosisRpcUrl) }) as PublicClient);
 
@@ -259,6 +292,7 @@ export async function uploadEvidence(
       (() => createPublicClient({ transport: http(req.gnosisRpcUrl) }).getBlockNumber()),
     batchTtl: deps.batchTtl ?? defaultTtlReader(req.gnosisRpcUrl),
     upload: deps.upload ?? uploadStamped,
+    uploadFree: deps.uploadFree ?? uploadFree,
     sleep: deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))),
     now: deps.now ?? Date.now,
   };
@@ -278,6 +312,8 @@ export async function uploadEvidence(
   } catch (err) {
     return fail('failed', `the evidence could not be encoded: ${message(err)}`);
   }
+
+  if (req.mode === 'free') return uploadToGateway(req.uploadUrl, bytes, d, signal);
 
   const deadline = d.now() + req.waitMs;
   const ttls: TtlCache = new Map();
