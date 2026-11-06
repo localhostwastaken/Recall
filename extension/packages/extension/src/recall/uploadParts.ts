@@ -9,6 +9,8 @@ import type { BatchUpdate, StamperState } from './poolState';
 export const USABLE_WAIT_MS = 120_000;
 /** How long the stamped upload itself may take. */
 export const UPLOAD_TIMEOUT_MS = 60_000;
+/** How long the upload of a repository snapshot (up to 25 MB) may take. */
+export const ATTACHMENT_UPLOAD_TIMEOUT_MS = 10 * 60_000;
 
 /**
  * Evidence is uploaded only when checks A and B passed and C did not fail (an unknown
@@ -79,6 +81,12 @@ export type OffscreenUpload = {
   uploadUrl: string;
   gnosisRpcUrl: string;
   waitMs: number;
+  /**
+   * A repository snapshot (R46) to upload after the evidence, with the same batch (stamped) or
+   * the gateway (free). The offscreen document reads its bytes from IndexedDB by captureId and
+   * uploads them only if they still hash to `sha256` and have `size` bytes.
+   */
+  attachment?: { captureId: string; sha256: string; size: number };
 };
 
 /**
@@ -87,7 +95,7 @@ export type OffscreenUpload = {
  * whatever became of the job.
  */
 export type UploadOutcome =
-  | { ok: true; batchId: Hex; evidenceRef: Hex; updates: BatchUpdate[] }
+  | { ok: true; batchId: Hex; evidenceRef: Hex; attachmentRef?: Hex; updates: BatchUpdate[] }
   | {
       ok: false;
       /** not_ready: no live batch became usable in time; no_storage: every batch is dead. */

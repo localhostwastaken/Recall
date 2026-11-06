@@ -19,13 +19,15 @@ import { stampKey } from './stamp';
 import {
   CAPTURE_ID,
   allPending,
+  isUploaded,
+  lostAfter,
   newCaptureId,
   pendingLocked,
   pendingUploadState,
   readPending,
-  UPLOAD_LOST_AFTER_MS,
   updatePending,
   writePending,
+  type PendingRecord,
 } from './pending';
 import { USABLE_WAIT_MS, canonicalEvidence, type OffscreenUpload, type UploadOutcome } from './uploadParts';
 
@@ -33,10 +35,16 @@ const errorText = (err: unknown) => (err instanceof Error ? err.message : String
 
 export const NO_BATCH = 'the extension has no storage batch to upload with';
 export const UPLOAD_BUSY = 'another capture is uploading right now; try again in a moment';
+export const NO_DEEP_BATCH =
+  'a repository snapshot needs a storage batch of depth 18 or more, and the extension has none';
+export const SNAPSHOT_NOT_UPLOADED = 'the repository snapshot was not uploaded';
 
-/** Uploads sent to the offscreen document whose result has not come back (this worker's life), and when. */
+/** The storage depth a pending record's stamped upload needs (0: any). */
+const depthNeeded = (rec: PendingRecord) => (rec.attachment ? Math.max(18, rec.needsDepth ?? 18) : 0);
+
+/** Uploads sent to the offscreen document whose result has not come back (this worker's life), and until when. */
 const inFlight = new Map<string, number>();
-const uploadRunning = () => [...inFlight.values()].some((at) => Date.now() - at < UPLOAD_LOST_AFTER_MS);
+const uploadRunning = () => [...inFlight.values()].some((until) => Date.now() < until);
 
 /** Sends to the offscreen document, retrying briefly while a new document is still loading. */
 async function toOffscreen(msg: OffscreenUpload): Promise<{ accepted?: boolean } | undefined> {
@@ -91,7 +99,7 @@ export async function usableBatches(settings: Settings, pool?: PoolBatch[]): Pro
 
 export type UploadAnswer =
   | { status: 'uploading'; mode: 'stamped' | 'free' }
-  | { status: 'uploaded'; evidenceRef: Hex; batchId: Hex }
+  | { status: 'uploaded'; evidenceRef: Hex; batchId: Hex; attachmentRef?: Hex }
   | { error: string };
 
 /**
@@ -121,8 +129,10 @@ export async function uploadPending(captureId: unknown, mode: unknown): Promise<
       return { error: UPLOAD_BUSY };
     }
     // Read here, with no upload running: the pool holds every height stamped so far.
-    const candidates = mode === 'free' ? [] : await usableBatches(settings);
-    if (mode === 'stamped' && candidates.length === 0) return { error: NO_BATCH };
+    // A repository snapshot needs a deep batch (R46): both files go into the same one.
+    const depth = depthNeeded(rec);
+    const candidates = mode === 'free' ? [] : (await usableBatches(settings)).filter((b) => b.depth >= depth);
+    if (mode === 'stamped' && candidates.length === 0) return { error: depth ? NO_DEEP_BATCH : NO_BATCH };
     const attempt = newCaptureId().slice(0, 12);
     await writePending({ ...rec, upload: { status: 'uploading', mode, at: Date.now(), attempt } });
     const net = netConfigFor(settings);
@@ -142,8 +152,11 @@ export async function uploadPending(captureId: unknown, mode: unknown): Promise<
       uploadUrl: net.swarm.uploadUrl,
       gnosisRpcUrl: net.gnosis.rpcUrl,
       waitMs: USABLE_WAIT_MS,
+      ...(rec.attachment
+        ? { attachment: { captureId, sha256: rec.attachment.sha256, size: rec.attachment.size } }
+        : {}),
     };
-    inFlight.set(msg.id, Date.now());
+    inFlight.set(msg.id, Date.now() + lostAfter(rec));
     return { status: 'uploading', mode };
   });
   const sending = msg as OffscreenUpload | null;
@@ -164,7 +177,7 @@ export async function uploadPending(captureId: unknown, mode: unknown): Promise<
 /** Ends the attempt `attempt` as failed, unless a newer attempt (or the upload) took its place. */
 function failed(captureId: string, attempt: string, reason: string, mode: 'stamped' | 'free'): Promise<unknown> {
   return updatePending(captureId, (rec) =>
-    rec.evidenceRef || rec.upload?.status !== 'uploading' || rec.upload.attempt !== attempt
+    isUploaded(rec) || rec.upload?.status !== 'uploading' || rec.upload.attempt !== attempt
       ? null
       : { ...rec, upload: { status: 'failed', reason, at: Date.now(), mode } },
   );
@@ -193,11 +206,22 @@ export async function onPendingUploadResult(id: string, outcome: UploadOutcome):
     await failed(captureId, attempt, reason, mode);
     return;
   }
+  const rec = await readPending(captureId);
+  if (rec?.attachment && !outcome.attachmentRef) {
+    await failed(captureId, attempt, SNAPSHOT_NOT_UPLOADED, rec.upload?.mode === 'free' ? 'free' : 'stamped');
+    return;
+  }
   await updatePending(captureId, (rec) => {
-    if (rec.kind !== 'capture' || rec.evidenceRef) return null;
+    if (rec.kind !== 'capture' || isUploaded(rec)) return null;
     if (rec.upload?.status !== 'uploading' || rec.upload.attempt !== attempt) return null;
+    if (rec.attachment && !outcome.attachmentRef) return null;
     const { upload: _done, ...rest } = rec;
-    return { ...rest, evidenceRef: outcome.evidenceRef, batchId: outcome.batchId };
+    return {
+      ...rest,
+      evidenceRef: outcome.evidenceRef,
+      batchId: outcome.batchId,
+      ...(rec.attachment && outcome.attachmentRef ? { attachmentRef: outcome.attachmentRef } : {}),
+    };
   });
 }
 
@@ -210,8 +234,9 @@ export async function pendingAnswer(captureId: unknown): Promise<Record<string, 
   return {
     ...rest,
     upload: rec.kind === 'capture' ? pendingUploadState(rec) : { status: 'none' },
-    // Whether a batch in the pool, with at least 2 days left, can take the upload now (stamped).
-    storage: (await usableBatches(settings)).length > 0 ? 'ok' : 'empty',
+    // Whether a batch in the pool, with at least 2 days left (and deep enough for a repository
+    // snapshot), can take the upload now (stamped).
+    storage: (await usableBatches(settings)).some((b) => b.depth >= depthNeeded(rec)) ? 'ok' : 'empty',
     // `free`: the settings allow the gateway's free storage (the demo fallback).
     uploadMode: settings.uploadMode,
   };

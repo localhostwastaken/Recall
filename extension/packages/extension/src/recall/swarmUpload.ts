@@ -13,7 +13,10 @@ import {
   type BatchUpdate,
   type StamperState,
 } from './poolState';
+import { getAttachment } from './attachmentStore';
+import { sha256Hex } from './gitRepo';
 import {
+  ATTACHMENT_UPLOAD_TIMEOUT_MS,
   FREE_BATCH_ID,
   UPLOAD_TIMEOUT_MS,
   type OffscreenUpload,
@@ -36,7 +39,12 @@ export type UploadDeps = {
   uploadFree: typeof uploadFree;
   sleep: (ms: number) => Promise<void>;
   now: () => number;
+  /** A repository snapshot's bytes, by captureId (IndexedDB). */
+  loadAttachment: (captureId: string) => Promise<Uint8Array | null>;
 };
+
+/** One file of an upload, and how long its upload may take. */
+type UploadFile = { bytes: Uint8Array; timeoutMs: number };
 
 type BeeView = { starts: Map<string, number>; block: number };
 
@@ -178,12 +186,12 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e)).spl
  */
 async function stampAndUpload(
   c: UploadCandidate,
-  bytes: Uint8Array,
+  files: UploadFile[],
   req: OffscreenUpload,
   d: UploadDeps,
   signal?: AbortSignal,
 ): Promise<
-  | { ok: true; ref: Hex; stamper: StamperState }
+  | { ok: true; refs: Hex[]; stamper: StamperState }
   | { ok: false; error: unknown; stamper: StamperState }
 > {
   let real: Stamper;
@@ -203,15 +211,20 @@ async function stampAndUpload(
     },
   } as unknown as Stamper;
   try {
-    const ref = await withTimeout(
-      d.upload(bytes, { uploadUrl: req.uploadUrl, stamper: guard }),
-      UPLOAD_TIMEOUT_MS,
-      `the upload did not finish within ${UPLOAD_TIMEOUT_MS / 1000} s`,
-    );
+    // Every file with the same batch, one after the other (the evidence first).
+    const refs: Hex[] = [];
+    for (const f of files) {
+      const ref = await withTimeout(
+        d.upload(f.bytes, { uploadUrl: req.uploadUrl, stamper: guard }),
+        f.timeoutMs,
+        `the upload did not finish within ${f.timeoutMs / 1000} s`,
+      );
+      refs.push(ref.toLowerCase() as Hex);
+    }
     stopped = true;
     return {
       ok: true,
-      ref: ref.toLowerCase() as Hex,
+      refs,
       stamper: encodeStamperState(real.getState()),
     };
   } catch (error) {
@@ -245,20 +258,31 @@ export function ttlReader(pub: PublicClient): (batchId: Hex) => Promise<bigint |
  */
 async function uploadToGateway(
   uploadUrl: string,
-  bytes: Uint8Array,
+  files: UploadFile[],
   d: UploadDeps,
   signal?: AbortSignal,
 ): Promise<UploadOutcome> {
   const fail = (error: string): UploadOutcome => ({ ok: false, code: 'failed', error, updates: [] });
   if (signal?.aborted) return fail('upload cancelled');
   try {
-    const ref = await withTimeout(
-      d.uploadFree(bytes, uploadUrl),
-      UPLOAD_TIMEOUT_MS,
-      `the upload did not finish within ${UPLOAD_TIMEOUT_MS / 1000} s`,
-    );
-    if (!/^0x[0-9a-fA-F]{64}$/.test(ref)) return fail('the upload to Swarm failed: the gateway returned no valid reference');
-    return { ok: true, batchId: FREE_BATCH_ID, evidenceRef: ref.toLowerCase() as Hex, updates: [] };
+    const refs: Hex[] = [];
+    for (const f of files) {
+      if (signal?.aborted) return fail('upload cancelled');
+      const ref = await withTimeout(
+        d.uploadFree(f.bytes, uploadUrl),
+        f.timeoutMs,
+        `the upload did not finish within ${f.timeoutMs / 1000} s`,
+      );
+      if (!/^0x[0-9a-fA-F]{64}$/.test(ref)) return fail('the upload to Swarm failed: the gateway returned no valid reference');
+      refs.push(ref.toLowerCase() as Hex);
+    }
+    return {
+      ok: true,
+      batchId: FREE_BATCH_ID,
+      evidenceRef: refs[0]!,
+      ...(refs[1] ? { attachmentRef: refs[1] } : {}),
+      updates: [],
+    };
   } catch (err) {
     if (signal?.aborted) return fail('upload cancelled');
     return fail(`the upload to Swarm failed: ${message(err)}`);
@@ -301,6 +325,8 @@ export async function uploadEvidence(
     uploadFree: deps.uploadFree ?? uploadFree,
     sleep: deps.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms))),
     now: deps.now ?? Date.now,
+    loadAttachment:
+      deps.loadAttachment ?? (async (id) => (await getAttachment(id))?.bytes ?? null),
   };
   const updates = new Map<Hex, BatchUpdate>();
   const note = (u: BatchUpdate) =>
@@ -319,7 +345,23 @@ export async function uploadEvidence(
     return fail('failed', `the evidence could not be encoded: ${message(err)}`);
   }
 
-  if (req.mode === 'free') return uploadToGateway(req.uploadUrl, bytes, d, signal);
+  const files: UploadFile[] = [{ bytes, timeoutMs: UPLOAD_TIMEOUT_MS }];
+  if (req.attachment) {
+    // The repository snapshot kept at capture time; only exactly those bytes are uploaded.
+    let snap: Uint8Array | null = null;
+    try {
+      snap = await d.loadAttachment(req.attachment.captureId);
+    } catch {
+      snap = null;
+    }
+    if (!snap) return fail('failed', 'the repository snapshot is no longer in the extension; capture the repository again');
+    if (snap.length !== req.attachment.size || (await sha256Hex(snap)) !== req.attachment.sha256.toLowerCase()) {
+      return fail('failed', 'the repository snapshot in the extension does not match the checked one');
+    }
+    files.push({ bytes: snap, timeoutMs: ATTACHMENT_UPLOAD_TIMEOUT_MS });
+  }
+
+  if (req.mode === 'free') return uploadToGateway(req.uploadUrl, files, d, signal);
 
   const deadline = d.now() + req.waitMs;
   const ttls: TtlCache = new Map();
@@ -346,14 +388,15 @@ export async function uploadEvidence(
       continue;
     }
 
-    const r = await stampAndUpload(pick, bytes, req, d, signal);
+    const r = await stampAndUpload(pick, files, req, d, signal);
     note({ batchId: pick.batchId, stamper: r.stamper });
     if (r.ok) {
       note({ batchId: pick.batchId, used: true });
       return {
         ok: true,
         batchId: pick.batchId,
-        evidenceRef: r.ref,
+        evidenceRef: r.refs[0]!,
+        ...(r.refs[1] ? { attachmentRef: r.refs[1] } : {}),
         updates: [...updates.values()],
       };
     }
