@@ -1,6 +1,6 @@
 import './landing.css';
 import './sponsors.css';
-import { ExternalLink } from 'lucide-react';
+import { Award, ExternalLink } from 'lucide-react';
 import type { ReactNode } from 'react';
 
 const REPO = 'https://github.com/localhostwastaken/Recall';
@@ -101,7 +101,11 @@ export function Sponsors() {
                 <img className="sp-logo-on-dark" src={`./sponsors/${s.id}-dark.svg`} alt="" />
               </span>
               <h3 className="sp-name visually-hidden">{s.name}</h3>
-              <p className="sp-prize">{s.prize}</p>
+              <p className="sp-prize">
+                <Award size={14} strokeWidth={1.75} aria-hidden="true" />
+                <span className="visually-hidden">Prize: </span>
+                {s.prize}
+              </p>
             </div>
             <p className="sp-line">{s.line}</p>
             <dl className="sp-rows">

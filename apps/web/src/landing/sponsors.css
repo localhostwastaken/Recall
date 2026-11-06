@@ -1,8 +1,12 @@
 /* Sponsor logos: their own wordmarks, one file per theme, shown at one optical height. Tokens only. */
+/* The logo on the left, the prize it is entered for on the right (wrapping under it when narrow). */
 .sp-who {
-  display: grid;
-  gap: var(--space-2);
-  justify-items: start;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+  min-height: 40px;
 }
 
 .sp-logo {
@@ -45,9 +49,24 @@
   display: block;
 }
 
+/* The prize track: a neutral chip (not orange: it is not pressable; not green: not a result). */
 .sp-prize {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
   margin: 0;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-1);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.sp-prize svg {
+  flex: none;
   color: var(--text-muted);
-  font-size: var(--text-xs);
-  line-height: var(--lh-xs);
 }
