@@ -187,6 +187,17 @@ test.describe('@p2 repo', () => {
     await fundWallet(privateKeyToAccount(walletKey).address, 10n * 10n ** 16n);
   });
 
+  test.afterEach(async ({}, testInfo) => {
+    if (testInfo.status === testInfo.expectedStatus || !ext) return;
+    // The persistent context gets no automatic screenshots: keep what each open tab shows.
+    for (const [i, p] of ext.context.pages().entries()) {
+      if (p.isClosed() || !/^(http|chrome-extension)/.test(p.url())) continue;
+      const text = await p.locator('body').innerText({ timeout: 5_000 }).catch((e) => String(e));
+      console.log(`--- tab ${i} ${p.url()}\n${text.slice(0, 4_000)}`);
+      await p.screenshot({ path: testInfo.outputPath(`tab-${i}.png`), fullPage: true }).catch(() => undefined);
+    }
+  });
+
   test.afterAll(async () => {
     await ext?.context.close();
   });
@@ -229,7 +240,7 @@ test.describe('@p2 repo', () => {
     await expect(page.getByRole('heading', { name: 'Which extension should own this storage?' })).toBeVisible();
     await page.getByRole('button', { name: 'Use this extension' }).click();
 
-    await expect(page.getByRole('heading', { name: 'Published', exact: true })).toBeVisible({ timeout: 500_000 });
+    await expect(page.getByRole('heading', { name: 'Published', exact: true })).toBeVisible({ timeout: 360_000 });
     await expect(page.locator('.approve-repo')).toHaveAttribute('data-checked', 'true');
     const keys = page.locator('.approve-record .mono-value');
     await expect(keys).toHaveCount(2);
