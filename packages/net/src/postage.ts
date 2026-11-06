@@ -109,16 +109,55 @@ export async function buyBatch(
   opts.onSent?.(txHash);
   const receipt = await pub.waitForTransactionReceipt({ hash: txHash });
   if (receipt.status !== 'success') throw new Error('createBatch reverted');
-  for (const log of receipt.logs) {
+  const created = batchCreatedIn(receipt.logs);
+  if (created) return { batchId: created.batchId, txHash };
+  throw new Error('BatchCreated event not found');
+}
+
+/** The postage contract's BatchCreated event among a receipt's logs. */
+function batchCreatedIn(
+  logs: readonly { address: Address; data: Hex; topics: readonly Hex[] }[],
+): { batchId: Hex; owner: Address; depth: number } | null {
+  for (const log of logs) {
     if (log.address.toLowerCase() !== POSTAGE_STAMP.toLowerCase()) continue;
     try {
-      const ev = decodeEventLog({ abi: postageAbi, data: log.data, topics: log.topics });
-      if (ev.eventName === 'BatchCreated') return { batchId: ev.args.batchId, txHash };
+      const ev = decodeEventLog({ abi: postageAbi, data: log.data, topics: [...log.topics] as [Hex, ...Hex[]] });
+      if (ev.eventName === 'BatchCreated') {
+        return { batchId: ev.args.batchId, owner: ev.args.owner, depth: Number(ev.args.depth) };
+      }
     } catch {
       /* not our event */
     }
   }
-  throw new Error('BatchCreated event not found');
+  return null;
+}
+
+/** What a sent createBatch transaction did (see batchFromTx). */
+export type SentBatch =
+  | { status: 'created'; batchId: Hex; owner: Address; depth: number }
+  | { status: 'none'; reason: string }
+  | { status: 'unknown'; reason: string };
+
+/**
+ * Settles a purchase from its createBatch hash (the `onSent` hash of buyBatch) after the wait for
+ * its receipt failed: `created` with the batch, `none` when it was mined and created no batch
+ * (reverted), `unknown` when the receipt could not be read within `timeoutMs` (still pending,
+ * dropped, or the node did not answer). Only `none` means paying again is safe.
+ */
+export async function batchFromTx(
+  pub: PublicClient,
+  txHash: Hex,
+  opts: { timeoutMs?: number } = {},
+): Promise<SentBatch> {
+  let receipt;
+  try {
+    receipt = await pub.waitForTransactionReceipt({ hash: txHash, timeout: opts.timeoutMs ?? 30_000 });
+  } catch (e) {
+    return { status: 'unknown', reason: e instanceof Error ? e.message.split('\n')[0]! : String(e) };
+  }
+  if (receipt.status !== 'success') return { status: 'none', reason: 'the transaction reverted' };
+  const created = batchCreatedIn(receipt.logs);
+  return created ? { status: 'created', ...created } : { status: 'none', reason: 'the transaction created no batch' };
 }
 
 export type BatchInfo = {

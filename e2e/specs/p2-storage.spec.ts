@@ -166,6 +166,87 @@ test('@p2 storage does not claim "nothing charged" when a purchase prompt is rej
   await expect(page.getByRole('button', { name: 'Try again' })).toBeEnabled();
 });
 
+test('@p2 storage never buys a batch twice when the result of a sent purchase could not be read', async ({ page }) => {
+  test.setTimeout(360_000);
+  const payer = privateKeyToAddress(BEE_COMPOSE_FAUCET_KEY);
+  const owner = privateKeyToAddress(generatePrivateKey());
+  const sentNonce = () => pub.getTransactionCount({ address: payer, blockTag: 'pending' });
+  await wallet(page, 100);
+  // MetaMask's receipt reads fail once the createBatch is sent (the approval's still work)...
+  await page.addInitScript(() => {
+    const w = window as unknown as {
+      ethereum: { request(a: { method: string }): Promise<unknown> };
+      __sends: number;
+      __failReceiptsAfter?: number;
+    };
+    const request = w.ethereum.request.bind(w.ethereum);
+    w.__sends = 0;
+    w.ethereum.request = async (args) => {
+      if (args.method === 'eth_getTransactionReceipt' && w.__failReceiptsAfter !== undefined && w.__sends > w.__failReceiptsAfter) {
+        throw Object.assign(new Error('simulated RPC failure while waiting for the receipt'), { code: -32602 });
+      }
+      const result = await request(args);
+      if (args.method === 'eth_sendTransaction') w.__sends++;
+      return result;
+    };
+  });
+  // ...and so do the page's own reads from the Gnosis RPC, until the test lets them through.
+  let failPageReceipts = true;
+  let failedReads = 0;
+  const rpcOrigin = new URL(LOCAL.gnosis.rpcUrl).origin;
+  await page.route(
+    (u) => u.origin === rpcOrigin,
+    async (route) => {
+      const body = route.request().postData() ?? '';
+      if (!failPageReceipts || route.request().method() !== 'POST' || !body.includes('eth_getTransactionReceipt')) {
+        return route.continue();
+      }
+      const { id } = JSON.parse(body) as { id: number };
+      failedReads++;
+      await route.fulfill({
+        status: 200,
+        headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*' },
+        body: JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32602, message: 'simulated RPC failure' } }),
+      });
+    },
+  );
+
+  await page.goto(`${APP}/#/storage`);
+  await page.getByLabel('Owner address').fill(owner);
+  await page.getByLabel('Number of batches').fill('1');
+  await page.evaluate(() => ((window as unknown as { __failReceiptsAfter: number }).__failReceiptsAfter = 1));
+  const n0 = await sentNonce();
+  await page.getByRole('button', { name: 'Buy 1 batch' }).click();
+
+  const unknown = page.getByRole('heading', { name: 'The purchase may have gone through' });
+  await expect(unknown).toBeVisible({ timeout: 120_000 });
+  await expect(page.getByText(/Batch 1 was sent to Gnosis .*but its result could not be read yet/)).toBeVisible();
+  await expect(page.locator('li').filter({ hasText: 'Batch 1' })).toContainText('Not confirmed');
+  await expect(page.getByLabel('Number of batches')).toBeDisabled(); // the plan stays locked
+  await expect(page.getByRole('button', { name: 'Buy 1 batch' })).toBeDisabled();
+  await expect.poll(sentNonce).toBe(n0 + 2); // approve + createBatch
+
+  // Still unreadable: checking again says so again, and sends nothing.
+  const reads = failedReads;
+  await page.getByRole('button', { name: 'Check again' }).click();
+  await expect.poll(() => failedReads, { timeout: 60_000 }).toBeGreaterThan(reads);
+  await expect(unknown).toBeVisible({ timeout: 90_000 });
+  await expect(page.getByRole('button', { name: 'Check again' })).toBeEnabled({ timeout: 90_000 });
+  expect(await sentNonce()).toBe(n0 + 2);
+
+  // Readable again: the same purchase is found, not repeated.
+  failPageReceipts = false;
+  await page.evaluate(() => delete (window as unknown as { __failReceiptsAfter?: number }).__failReceiptsAfter);
+  await page.getByRole('button', { name: 'Check again' }).click();
+  await expect(page.getByRole('heading', { name: '1 batch ready.' })).toBeVisible({ timeout: 240_000 });
+  expect(await sentNonce()).toBe(n0 + 2);
+  const ids = (await page.locator('li[data-batch-id]').evaluateAll((els) => els.map((e) => e.getAttribute('data-batch-id')))) as Hex[];
+  expect(ids).toHaveLength(1);
+  expect(await pub.readContract({ address: POSTAGE_STAMP, abi: postageAbi, functionName: 'batchOwner', args: [ids[0]!] })).toBe(owner);
+  // Settled: nothing is left for a later visit to look up.
+  expect(await page.evaluate(() => sessionStorage.getItem('recall.storage.sentTx.v1.0'))).toBeNull();
+});
+
 test('@p2 storage shows the xBZZ it needs rounded up', async ({ page }) => {
   // A fresh key holds no xBZZ, so the balance check stops the purchase before any prompt.
   await installMockWallet(page, {

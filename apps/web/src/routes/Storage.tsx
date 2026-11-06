@@ -1,11 +1,11 @@
-import { XBZZ, batchTtlSeconds, buyBatch, costFor, waitBatchUsable } from '@recall/net';
+import { XBZZ, batchFromTx, batchTtlSeconds, buyBatch, costFor, waitBatchUsable } from '@recall/net';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPublicClient, erc20Abi, http, isAddress, type Address, type Hex } from 'viem';
 import { addBatches, getStampAddress } from '../ext';
 import { ceilSig, formatBzz, formatBzzCeil, formatTtl, formatXdaiCeil } from '../format';
 import { GAS_PER_BATCH } from '../gas';
 import { getNetConfig } from '../net';
-import { getSettings } from '../settings';
+import { getSettings, isSharedOrigin } from '../settings';
 import { Field } from '../ui/Field';
 import { MonoValue, middle } from '../ui/MonoValue';
 import { Notice } from '../ui/Notice';
@@ -19,9 +19,12 @@ const MAX_BATCHES = 20;
 const DEFAULT_BATCHES = 4;
 /** Bee needs about 12 blocks (1 to 2 minutes) before it accepts stamps for a new batch. */
 const USABLE_TIMEOUT_MS = 4 * 60_000;
+/** How long a sent purchase is looked up before it counts as "not known yet". */
+const SETTLE_TIMEOUT_MS = 30_000;
 
-type SlotState = 'waiting' | 'buying' | 'bought' | 'ready' | 'cancelled' | 'failed';
-type Slot = { state: SlotState; batchId?: Hex; ttl?: bigint | null };
+type SlotState = 'waiting' | 'checking' | 'buying' | 'bought' | 'ready' | 'unknown' | 'cancelled' | 'failed';
+/** `txHash`: the slot's createBatch transaction once it was sent, kept until its outcome is known. */
+type Slot = { state: SlotState; batchId?: Hex; ttl?: bigint | null; txHash?: Hex };
 type Phase = 'idle' | 'connecting' | 'buying' | 'waiting';
 type Outcome =
   | { kind: 'success'; count: number; owner: Address }
@@ -29,6 +32,8 @@ type Outcome =
   /** `stage` tells whether a purchase transaction could already have been approved. */
   | { kind: 'cancelled'; bought: number; target: number; stage: 'wallet' | 'purchase' }
   | { kind: 'failed'; bought: number; target: number; message: string }
+  /** A purchase was sent but its result could not be read: it may have gone through. */
+  | { kind: 'unknown'; slot: number; txHash: Hex }
   | { kind: 'short'; need: bigint }
   | { kind: 'no-wallet' };
 /** `seq` makes a repeated outcome (cancelled twice) remount its notice, so focus moves again. */
@@ -38,14 +43,47 @@ type ExtLink = { kind: 'checking' } | { kind: 'connected'; address: Address } | 
 
 const SLOT_VIEW: Record<SlotState, { status: Status; label: string }> = {
   waiting: { status: 'unavailable', label: 'Waiting' },
+  checking: { status: 'pending', label: 'Checking…' },
   buying: { status: 'pending', label: 'Buying…' },
   bought: { status: 'pending', label: 'Preparing…' },
   ready: { status: 'pass', label: 'Ready' },
+  unknown: { status: 'warn', label: 'Not confirmed' },
   cancelled: { status: 'warn', label: 'Cancelled' },
   failed: { status: 'fail', label: 'Failed' },
 };
 
 const plural = (n: number) => `${n} ${n === 1 ? 'batch' : 'batches'}`;
+
+/**
+ * The createBatch hash of slot `i`, kept in this tab's sessionStorage until its outcome is known,
+ * so a retry (even after a reload) looks the purchase up instead of paying for it again. Not on a
+ * shared /bzz/ origin (R38), where another site could plant one: there it lives on the slot only.
+ */
+const sentKey = (i: number) => `recall.storage.sentTx.v1.${i}`;
+function rememberSent(i: number, txHash: Hex): void {
+  if (isSharedOrigin()) return;
+  try {
+    window.sessionStorage.setItem(sentKey(i), txHash);
+  } catch {
+    /* storage blocked: the hash stays on the slot */
+  }
+}
+function recallSent(i: number): Hex | undefined {
+  if (isSharedOrigin()) return undefined;
+  try {
+    const v = window.sessionStorage.getItem(sentKey(i));
+    return v && /^0x[0-9a-fA-F]{64}$/.test(v) ? (v as Hex) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+function forgetSent(i: number): void {
+  try {
+    window.sessionStorage.removeItem(sentKey(i));
+  } catch {
+    /* nothing stored */
+  }
+}
 const reason = (e: unknown) => (e as { shortMessage?: string }).shortMessage ?? (e instanceof Error ? e.message : String(e));
 
 export function Storage() {
@@ -106,18 +144,39 @@ export function Storage() {
   const [registered] = useState(() => new Set<Hex>());
   const [handedOver, setHandedOver] = useState(false);
   const running = phase !== 'idle';
-  // A purchase that stopped part-way keeps its owner, amount and duration until it is finished.
-  const partial = slots.some((s) => s.batchId) && slots.some((s) => !s.batchId);
+  // A purchase that stopped part-way (or whose result is not known) keeps its owner, amount and
+  // duration until it is finished.
+  const partial = slots.some((s) => s.batchId || s.txHash) && slots.some((s) => !s.batchId);
   const locked = running || partial;
   const allHandedOver = (list: Slot[]) => list.length > 0 && list.every((s) => s.batchId && registered.has(s.batchId));
 
-  /** Buys every slot that has no batch yet, waits for usability, then tells the extension. */
+  /**
+   * Buys every slot that has no batch yet, waits for usability, then tells the extension. A slot
+   * whose purchase was already sent is looked up by its transaction, never bought twice.
+   */
   async function run(resume: boolean) {
     if (!owner || !countValid) return;
-    const plan: Slot[] = resume ? slots.map((s) => (s.batchId ? s : { state: 'waiting' })) : Array.from({ length: count }, () => ({ state: 'waiting' }));
+    const plan: Slot[] = resume
+      ? slots.map((s) => (s.batchId || s.txHash ? s : { state: 'waiting' }))
+      : Array.from({ length: count }, () => ({ state: 'waiting' }));
     const commit = () => setSlots(plan.map((s) => ({ ...s })));
     const boughtCount = () => plan.filter((s) => s.batchId).length;
+    const sentBefore = (i: number) => plan[i].txHash ?? recallSent(i);
     const target = plan.length;
+    const quotedTotal = price.kind === 'ready' ? price.perBatch : undefined;
+
+    /** The batch a sent purchase made: `bought`, `none` (safe to buy again) or `unknown`. */
+    const settle = async (i: number, txHash: Hex): Promise<{ kind: 'bought'; slot: Slot } | { kind: 'none' | 'unknown' }> => {
+      const r = await batchFromTx(pub, txHash, { timeoutMs: SETTLE_TIMEOUT_MS });
+      if (r.status === 'unknown') return { kind: 'unknown' };
+      forgetSent(i);
+      // A batch for another owner or depth (an older plan in this tab) is not this slot's.
+      if (r.status === 'created' && r.owner.toLowerCase() === owner.toLowerCase() && r.depth === DEPTH) {
+        const ttl = await batchTtlSeconds(pub, r.batchId).catch(() => null);
+        return { kind: 'bought', slot: { state: 'bought', batchId: r.batchId, ttl } };
+      }
+      return { kind: 'none' };
+    };
     commit();
     show(null);
     setExtWarning(null);
@@ -130,7 +189,8 @@ export function Storage() {
       const { address } = await connectWallet();
       await ensureChain(100);
       wallet = walletFor(address, 100);
-      const need = BigInt(target - boughtCount()) * (await costFor(pub, DEPTH, days));
+      const toBuy = plan.filter((s, i) => !s.batchId && !sentBefore(i)).length;
+      const need = BigInt(toBuy) * (await costFor(pub, DEPTH, days));
       const have = await pub.readContract({ address: XBZZ, abi: erc20Abi, functionName: 'balanceOf', args: [address] });
       if (have < need) {
         show({ kind: 'short', need });
@@ -149,22 +209,59 @@ export function Storage() {
     // 2. One batch after another, so each MetaMask step is clear.
     setPhase('buying');
     let stopped: Outcome | null = null;
+    const notKnown = (i: number, txHash: Hex) => {
+      plan[i] = { state: 'unknown', txHash };
+      stopped = { kind: 'unknown', slot: i + 1, txHash };
+      show(stopped);
+    };
     for (let i = 0; i < plan.length && !stopped; i++) {
       if (plan[i].batchId) continue;
+      // Sent before, result not read: look it up. Only a purchase that bought nothing is repeated.
+      const earlier = sentBefore(i);
+      if (earlier) {
+        plan[i] = { state: 'checking', txHash: earlier };
+        commit();
+        const found = await settle(i, earlier);
+        if (found.kind !== 'none') {
+          if (found.kind === 'bought') plan[i] = found.slot;
+          else notKnown(i, earlier);
+          commit();
+          continue;
+        }
+      }
       plan[i] = { state: 'buying' };
       commit();
       try {
-        const { batchId } = await buyBatch(wallet, { owner, depth: DEPTH, days });
+        const { batchId } = await buyBatch(wallet, {
+          owner,
+          depth: DEPTH,
+          days,
+          quotedTotal, // the price may move up 10% at most between the quote and the purchase
+          onSent: (txHash) => {
+            plan[i] = { state: 'buying', txHash };
+            rememberSent(i, txHash);
+            commit();
+          },
+        });
+        forgetSent(i);
         const ttl = await batchTtlSeconds(pub, batchId).catch(() => null);
         plan[i] = { state: 'bought', batchId, ttl };
       } catch (err) {
-        const cancelled = isUserRejection(err);
-        plan[i] = { state: cancelled ? 'cancelled' : 'failed' };
-        stopped = cancelled
-          ? { kind: 'cancelled', bought: boughtCount(), target, stage: 'purchase' }
-          : { kind: 'failed', bought: boughtCount(), target, message: reason(err) };
-        // Say so right away; the usability polling below can take minutes.
-        show(stopped);
+        const sent = plan[i].txHash;
+        const found = sent ? await settle(i, sent) : null;
+        if (sent && found?.kind === 'bought') {
+          plan[i] = found.slot; // only reading the result failed
+        } else if (sent && found?.kind === 'unknown') {
+          notKnown(i, sent);
+        } else {
+          const cancelled = !sent && isUserRejection(err);
+          plan[i] = { state: cancelled ? 'cancelled' : 'failed' };
+          stopped = cancelled
+            ? { kind: 'cancelled', bought: boughtCount(), target, stage: 'purchase' }
+            : { kind: 'failed', bought: boughtCount(), target, message: reason(err) };
+          // Say so right away; the usability polling below can take minutes.
+          show(stopped);
+        }
       }
       commit();
     }
@@ -361,7 +458,7 @@ export function Storage() {
             remaining={remaining}
             busy={running}
             handoff={extLink.kind !== 'connected' ? 'none' : handedOver ? 'done' : 'failed'}
-            onRetry={() => void run(slots.some((s) => s.batchId))}
+            onRetry={() => void run(slots.some((s) => s.batchId || s.txHash))}
           />
           {extWarning ? (
             <Notice
@@ -491,6 +588,13 @@ function OutcomeNotice({
           actions={action(outcome.bought > 0 ? `Buy remaining ${remaining}` : 'Try again')}
         >
           {outcome.message}. {outcome.bought} of {outcome.target} bought.
+        </Notice>
+      );
+    case 'unknown':
+      return (
+        <Notice kind="warn" title="The purchase may have gone through" focus actions={action('Check again')}>
+          Batch {outcome.slot} was sent to Gnosis (transaction <MonoValue value={outcome.txHash} />), but its result could
+          not be read yet. Check again: the page looks that transaction up and does not buy the batch twice.
         </Notice>
       );
     case 'short':

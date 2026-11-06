@@ -22,7 +22,7 @@ import { gnosis } from 'viem/chains';
 import { afterEach, describe, expect, it } from 'vitest';
 import { fundWallet } from '../../../e2e/fixtures/fund';
 import { NET_TEST_KEY_A } from '../../../e2e/fixtures/keys';
-import { BatchChangedError, BatchNotFoundError, LOCAL, POSTAGE_STAMP, XBZZ, batchTtlSeconds, buyBatch, isContractRevert, readBatch, topUp, topUpCost } from '../src/index';
+import { BatchChangedError, BatchNotFoundError, LOCAL, POSTAGE_STAMP, XBZZ, batchFromTx, batchTtlSeconds, buyBatch, isContractRevert, readBatch, topUp, topUpCost } from '../src/index';
 
 // batchTtlSeconds against a throwaway JSON-RPC server (no devnet needed): only a contract
 // revert may mean "expired"; a rate limit, a timeout or a node fault must be an error, so a
@@ -272,7 +272,7 @@ describe('topUp is tied to the preview', () => {
   const sel = { lastPrice: toFunctionSelector('lastPrice()'), batches: toFunctionSelector('batches(bytes32)') };
 
   /** What the stub changes about the contract's answers, and what it did to the wallet's calls. */
-  const lie = { priceMul: 1n, depth: undefined as number | undefined, gone: false, failReceipt: false, sentRaw: 0 };
+  const lie = { priceMul: 1n, depth: undefined as number | undefined, gone: false, failReceipt: false, sentRaw: 0, receiptFailsAfter: 0 };
 
   async function forward(method: string, params: unknown): Promise<unknown> {
     const res = await fetch(LOCAL.gnosis.rpcUrl, {
@@ -302,7 +302,7 @@ describe('topUp is tied to the preview', () => {
             return `0x${words.join('')}`;
           }
         }
-        if (method === 'eth_getTransactionReceipt' && lie.failReceipt && lie.sentRaw > 0) {
+        if (method === 'eth_getTransactionReceipt' && lie.failReceipt && lie.sentRaw > lie.receiptFailsAfter) {
           // Every receipt read fails from now on (viem swallows the first, then gives up on the next block).
           throw Object.assign(new Error('simulated RPC failure while waiting for the receipt'), { code: -32602 });
         }
@@ -322,7 +322,7 @@ describe('topUp is tied to the preview', () => {
         address: XBZZ, abi: erc20Abi, functionName: 'approve', args: [POSTAGE_STAMP, amount],
       }),
     });
-  const reset = () => Object.assign(lie, { priceMul: 1n, depth: undefined, gone: false, failReceipt: false, sentRaw: 0 });
+  const reset = () => Object.assign(lie, { priceMul: 1n, depth: undefined, gone: false, failReceipt: false, sentRaw: 0, receiptFailsAfter: 0 });
 
   it('setup: a fresh batch and a preview price', async () => {
     await fundWallet(account.address, parseUnits('1', 16));
@@ -403,6 +403,32 @@ describe('topUp is tied to the preview', () => {
     reset();
     await approve(0n);
     await expect(topUp(wallet, batchId, 1, { onApproved: () => (lie.priceMul = 2n) })).rejects.toMatchObject({ reason: 'price' });
+  });
+
+  it('a purchase whose receipt wait failed is settled from its hash, with no second createBatch', async () => {
+    reset();
+    const owner = privateKeyToAccount(generatePrivateKey()).address;
+    const n0 = await nonce();
+    const sent: Hex[] = [];
+    // The approval's receipt is read; the createBatch receipt read fails.
+    Object.assign(lie, { failReceipt: true, receiptFailsAfter: 1 });
+    await expect(buyBatch(wallet, { owner, depth: 17, days: 1, onSent: (h) => sent.push(h) })).rejects.toThrow(
+      /simulated RPC failure/,
+    );
+    lie.failReceipt = false;
+    expect(sent).toHaveLength(1);
+    const settled = await batchFromTx(real, sent[0]!);
+    expect(settled).toMatchObject({ status: 'created', owner, depth: 17 });
+    const id = (settled as { batchId: Hex }).batchId;
+    expect(await readBatch(real, id)).toMatchObject({ owner, depth: 17 });
+    // Approval + createBatch: the lookup sent nothing.
+    expect(await real.getTransactionCount({ address: account.address, blockTag: 'pending' })).toBe(n0 + 2);
+    // A transaction that bought nothing, and a hash nobody knows.
+    const approval = await createWalletClient({ account, chain, transport: http(LOCAL.gnosis.rpcUrl) }).writeContract({
+      address: XBZZ, abi: erc20Abi, functionName: 'approve', args: [POSTAGE_STAMP, 0n],
+    });
+    expect(await batchFromTx(real, approval)).toMatchObject({ status: 'none' });
+    expect(await batchFromTx(real, `0x${'5a'.repeat(32)}`, { timeoutMs: 1_500 })).toMatchObject({ status: 'unknown' });
   });
 
   it('hands out the hash as soon as the top-up is sent, so a failed receipt wait can be settled later', async () => {
