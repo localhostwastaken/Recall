@@ -8,6 +8,7 @@ import { CheckRow } from '../../recall/ui/CheckRow';
 import { CheckDetails } from '../../recall/ui/CheckDetails';
 import { MonoValue } from '../../recall/ui/MonoValue';
 import { loadSettings } from '../../recall/settings';
+import { focusOrOpenApproveTab } from '../../recall/appTabs';
 import { SettingsPanel } from './SettingsPanel';
 import { CAPTURE_STATE_KEY, isLiveRunning, type CaptureState } from '../../recall/jobState';
 import type { PopupRequest } from '../../recall/messages';
@@ -72,12 +73,6 @@ function useCaptureState(): CaptureState | undefined {
     return () => chrome.storage.session.onChanged.removeListener(onChanged);
   }, []);
   return state;
-}
-
-/** Opens a page of the web app (built from the app URL in settings) in a new tab. */
-async function openApp(build: (appUrl: string) => string): Promise<void> {
-  const { appUrl } = await loadSettings();
-  await chrome.tabs.create({ url: build(appUrl) });
 }
 
 /** The verified history of the page, from the service worker (undefined while loading). */
@@ -418,11 +413,14 @@ function CaptureResult({
 }) {
   const lines = checkLines(job.checks, job.evidence);
   const v = verdict(lines, job.checks);
-  const up = job.upload ? uploadCopy(job.upload) : null;
+  const up = job.upload ? uploadCopy(job.upload, v.kind === 'success') : null;
   const u = job.upload;
   const openApprove = () => {
     if (u?.status === 'pending' || u?.status === 'confirmation') {
-      void openApp((app) => approveUrl(app, u.captureId, chrome.runtime.id));
+      // The capture's publish tab if it is open, else a new one (one tab per capture).
+      void loadSettings().then(({ appUrl }) =>
+        focusOrOpenApproveTab(approveUrl(appUrl, u.captureId, chrome.runtime.id), u.captureId),
+      );
     }
   };
   const upActions = {

@@ -232,13 +232,16 @@ const sentence = (s: string) => {
 /** "Continue in the Recall tab" (R44): the person chooses there how to save the capture. */
 export const CONTINUE_TITLE = 'Continue in the Recall tab';
 
-/** The notice under a finished capture's checks: what happens next. */
-export function uploadCopy(upload: UploadState): UploadCopy {
+/**
+ * The notice under a finished capture's checks: what happens next. `verified`: all three checks
+ * passed with a pinned witness; only then is a kept capture shown in green.
+ */
+export function uploadCopy(upload: UploadState, verified = false): UploadCopy {
   switch (upload.status) {
     case 'pending':
       // The Recall tab opens by itself; the button is the fallback.
       return {
-        kind: 'success',
+        kind: verified ? 'success' : 'info',
         title: CONTINUE_TITLE,
         body: 'Choose how to save and publish this capture there. Nothing is uploaded until you do.',
         actions: ['openApprove'],

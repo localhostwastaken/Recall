@@ -157,7 +157,9 @@ describe('capture view copy', () => {
   });
 
   it('a kept capture points to the Recall tab, where storage is chosen (R44)', () => {
-    expect(uploadCopy({ status: 'pending', captureId: 'x' })).toEqual({
+    // Green only when all three checks passed with a pinned witness (M2); otherwise info.
+    expect(uploadCopy({ status: 'pending', captureId: 'x' }).kind).toBe('info');
+    expect(uploadCopy({ status: 'pending', captureId: 'x' }, true)).toEqual({
       kind: 'success',
       title: 'Continue in the Recall tab',
       body: 'Choose how to save and publish this capture there. Nothing is uploaded until you do.',

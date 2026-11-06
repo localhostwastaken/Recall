@@ -10,11 +10,24 @@ vi.mock('../../src/recall/settings', async (orig) => ({
   loadSettings: vi.fn(async () => ({ ...settings, pinnedWitnesses: [], appUrl: 'http://localhost:5173' })),
 }));
 vi.mock('../../src/recall/offscreen', () => ({ ensureOffscreen: vi.fn(async () => undefined) }));
-const pool: { value: unknown[] } = { value: [] };
-const applyBatchUpdates = vi.fn(async () => undefined);
+type B = { batchId: Hex; depth: number; used: boolean; usable: boolean; startBlock: string; addedAt: number; stamper?: [number, number][] };
+const pool: { value: B[] } = { value: [] };
+/** Like the real pool: an upload's updates (used, heights) are stored. */
+const applyBatchUpdates = vi.fn(async (updates: { batchId: Hex; used?: boolean; stamper?: [number, number][] }[]) => {
+  for (const u of updates) {
+    const b = pool.value.find((x) => x.batchId === u.batchId);
+    if (b) Object.assign(b, u.used ? { used: true } : {}, u.stamper ? { stamper: u.stamper } : {});
+  }
+});
 vi.mock('../../src/recall/pool', () => ({
-  loadPool: vi.fn(async () => pool.value),
+  loadPool: vi.fn(async () => pool.value.map((b) => ({ ...b }))),
   applyBatchUpdates: (u: unknown) => applyBatchUpdates(u as never),
+}));
+/** Lifetimes on Gnosis, per batch (seconds); a batch not listed has 10 days. */
+const ttls = new Map<string, bigint | null>();
+vi.mock('../../src/recall/batchChain', () => ({
+  lastPrice: vi.fn(async () => 1n),
+  ttlSeconds: vi.fn(async (_pub: unknown, batchId: string) => (ttls.has(batchId) ? ttls.get(batchId)! : 10n * 86_400n)),
 }));
 vi.mock('../../src/recall/stamp', () => ({ stampKey: vi.fn(async () => `0x${'9'.repeat(64)}`) }));
 
@@ -31,7 +44,9 @@ const local = new Map<string, unknown>();
   },
 };
 
-const { uploadPending, onPendingUploadResult, pendingAnswer } = await import('../../src/recall/pendingUpload');
+const { uploadPending, onPendingUploadResult, pendingAnswer, clearTtlCache, UPLOAD_BUSY } = await import(
+  '../../src/recall/pendingUpload'
+);
 const { savePending, discardPending, readPending, UPLOAD_LOST_AFTER_MS } = await import('../../src/recall/pending');
 const sendMessage = chrome.runtime.sendMessage as unknown as ReturnType<typeof vi.fn>;
 const uploads = () =>
@@ -57,11 +72,15 @@ const evidence: EvidenceFile = {
 } as EvidenceFile;
 const id = (n: number) => `0x${n.toString(16).padStart(64, '0')}` as Hex;
 const CID = 'c'.repeat(32);
-const batch = { batchId: id(1), depth: 17, used: false, usable: true, startBlock: '1', addedAt: 1 };
+const batch = (n: number): B => ({ batchId: id(n), depth: 17, used: false, usable: true, startBlock: '1', addedAt: n });
+/** The id of the n-th upload sent to the offscreen document (`<captureId>.<attempt>`). */
+const sentId = (n = 0) => (uploads()[n]![0] as { id: string }).id;
 
 beforeEach(async () => {
   local.clear();
-  pool.value = [batch];
+  ttls.clear();
+  clearTtlCache();
+  pool.value = [batch(1)];
   settings.uploadMode = 'stamped';
   applyBatchUpdates.mockClear();
   sendMessage.mockReset();
@@ -84,19 +103,20 @@ describe('a pending capture is uploaded only when the publish tab asks (R44)', (
   });
 
   it('starts one stamped upload with the pool batch; a second request while it runs starts nothing', async () => {
-    expect(await uploadPending(CID, 'stamped')).toEqual({ status: 'uploading' });
+    expect(await uploadPending(CID, 'stamped')).toEqual({ status: 'uploading', mode: 'stamped' });
     expect(uploads()).toHaveLength(1);
-    expect(uploads()[0][0]).toMatchObject({ id: CID, mode: 'stamped', candidates: [{ batchId: id(1) }] });
-    expect(await uploadPending(CID, 'stamped')).toEqual({ status: 'uploading' });
+    expect(uploads()[0][0]).toMatchObject({ mode: 'stamped', candidates: [{ batchId: id(1) }] });
+    expect(sentId()).toMatch(new RegExp(`^${CID}\\.[0-9a-f]{12}$`));
+    expect(await uploadPending(CID, 'stamped')).toEqual({ status: 'uploading', mode: 'stamped' });
     expect(await uploadPending(CID, 'free')).toMatchObject({ error: expect.stringMatching(/free storage is turned off/) });
     expect(uploads()).toHaveLength(1);
-    expect(await pendingAnswer(CID)).toMatchObject({ upload: { status: 'uploading' } });
+    expect(await pendingAnswer(CID)).toMatchObject({ upload: { status: 'uploading', mode: 'stamped' } });
   });
 
   it('after success it reports the reference and never uploads again', async () => {
     await uploadPending(CID, 'stamped');
     const updates = [{ batchId: id(1), used: true }];
-    await onPendingUploadResult(CID, { ok: true, batchId: id(1), evidenceRef: id(7), updates });
+    await onPendingUploadResult(sentId(), { ok: true, batchId: id(1), evidenceRef: id(7), updates });
     expect(applyBatchUpdates).toHaveBeenCalledWith(updates);
     expect(await pendingAnswer(CID)).toMatchObject({
       evidenceRef: id(7),
@@ -107,30 +127,97 @@ describe('a pending capture is uploaded only when the publish tab asks (R44)', (
     expect(uploads()).toHaveLength(1);
   });
 
-  it('a failure keeps the capture and its reason; "try again" uploads again', async () => {
-    await uploadPending(CID, 'stamped');
-    await onPendingUploadResult(CID, { ok: false, code: 'failed', error: 'the upload to Swarm failed: 500', updates: [] });
+  it('a failure keeps the capture, its reason and the chosen storage; "try again" uploads again', async () => {
+    settings.uploadMode = 'free';
+    await uploadPending(CID, 'free');
+    await onPendingUploadResult(sentId(), { ok: false, code: 'failed', error: 'the upload to Swarm failed: 500', updates: [] });
     expect(await pendingAnswer(CID)).toMatchObject({
       evidence,
-      upload: { status: 'failed', reason: 'the upload to Swarm failed: 500' },
+      upload: { status: 'failed', reason: 'the upload to Swarm failed: 500', mode: 'free' },
     });
-    expect(await uploadPending(CID, 'stamped')).toEqual({ status: 'uploading' });
+    expect(await uploadPending(CID, 'free')).toEqual({ status: 'uploading', mode: 'free' });
     expect(uploads()).toHaveLength(2);
+  });
+
+  it("an older attempt's late result never ends a newer attempt", async () => {
+    await uploadPending(CID, 'stamped');
+    const first = sentId(0);
+    // The first attempt was lost; a second one runs.
+    const rec = await readPending(CID);
+    await savePending({ ...rec!, upload: { ...(rec!.upload as never as object), at: Date.now() - UPLOAD_LOST_AFTER_MS - 1 } as never });
+    clearTtlCache(); // a new service worker: nothing in flight in memory
+    expect(await uploadPending(CID, 'stamped')).toEqual({ status: 'uploading', mode: 'stamped' });
+    const second = sentId(1);
+    expect(second).not.toBe(first);
+    await onPendingUploadResult(first, { ok: false, code: 'failed', error: 'late failure', updates: [] });
+    expect(await pendingAnswer(CID)).toMatchObject({ upload: { status: 'uploading' } });
+    await onPendingUploadResult(first, { ok: true, batchId: id(1), evidenceRef: id(5), updates: [] });
+    expect(await pendingAnswer(CID)).toMatchObject({ upload: { status: 'uploading' } });
+    await onPendingUploadResult(second, { ok: true, batchId: id(1), evidenceRef: id(7), updates: [] });
+    expect(await pendingAnswer(CID)).toMatchObject({ upload: { status: 'uploaded', evidenceRef: id(7) } });
+  });
+
+  it('two captures never upload at once, and never share a batch or its stamp heights', async () => {
+    const OTHER = 'f'.repeat(32);
+    pool.value = [batch(1), batch(2)];
+    await savePending({ captureId: OTHER, kind: 'capture', evidence, bodySha256: id(9), createdAt: Date.now() });
+    expect(await uploadPending(CID, 'stamped')).toEqual({ status: 'uploading', mode: 'stamped' });
+    // While the first runs, the second is refused (its pool view would be stale).
+    expect(await uploadPending(OTHER, 'stamped')).toEqual({ error: UPLOAD_BUSY });
+    expect(uploads()).toHaveLength(1);
+    // The first used batch 1 and stamped some slots.
+    await onPendingUploadResult(sentId(0), {
+      ok: true,
+      batchId: id(1),
+      evidenceRef: id(7),
+      updates: [{ batchId: id(1), used: true, stamper: [[3, 1]] }],
+    });
+    expect(await uploadPending(OTHER, 'stamped')).toEqual({ status: 'uploading', mode: 'stamped' });
+    const second = uploads()[1]![0] as { candidates: { batchId: Hex }[] };
+    expect(second.candidates.map((c) => c.batchId)).toEqual([id(2)]);
+    // A failed first attempt leaves the batch unused, but the second reads its stored heights.
+    local.clear();
+    clearTtlCache();
+    pool.value = [batch(1)];
+    sendMessage.mockClear();
+    await savePending({ captureId: CID, kind: 'capture', evidence, bodySha256: id(9), createdAt: Date.now() });
+    await savePending({ captureId: OTHER, kind: 'capture', evidence, bodySha256: id(9), createdAt: Date.now() });
+    await uploadPending(CID, 'stamped');
+    await onPendingUploadResult(sentId(0), {
+      ok: false,
+      code: 'failed',
+      error: 'the upload to Swarm failed: 500',
+      updates: [{ batchId: id(1), stamper: [[3, 2]] }],
+    });
+    await uploadPending(OTHER, 'stamped');
+    expect((uploads()[1]![0] as { candidates: { stamper?: unknown }[] }).candidates[0]!.stamper).toEqual([[3, 2]]);
+  });
+
+  it('a batch with less than 2 days left is not storage', async () => {
+    ttls.set(id(1), 86_400n);
+    expect(await pendingAnswer(CID)).toMatchObject({ storage: 'empty' });
+    clearTtlCache();
+    ttls.set(id(1), null);
+    expect(await uploadPending(CID, 'stamped')).toEqual({ error: 'the extension has no storage batch to upload with' });
+    clearTtlCache();
+    ttls.delete(id(1));
+    expect(await pendingAnswer(CID)).toMatchObject({ storage: 'ok' });
   });
 
   it('an upload that never reported back is lost after a while, and may start again', async () => {
     await uploadPending(CID, 'stamped');
     const rec = await readPending(CID);
-    await savePending({ ...rec!, upload: { status: 'uploading', mode: 'stamped', at: Date.now() - UPLOAD_LOST_AFTER_MS - 1 } });
-    expect(await pendingAnswer(CID)).toMatchObject({ upload: { status: 'failed', reason: 'the upload did not finish' } });
-    expect(await uploadPending(CID, 'stamped')).toEqual({ status: 'uploading' });
+    await savePending({ ...rec!, upload: { status: 'uploading', mode: 'stamped', at: Date.now() - UPLOAD_LOST_AFTER_MS - 1, attempt: 'old' } });
+    clearTtlCache(); // a new service worker: nothing in flight in memory
+    expect(await pendingAnswer(CID)).toMatchObject({ upload: { status: 'failed', reason: 'the upload did not finish', mode: 'stamped' } });
+    expect(await uploadPending(CID, 'stamped')).toEqual({ status: 'uploading', mode: 'stamped' });
     expect(uploads()).toHaveLength(2);
   });
 
   it('a late result never brings back a discarded capture (the pool still learns)', async () => {
     await uploadPending(CID, 'stamped');
     expect(await discardPending(CID)).toEqual({ ok: true });
-    await onPendingUploadResult(CID, { ok: true, batchId: id(1), evidenceRef: id(7), updates: [{ batchId: id(1), used: true }] });
+    await onPendingUploadResult(sentId(), { ok: true, batchId: id(1), evidenceRef: id(7), updates: [{ batchId: id(1), used: true }] });
     expect(await readPending(CID)).toBeNull();
     expect(applyBatchUpdates).toHaveBeenCalled();
   });
@@ -146,7 +233,7 @@ describe('a pending capture is uploaded only when the publish tab asks (R44)', (
     expect(await uploadPending(conf, 'free')).toEqual({ error: 'a confirmation needs no upload' });
     expect(uploads()).toHaveLength(0);
     // Free mode: no batch, no stamp key.
-    expect(await uploadPending(CID, 'free')).toEqual({ status: 'uploading' });
+    expect(await uploadPending(CID, 'free')).toEqual({ status: 'uploading', mode: 'free' });
     const msg = uploads()[0][0] as Record<string, unknown>;
     expect(msg).toMatchObject({ mode: 'free', candidates: [] });
     expect(msg.stampKey).toBeUndefined();

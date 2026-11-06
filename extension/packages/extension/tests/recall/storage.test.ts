@@ -1144,7 +1144,7 @@ describe('popup copy', () => {
   });
 
   it('says what happens next', () => {
-    expect(uploadCopy({ status: 'pending', captureId: 'x' })).toMatchObject({
+    expect(uploadCopy({ status: 'pending', captureId: 'x' }, true)).toMatchObject({
       kind: 'success',
       title: 'Continue in the Recall tab',
       actions: ['openApprove'],

@@ -16,8 +16,10 @@ export const CAPTURE_ID = /^[0-9a-f]{32}$/;
 
 /** The upload the publish tab started (captures only). Uploaded = evidenceRef and batchId are set. */
 export type StoredUpload =
-  | { status: 'uploading'; mode: UploadMode; at: number }
-  | { status: 'failed'; reason: string; at: number };
+  /** `attempt`: this upload's id; only its own result may end it (an older attempt's late result is ignored). */
+  | { status: 'uploading'; mode: UploadMode; at: number; attempt: string }
+  /** `mode`: the storage the person chose, so "Try upload again" uses it again. */
+  | { status: 'failed'; reason: string; at: number; mode: UploadMode };
 
 export type PendingRecord = {
   captureId: string;
@@ -39,9 +41,9 @@ export type PendingRecord = {
 /** What `recall.getPending` reports about the upload of a pending capture. */
 export type PendingUploadState =
   | { status: 'none' }
-  | { status: 'uploading' }
+  | { status: 'uploading'; mode: UploadMode }
   | { status: 'uploaded'; evidenceRef: Hex; batchId: Hex }
-  | { status: 'failed'; reason: string };
+  | { status: 'failed'; reason: string; mode: UploadMode };
 
 /**
  * An upload still "uploading" after this long was lost (offscreen document gone, browser slept):
@@ -55,12 +57,13 @@ export function pendingUploadState(rec: PendingRecord, now = Date.now()): Pendin
     return { status: 'uploaded', evidenceRef: rec.evidenceRef, batchId: rec.batchId };
   }
   const u = rec.upload;
+  const mode: UploadMode = u?.mode === 'free' ? 'free' : 'stamped';
   if (u?.status === 'uploading') {
     return now - u.at < UPLOAD_LOST_AFTER_MS
-      ? { status: 'uploading' }
-      : { status: 'failed', reason: 'the upload did not finish' };
+      ? { status: 'uploading', mode }
+      : { status: 'failed', reason: 'the upload did not finish', mode };
   }
-  if (u?.status === 'failed') return { status: 'failed', reason: u.reason };
+  if (u?.status === 'failed') return { status: 'failed', reason: u.reason, mode };
   return { status: 'none' };
 }
 
@@ -182,6 +185,26 @@ export function discardPending(
     await area.remove(PENDING_PREFIX + (captureId as string));
     return { ok: true as const };
   });
+}
+
+/** Writes a pending record as is (no pruning). For callers already inside pendingLocked. */
+export async function writePending(rec: PendingRecord, area: PendingArea = defaultArea()): Promise<void> {
+  await area.set({ [PENDING_PREFIX + rec.captureId]: JSON.stringify(rec) });
+}
+
+/** Every readable pending record (for the one-upload-at-a-time rule; never answered to a page). */
+export async function allPending(area: PendingArea = defaultArea()): Promise<PendingRecord[]> {
+  const out: PendingRecord[] = [];
+  for (const [key, value] of Object.entries(await area.get(null))) {
+    if (!key.startsWith(PENDING_PREFIX) || typeof value !== 'string') continue;
+    try {
+      const rec = JSON.parse(value) as PendingRecord;
+      if (rec?.captureId === key.slice(PENDING_PREFIX.length)) out.push(rec);
+    } catch {
+      /* unreadable: not an upload */
+    }
+  }
+  return out;
 }
 
 /**

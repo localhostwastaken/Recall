@@ -8,6 +8,7 @@ import { isWitnessUrl, loadSettings, netConfigFor } from './settings';
 import { witnessOnline } from './witness';
 import { captureTarget, withTimeout } from './captureParts';
 import { approveUrl, timelineUrl, type EarlierCaptures } from './captureView';
+import { focusOrOpenApproveTab } from './appTabs';
 import type {
   LatestAnswer,
   OffscreenHistory,
@@ -195,7 +196,7 @@ export async function latestVerifiedCapture(h: Hex, before?: bigint): Promise<La
 export async function openApproveTab(captureId: string): Promise<void> {
   try {
     const { appUrl } = await loadSettings();
-    await chrome.tabs.create({ url: approveUrl(appUrl, captureId, chrome.runtime.id) });
+    await focusOrOpenApproveTab(approveUrl(appUrl, captureId, chrome.runtime.id), captureId);
   } catch (err) {
     console.error('[recall] could not open the approval tab', err instanceof Error ? err.message : String(err));
   }
