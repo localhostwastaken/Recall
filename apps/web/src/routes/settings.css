@@ -133,3 +133,13 @@ textarea.input {
 .settings-fieldset[disabled] {
   opacity: 0.6;
 }
+
+/* "Reset to default" sits close under its field: it moves into the line kept free for an error
+   while there is none (the error, when shown, pushes it down as before). */
+.settings-field:has(.field-error-slot) > .field-actions {
+  margin-top: calc(-1 * var(--lh-sm));
+}
+
+.settings-section {
+  padding-top: var(--space-6);
+}
