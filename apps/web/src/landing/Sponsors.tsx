@@ -1,4 +1,5 @@
 import './landing.css';
+import './sponsors.css';
 import { ExternalLink } from 'lucide-react';
 import type { ReactNode } from 'react';
 
@@ -18,7 +19,7 @@ export function OutLink({ href, children, className = 'lk' }: { href: string; ch
 
 type Sponsor = {
   id: 'ef' | 'arkiv' | 'swarm';
-  /** Initials on the mark tile. Their real logos are not redrawn or recoloured. */
+  /** Initials, kept as data only (the card shows the sponsor's own logo from public/sponsors/). */
   mark: string;
   name: string;
   prize: string;
@@ -93,13 +94,14 @@ export function Sponsors() {
         {SPONSORS.map((s) => (
           <li key={s.id} className="sp-card">
             <div className="sp-who">
-              <span className={`sp-mark sp-mark-${s.id}`} aria-hidden="true">
-                {s.mark}
+              {/* Their own logos (from their brand packs, unaltered apart from the EF text colour on light),
+                  one per theme; the name stays as the heading for screen readers. */}
+              <span className={`sp-logo sp-logo-${s.id}`} aria-hidden="true">
+                <img className="sp-logo-on-light" src={`./sponsors/${s.id}-light.svg`} alt="" />
+                <img className="sp-logo-on-dark" src={`./sponsors/${s.id}-dark.svg`} alt="" />
               </span>
-              <div>
-                <h3 className="sp-name">{s.name}</h3>
-                <p className="sp-prize">{s.prize}</p>
-              </div>
+              <h3 className="sp-name visually-hidden">{s.name}</h3>
+              <p className="sp-prize">{s.prize}</p>
             </div>
             <p className="sp-line">{s.line}</p>
             <dl className="sp-rows">
