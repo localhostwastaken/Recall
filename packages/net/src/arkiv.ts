@@ -41,6 +41,57 @@ export const WitnessSchema = defineSchema('recall.v1.witness', {
   url: str(),
 });
 
+/**
+ * A file attached to a capture (ruling R46). Level 1 ("hash-anchored"), kind 'git': the parent
+ * capture is a notarized GitHub branch response naming commit `commitSha` and tree `treeSha`;
+ * the attachment is that commit's tarball on Swarm (`evidenceRef`), whose recomputed git tree
+ * must equal `treeSha`. `urlHash` is the hash of the repository's URL, `sha256` the tarball's.
+ * Git ids are 40 lower-case hex digits without 0x, as git prints them.
+ */
+export const AttachmentSchema = defineSchema('recall.v1.attachment', {
+  parentCaptureKey: key().indexed(),
+  urlHash: key().indexed(),
+  sha256: key().indexed(),
+  kind: str().indexed(),
+  commitSha: str().indexed(),
+  treeSha: str().indexed(),
+  proofLevel: i32().indexed(),
+  evidenceRef: key(),
+  batchId: key(),
+  size: u64(),
+  contentType: str(),
+});
+
+export type AttachmentKind = 'git';
+
+export type AttachmentRow = {
+  parentCaptureKey: Hex;
+  urlHash: Hex;
+  sha256: Hex;
+  kind: AttachmentKind;
+  commitSha: string;
+  treeSha: string;
+  proofLevel: 1;
+  evidenceRef: Hex;
+  batchId: Hex;
+  size: bigint;
+  contentType: string;
+};
+
+/**
+ * An attachment as read from Arkiv. Anyone can write one, so every field is an unverified
+ * claim (`kind` and `proofLevel` too); consumers recompute and compare with `attachmentMatches`.
+ */
+export type ListedAttachment = Omit<AttachmentRow, 'kind' | 'proofLevel'> & {
+  kind: string;
+  proofLevel: number;
+  entityKey: Hex;
+  owner: Address;
+  /** Who created the record; unlike the owner it can never change. */
+  creator: Address;
+  expiresAtBlock: bigint;
+};
+
 export type CaptureRow = {
   urlHash: Hex;
   bodySha256: Hex;
@@ -180,6 +231,121 @@ export async function writeWitnessProfile(
   return { entityKey, txHash };
 }
 
+const GIT_ID = /^[0-9a-f]{40}$/;
+
+export async function writeAttachment(
+  w: ArkivWallet,
+  row: AttachmentRow,
+): Promise<{ entityKey: Hex; txHash: Hex }> {
+  if (row.kind !== 'git') throw new Error(`unsupported attachment kind "${String(row.kind)}"`);
+  if (row.proofLevel !== 1) throw new Error(`unsupported proof level ${String(row.proofLevel)}`);
+  if (!GIT_ID.test(row.commitSha)) throw new Error('commitSha must be 40 lower-case hex digits');
+  if (!GIT_ID.test(row.treeSha)) throw new Error('treeSha must be 40 lower-case hex digits');
+  if (row.size < 0n) throw new Error('size must not be negative');
+  const { entityKey, txHash } = await w.createEntity(
+    AttachmentSchema,
+    {
+      parentCaptureKey: key(row.parentCaptureKey),
+      urlHash: key(row.urlHash),
+      sha256: key(row.sha256),
+      kind: str(row.kind),
+      commitSha: str(row.commitSha),
+      treeSha: str(row.treeSha),
+      proofLevel: i32(row.proofLevel),
+      evidenceRef: key(row.evidenceRef),
+      batchId: key(row.batchId),
+      size: u64(row.size),
+      contentType: str(row.contentType),
+    },
+    options(),
+  );
+  return { entityKey, txHash };
+}
+
+/**
+ * Every attachment that names `parentCaptureKey`, whoever wrote it (owner-agnostic: the
+ * consumer verifies each one against the bytes, see `attachmentMatches`). Keyset-paged with a
+ * row budget, like `listByUrl`.
+ */
+export async function listAttachments(
+  pub: ArkivPublic,
+  parentCaptureKey: Hex,
+  opts: { pageSize?: number; maxRows?: number } = {},
+): Promise<{ rows: ListedAttachment[]; truncated: boolean }> {
+  const { entities, truncated } = await collectPages(
+    (after, limit) =>
+      pub
+        .select()
+        .from(AttachmentSchema)
+        .where(
+          after
+            ? and(eq('parentCaptureKey', key(parentCaptureKey)), gt('$key', key(after)))
+            : eq('parentCaptureKey', key(parentCaptureKey)),
+        )
+        .orderBy(asc('$key'))
+        .limit(limit)
+        .fetch(),
+    opts.pageSize ?? 100,
+    opts.maxRows ?? 500,
+  );
+  const rows = entities.map(
+    (e): ListedAttachment => ({
+      entityKey: e.$key,
+      owner: e.$owner as Address,
+      creator: e.$creator as Address,
+      expiresAtBlock: e.$expiresAt,
+      parentCaptureKey: e.parentCaptureKey.value,
+      urlHash: e.urlHash.value,
+      sha256: e.sha256.value,
+      kind: e.kind.value,
+      commitSha: e.commitSha.value,
+      treeSha: e.treeSha.value,
+      proofLevel: Number(e.proofLevel.value),
+      evidenceRef: e.evidenceRef.value,
+      batchId: e.batchId.value,
+      size: e.size.value,
+      contentType: e.contentType.value,
+    }),
+  );
+  return { rows, truncated };
+}
+
+/** What a consumer computed itself: from the verified parent capture and the downloaded bytes. */
+export type AttachmentComputed = {
+  parentCaptureKey: Hex;
+  urlHash: Hex;
+  /** sha256 of the downloaded file. */
+  sha256: Hex;
+  /** From the notarized GitHub response of the parent capture. */
+  commitSha: string;
+  /** Recomputed from the downloaded tarball; must equal the notarized one first. */
+  treeSha: string;
+  /** Length of the downloaded file. */
+  size: number | bigint;
+};
+
+/**
+ * The R13-style cross-check for an attachment: the names of the record's fields that differ
+ * from what the consumer computed (empty means the record agrees). The record must also be
+ * kind 'git' at proof level 1, the only kind this version can verify.
+ */
+export function attachmentMatches(
+  record: Pick<ListedAttachment, 'parentCaptureKey' | 'urlHash' | 'sha256' | 'kind' | 'commitSha' | 'treeSha' | 'proofLevel' | 'size'>,
+  computed: AttachmentComputed,
+): string[] {
+  const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+  const differs: string[] = [];
+  if (record.kind !== 'git') differs.push('kind');
+  if (record.proofLevel !== 1) differs.push('proof level');
+  if (!same(record.parentCaptureKey, computed.parentCaptureKey)) differs.push('parent capture');
+  if (!same(record.urlHash, computed.urlHash)) differs.push('repository address');
+  if (!same(record.sha256, computed.sha256)) differs.push('file hash');
+  if (!same(record.commitSha, computed.commitSha)) differs.push('commit');
+  if (!same(record.treeSha, computed.treeSha)) differs.push('tree');
+  if (record.size !== BigInt(computed.size)) differs.push('size');
+  return differs;
+}
+
 export type Listed = (({ kind: 'capture' } & CaptureRow) | ({ kind: 'confirmation' } & ConfirmationRow)) & {
   entityKey: Hex;
   owner: Address;
@@ -187,6 +353,34 @@ export type Listed = (({ kind: 'capture' } & CaptureRow) | ({ kind: 'confirmatio
 };
 
 export type ListResult = { rows: Listed[]; truncated: boolean };
+
+/**
+ * Reads up to `maxRows` entities page by page. Paging is keyset ($key > last seen key), which
+ * stays stable while new rows are written. One row past the cap tells us whether more existed.
+ */
+async function collectPages<E extends { $key: Hex }>(
+  fetchPage: (after: Hex | undefined, limit: number) => Promise<{ entities: readonly E[] }>,
+  pageSize: number,
+  maxRows: number,
+): Promise<{ entities: E[]; truncated: boolean }> {
+  const seen = new Set<Hex>();
+  const all: E[] = [];
+  let after: Hex | undefined;
+  while (all.length <= maxRows) {
+    const limit = Math.min(pageSize, maxRows + 1 - all.length);
+    const page = (await fetchPage(after, limit)).entities;
+    for (const e of page) {
+      if (!seen.has(e.$key)) {
+        seen.add(e.$key);
+        all.push(e);
+      }
+    }
+    if (page.length < limit) break;
+    after = page[page.length - 1]!.$key;
+  }
+  const truncated = all.length > maxRows;
+  return { entities: all.slice(0, maxRows), truncated };
+}
 
 export async function listByUrl(
   pub: ArkivPublic,
@@ -197,30 +391,10 @@ export async function listByUrl(
   const maxRows = opts.maxRows ?? 2000;
 
   // Anyone can write rows with our schema tag, so each kind gets its own budget and the
-  // caller is told when a budget was exceeded. Paging is keyset ($key > last seen key),
-  // which stays stable while new rows are written. One row past the cap tells us whether
-  // more existed.
-  async function collect<E extends { $key: Hex }>(
+  // caller is told when a budget was exceeded.
+  const collect = <E extends { $key: Hex }>(
     fetchPage: (after: Hex | undefined, limit: number) => Promise<{ entities: readonly E[] }>,
-  ): Promise<{ entities: E[]; truncated: boolean }> {
-    const seen = new Set<Hex>();
-    const all: E[] = [];
-    let after: Hex | undefined;
-    while (all.length <= maxRows) {
-      const limit = Math.min(pageSize, maxRows + 1 - all.length);
-      const page = (await fetchPage(after, limit)).entities;
-      for (const e of page) {
-        if (!seen.has(e.$key)) {
-          seen.add(e.$key);
-          all.push(e);
-        }
-      }
-      if (page.length < limit) break;
-      after = page[page.length - 1]!.$key;
-    }
-    const truncated = all.length > maxRows;
-    return { entities: all.slice(0, maxRows), truncated };
-  }
+  ) => collectPages(fetchPage, pageSize, maxRows);
 
   const captures = await collect((after, limit) =>
     pub
