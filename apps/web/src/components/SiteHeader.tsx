@@ -39,10 +39,10 @@ function SectionLink({
 }
 
 /**
- * The site header, on every route. Wide (1040 px and up): logo, Library, How it works, Sponsors,
- * theme toggle, "Get the extension" and the wallet chip. Narrower: the wallet chip moves into a
- * menu panel. Phone (760 px and under): logo, Library, theme toggle and a menu button that opens a
- * panel with the rest (Escape, an outside click or a link closes it).
+ * The site header, on every route. Wide (1040 px and up): logo, Library, Storage, How it works,
+ * Sponsors, theme toggle, "Get the extension" and the wallet chip. Narrower: the wallet chip moves
+ * into a menu panel. Phone (760 px and under): logo, Library, theme toggle and a menu button that
+ * opens a panel with the rest, Storage first (Escape, an outside click or a link closes it).
  */
 export function SiteHeader({ route }: { route: Route }) {
   const [open, setOpen] = useState(false);
@@ -107,6 +107,9 @@ export function SiteHeader({ route }: { route: Route }) {
           <a href="#/library" aria-current={route.name === 'library' ? 'page' : undefined}>
             Library
           </a>
+          <a href="#/storage" className="nav-wide" aria-current={route.name === 'storage' ? 'page' : undefined}>
+            Storage
+          </a>
           <SectionLink id="how-it-works" className="nav-wide">
             How it works
           </SectionLink>
@@ -140,6 +143,20 @@ export function SiteHeader({ route }: { route: Route }) {
         </div>
         {open ? (
           <div id={panelId} className="header-menu">
+            <a
+              href="#/storage"
+              className="menu-link"
+              aria-current={route.name === 'storage' ? 'page' : undefined}
+              onClick={(e) => {
+                // The panel unmounts on close, and a detached link does not navigate: go there first.
+                if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+                e.preventDefault();
+                window.location.hash = '#/storage';
+                close();
+              }}
+            >
+              Storage
+            </a>
             <SectionLink id="how-it-works" className="menu-link" onNavigate={close}>
               How it works
             </SectionLink>

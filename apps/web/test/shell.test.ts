@@ -59,6 +59,20 @@ describe('SiteHeader', () => {
     expect(header().textContent).toContain('Not connected');
   });
 
+  it('has a Storage link, marked current on the storage page, and lists it first in the phone menu', () => {
+    render(createElement(SiteHeader, { route: parseHash('#/storage') }));
+    const storage = [...header().querySelectorAll('nav a')].find((a) => a.textContent === 'Storage')!;
+    expect(storage.getAttribute('href')).toBe('#/storage');
+    expect(storage.getAttribute('aria-current')).toBe('page');
+    act(() => menuButton().click());
+    const first = header().querySelector<HTMLAnchorElement>('.header-menu a')!;
+    expect(first.textContent).toBe('Storage');
+    window.location.hash = '#/library';
+    act(() => first.click());
+    expect(window.location.hash).toBe('#/storage');
+    expect(menuButton().getAttribute('aria-expanded')).toBe('false');
+  });
+
   it('marks Library as the current page on the library route', () => {
     render(createElement(SiteHeader, { route: LIBRARY }));
     const library = [...header().querySelectorAll('a')].find((a) => a.textContent === 'Library')!;
