@@ -1,4 +1,4 @@
-import { DEFAULT_MAX_DOWNLOAD_BYTES, arkivPublic, listByUrl, type Listed, type NetConfig } from '@recall/net';
+import { DEFAULT_MAX_DOWNLOAD_BYTES, arkivPublic, listByUrl, type CaptureRow, type Listed, type NetConfig } from '@recall/net';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Hex } from 'viem';
 import { downloadEvidence } from '../download';
@@ -47,22 +47,46 @@ const unverified = (reason: string): Checked => ({ state: 'unverified', reason, 
  * (`controllers`), and an aborted or failed download is "couldn't be downloaded".
  */
 async function checkRow(cfg: NetConfig, row: Listed, urlHash: Hex, controllers: Set<AbortController>): Promise<Checked> {
-  let bytes: Uint8Array;
   if (row.kind === 'capture') {
     const ac = new AbortController();
     controllers.add(ac);
-    const timer = setTimeout(() => ac.abort(), DOWNLOAD_MS);
     try {
-      bytes = (await downloadEvidence(cfg, row, { signal: ac.signal })).bytes;
-    } catch {
-      return unverified(COULDNT_DOWNLOAD);
+      return await checkCaptureRow(cfg, row, ac.signal, urlHash);
     } finally {
-      clearTimeout(timer);
       controllers.delete(ac);
     }
-  } else {
-    bytes = row.evidence;
-    if (bytes.length > DEFAULT_MAX_DOWNLOAD_BYTES) return { state: 'unverified', reason: 'Evidence file is too large', status: 'fail' };
+  }
+  const bytes = row.evidence;
+  if (bytes.length > DEFAULT_MAX_DOWNLOAD_BYTES) return { state: 'unverified', reason: 'Evidence file is too large', status: 'fail' };
+  // Checks A to C and the record cross-check (R13). Nothing the index says is trusted.
+  return classify(await verifyRecordEvidence(row, bytes), urlHash);
+}
+
+/**
+ * One capture record's check, as the timeline does it: download its evidence (aborted by
+ * `signal` or after 30 s; a failed download is "couldn't be downloaded"), run checks A to C and
+ * the record cross-check (R13), and require the evidence to be about `urlHash` (the record's own
+ * by default). Used by the timeline and the library.
+ */
+export async function checkCaptureRow(
+  cfg: NetConfig,
+  row: CaptureRow,
+  signal?: AbortSignal,
+  urlHash: Hex = row.urlHash,
+): Promise<Checked> {
+  let bytes: Uint8Array;
+  const ac = new AbortController();
+  const stop = () => ac.abort();
+  if (signal?.aborted) ac.abort();
+  signal?.addEventListener('abort', stop);
+  const timer = setTimeout(stop, DOWNLOAD_MS);
+  try {
+    bytes = (await downloadEvidence(cfg, row, { signal: ac.signal })).bytes;
+  } catch {
+    return unverified(COULDNT_DOWNLOAD);
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', stop);
   }
   // Checks A to C and the record cross-check (R13). Nothing the index says is trusted.
   return classify(await verifyRecordEvidence(row, bytes), urlHash);
