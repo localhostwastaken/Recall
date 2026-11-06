@@ -369,3 +369,13 @@ Open them in a browser directly (they load GSAP and Google Fonts from CDNs; the 
    link to the faucet.
 7. The wallet chip stays in the header (an e2e spec clicks "Connect MetaMask" inside `header`).
    The light-only assertions in `p3-settings.spec.ts` are expected to change with dark mode.
+
+## 13. User answers (2026-11-06, ~23:55 IST) — design approved ("let's go")
+1. **Library seeding:** the main session captures real pages on the live network (this doubles
+   as an end-to-end test), choosing pages that are famous, related to our niche (accountability,
+   free speech, public notices, terms of service, open-source repos) and not too costly: free
+   storage for most, paid for a few headline ones. The user informs the main session. This branch
+   only has to render whatever is on Arkiv well.
+2. **AWS test runner:** this branch may use it for its e2e; ask the main session to keep it up
+   until this branch's e2e passes.
+3. **Demo video:** re-record after this merges, coordinated with the main session.
