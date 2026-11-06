@@ -1,6 +1,7 @@
 import { ArrowRight } from 'lucide-react';
 import { useId, type ReactNode } from 'react';
-import { filterSort, type PageEntry } from '../library/model';
+import { filterSort, isTestAddress, type PageEntry } from '../library/model';
+import { getNetConfig } from '../net';
 import { useKeepAliveLibrary } from '../library/LibraryKeepAlive';
 import { useLibrary, type LibraryData } from '../library/useLibrary';
 import { LibraryCardItem, LibraryEmpty, LibraryError, SkeletonGrid, keepAliveSlot, useCheckOnView } from '../routes/Library';
@@ -32,7 +33,9 @@ export function LibraryPreview({ id = 'library-preview' }: { id?: string }) {
   const lib = useKeepAliveLibrary(useLibrary());
   const observe = useCheckOnView(lib.requestCheck, lib.entries);
   const titleId = useId();
-  const listed = lib.entries.filter((e) => lib.check.get(e.urlHash) !== 'unverified');
+  // Our own test pages (the fictional notice) never headline the live landing page.
+  const live = getNetConfig().arkiv.chain === 'rabdi';
+  const listed = lib.entries.filter((e) => lib.check.get(e.urlHash) !== 'unverified' && !(live && isTestAddress(e.address)));
   const top = filterSort(listed, { q: '', type: 'all', sort: 'time' }, lib.titles, lib.days).slice(0, PREVIEW_CARDS);
   return (
     <section id={id} className="lib-preview" aria-labelledby={titleId}>

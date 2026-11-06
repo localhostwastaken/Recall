@@ -3,7 +3,8 @@ import { useCallback, useEffect, useId, useRef, useState, type MouseEvent, type 
 import type { Hex } from 'viem';
 import { Duo } from '../brand/Duo';
 import { CaptureCard, type CardStatus } from '../components/CaptureCard';
-import { filterSort, shortAddress, type PageEntry } from '../library/model';
+import { filterSort, isTestAddress, shortAddress, type PageEntry } from '../library/model';
+import { getNetConfig } from '../net';
 import { LibraryKeepAlive, useKeepAliveLibrary } from '../library/LibraryKeepAlive';
 import { useLibrary, type LibraryData } from '../library/useLibrary';
 import { libraryHash, parseHash, type LibrarySort, type LibraryType, type LibraryView } from '../router';
@@ -219,6 +220,7 @@ export function Library({ q = '', type = 'all', sort = 'time' }: Partial<Library
   const [kind, setKind] = useState<LibraryType>(type);
   const [order, setOrder] = useState<LibrarySort>(sort);
   const [showUnverified, setShowUnverified] = useState(false);
+  const [showTests, setShowTests] = useState(false);
   const observe = useCheckOnView(lib.requestCheck, lib.entries);
   const searchId = useId();
   const sortId = useId();
@@ -264,8 +266,12 @@ export function Library({ q = '', type = 'all', sort = 'time' }: Partial<Library
   }, [query, kind, order]);
 
   const view: LibraryView = { q: query, type: kind, sort: order };
-  const listed = lib.entries.filter((e) => lib.check.get(e.urlHash) !== 'unverified');
-  const failed = lib.entries.filter((e) => lib.check.get(e.urlHash) === 'unverified');
+  // On the live network our own test pages (the fictional notice) are hidden unless asked for.
+  const hidesTests = getNetConfig().arkiv.chain === 'rabdi';
+  const tests = hidesTests ? lib.entries.filter((e) => isTestAddress(e.address)) : [];
+  const entries = hidesTests && !showTests ? lib.entries.filter((e) => !isTestAddress(e.address)) : lib.entries;
+  const listed = entries.filter((e) => lib.check.get(e.urlHash) !== 'unverified');
+  const failed = entries.filter((e) => lib.check.get(e.urlHash) === 'unverified');
   const shown = filterSort(listed, view, lib.titles, lib.days);
   const shownFailed = filterSort(failed, view, lib.titles, lib.days);
   const filtering = query.trim() !== '' || kind !== 'all';
@@ -362,6 +368,12 @@ export function Library({ q = '', type = 'all', sort = 'time' }: Partial<Library
       ) : null}
 
       {lib.status === 'ready' && lib.truncated ? <p className="lib-note">Showing 1,000 captures. Arkiv has more than this page reads.</p> : null}
+
+      {lib.status === 'ready' && tests.length > 0 ? (
+        <div className="lib-unverified">
+          <Switch label={`Show our test pages (${tests.length})`} checked={showTests} onChange={setShowTests} />
+        </div>
+      ) : null}
 
       {lib.status === 'ready' && shownFailed.length > 0 ? (
         <div className="lib-unverified">

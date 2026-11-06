@@ -156,3 +156,11 @@ export function filterSort(
   };
   return shown.sort(view.sort === 'newest' ? byNewest : byDays(view.sort === 'ending' ? 1 : -1));
 }
+
+/**
+ * Our own test pages on the live network: the fictional notice page (any ?run=), and the devnet's
+ * notice host whose records reached Rabdi in early tests. The library hides them by default.
+ */
+export function isTestAddress(address: string): boolean {
+  return /^localhostwastaken\.github\.io\/Recall\/notice\//.test(address) || /^notice\.recall\.test(\/|$)/.test(address);
+}
