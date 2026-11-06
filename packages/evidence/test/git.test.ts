@@ -113,7 +113,7 @@ describe('gitTreeFromTarGz', () => {
   });
 
   it('has the documented default limits', () => {
-    expect(GIT_TAR_LIMITS).toEqual({ maxEntries: 200_000, maxUncompressedBytes: 300 * 1024 * 1024 });
+    expect(GIT_TAR_LIMITS).toEqual({ maxEntries: 200_000, maxUncompressedBytes: 150 * 1024 * 1024 });
   });
 
   describe('fails closed', () => {

@@ -26,7 +26,7 @@ export type GitTarLimits = {
 
 export const GIT_TAR_LIMITS: Readonly<GitTarLimits> = Object.freeze({
   maxEntries: 200_000,
-  maxUncompressedBytes: 300 * 1024 * 1024,
+  maxUncompressedBytes: 150 * 1024 * 1024,
 });
 
 const SHA_RE = /^[0-9a-f]{40}$/;
