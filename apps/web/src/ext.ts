@@ -96,10 +96,20 @@ export async function getExtensionInfo(opts?: { extensionId?: string }): Promise
   return { address: res.address, ...(version ? { version } : {}) };
 }
 
-export type PoolEntry = { batchId: Hex; used: boolean };
+export type PoolEntry = { batchId: Hex; used: boolean; usable?: boolean; dead?: true };
 
 /** Hands bought batches to the extension's pool. */
 export async function addBatches(batchIds: Hex[], opts?: { extensionId?: string }): Promise<PoolEntry[]> {
   const res = await send<{ pool: PoolEntry[] }>({ type: 'recall.addBatches', batchIds }, { timeoutMs: 15_000, ...opts });
+  return res.pool;
+}
+
+/**
+ * The extension's pool as it is now. An add with no batch ids changes nothing and answers the
+ * pool, so an extension that is already installed needs no new message for it.
+ */
+export async function readPool(opts?: { extensionId?: string }): Promise<PoolEntry[]> {
+  const res = await send<{ pool?: PoolEntry[] }>({ type: 'recall.addBatches', batchIds: [] }, { timeoutMs: 15_000, ...opts });
+  if (!Array.isArray(res?.pool)) throw new ExtError('rejected', 'The extension returned no pool.');
   return res.pool;
 }
