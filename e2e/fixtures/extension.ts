@@ -35,7 +35,11 @@ export async function launchWithExtension({ dev }: { dev: boolean }): Promise<Ex
     `--load-extension=${EXTENSION_BUILD_DIR}`,
   ];
   if (dev) {
-    args.push(`--host-resolver-rules=MAP ${NOTICE_HOST} 127.0.0.1`, '--ignore-certificate-errors');
+    // The notice fixture also plays GitHub for the .git adapter (R46).
+    args.push(
+      `--host-resolver-rules=MAP ${NOTICE_HOST} 127.0.0.1,MAP api.github.recall.test 127.0.0.1,MAP codeload.github.recall.test 127.0.0.1`,
+      '--ignore-certificate-errors',
+    );
   }
   // channel 'chromium' runs the full browser in new headless mode, which supports extensions.
   const context = await chromium.launchPersistentContext('', {

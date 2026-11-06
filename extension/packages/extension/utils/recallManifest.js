@@ -28,12 +28,17 @@ const RELEASE_EXTENSION_ID = extensionIdFromKey(RELEASE_KEY);
  */
 const RELEASE_CONNECTABLE = ['https://localhostwastaken.github.io/*'];
 
+/** Hosts that play GitHub on the devnet (fixtures/notice); dev builds only. */
+const DEV_GITHUB_HOST_PERMISSIONS = ['https://api.github.recall.test/*', 'https://codeload.github.recall.test/*'];
+
 /** `manifest` as a dev build (name "Recall (dev)") or a release build ships it. */
 function recallManifest(manifest, { dev }) {
   const out = { ...manifest };
   if (dev) {
     // A dev build (test CA, devnet defaults) is labelled so it is never mistaken for the release.
     out.name = `${out.name} (dev)`;
+    // The devnet fixture plays GitHub (R46): the dev build reads it instead of the real hosts.
+    out.host_permissions = [...(out.host_permissions ?? []), ...DEV_GITHUB_HOST_PERMISSIONS];
   } else {
     out.externally_connectable = { ...out.externally_connectable, matches: [...RELEASE_CONNECTABLE] };
     out.key = RELEASE_KEY;

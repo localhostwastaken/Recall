@@ -38,7 +38,9 @@
     "https://bzz.link/*",
     "https://*.bzz.link/*",
     "https://rpc.rabdi.db-chain.testnet.arkiv.network/*",
-    "https://rpc.gnosischain.com/*"
+    "https://rpc.gnosischain.com/*",
+    "https://api.github.com/*",
+    "https://codeload.github.com/*"
   ],
   "optional_host_permissions": ["https://*/*"],
   "permissions": ["offscreen", "storage", "tabs", "activeTab"]
