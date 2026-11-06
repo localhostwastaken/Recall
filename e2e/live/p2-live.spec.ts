@@ -100,8 +100,8 @@ const NO_PROFILE_WITNESS: Address = '0x000000000000000000000000000000000000dEaD'
 
 type PoolEntry = { batchId: Hex; used: boolean; usable?: boolean; dead?: string; startBlock?: string };
 type Upload =
-  | { status: 'uploaded'; captureId: string; evidenceRef: Hex; batchId: Hex }
-  | { status: string; error?: string; reason?: string };
+  | { status: 'pending'; captureId: string }
+  | { status: string; captureId?: string; error?: string; reason?: string };
 type CaptureState = {
   id: string;
   status: 'running' | 'done' | 'error' | 'cancelled';
@@ -480,44 +480,27 @@ test.describe('@live p2', () => {
       if (popup.isClosed()) popup = await context.newPage();
       await openPopup();
     }
-    // A passing upload failure (network, 5xx, timeout) keeps the batch: retry it from the popup.
-    for (let retry = 0; state.status === 'done' && state.upload?.status === 'failed' && retry < 2; retry++) {
-      errors.push(`upload: ${state.upload.error ?? ''}`);
-      test.info().annotations.push({ type: 'retried upload', description: state.upload.error ?? '' });
-      const doneAt = state.finishedAt;
-      await openPopup();
-      await popup.getByRole('button', { name: 'Try again' }).click();
-      await expect
-        .poll(
-          async () => {
-            const s = (await storage('session', 'recall.capture')) as CaptureState | undefined;
-            if (s?.status === 'done' && s.finishedAt !== doneAt) state = s;
-            return s?.status === 'done' && s.finishedAt !== doneAt;
-          },
-          { timeout: 300_000, intervals: [1_000] },
-        )
-        .toBe(true);
-    }
-    mark('captureToUploadS', tw);
+    mark('captureS', tw);
     expect(state.status, state.error).toBe('done');
     const own = state.checks!;
     expect([own.A.status, own.B.status, own.C.status], JSON.stringify(own)).toEqual(['pass', 'pass', 'pass']);
 
-    // 3. The stamped upload through the public gateway.
-    expect(state.upload?.status, JSON.stringify(state.upload)).toBe('uploaded');
-    const up = state.upload as Extract<Upload, { status: 'uploaded' }>;
-    expect(up.batchId.toLowerCase()).toBe(batchId.toLowerCase());
-    expect(up.evidenceRef).toMatch(/^0x[0-9a-f]{64}$/);
+    // 3. Capture first (R44): kept in the extension, nothing uploaded yet; the popup sends the
+    // person to the Recall tab.
+    expect(state.upload?.status, JSON.stringify(state.upload)).toBe('pending');
+    const up = state.upload as Extract<Upload, { status: 'pending' }>;
     pool = ((await storage('local', 'recall.pool')) as PoolEntry[]) ?? [];
-    expect(pool.find((b) => b.batchId.toLowerCase() === batchId.toLowerCase())?.used).toBe(true);
-    await expect(popup.getByText('Evidence uploaded')).toBeVisible({ timeout: 15_000 });
+    expect(pool.find((b) => b.batchId.toLowerCase() === batchId.toLowerCase())?.used).toBe(false);
+    await expect(popup.getByRole('heading', { name: 'Continue in the Recall tab' })).toBeVisible({ timeout: 15_000 });
 
-    // 4. The approval tab (opened by the extension) publishes on Rabdi with the treasury wallet.
+    // 4. The publish tab (opened by the extension): Upload and publish. The extension stamps with
+    // the pool batch and uploads through the public gateway, then the treasury wallet publishes on
+    // Rabdi.
     let approve: Page | undefined;
     await expect
       .poll(() => (approve = context.pages().find((p) => p.url().includes(`#/approve/${up.captureId}`))), {
         timeout: 30_000,
-        message: 'the extension opens the approval tab',
+        message: 'the extension opens the publish tab',
       })
       .toBeTruthy();
     expect(approve!.url()).toBe(`${APP_URL}#/approve/${up.captureId}?ext=${extensionId}`);
@@ -531,17 +514,26 @@ test.describe('@live p2', () => {
     await approve!.reload();
     const ourBundle = /src="\.\/(assets\/index-[^"]+\.js)"/.exec(readFileSync(join(APP_DIST, 'index.html'), 'utf8'))![1];
     expect(await approve!.evaluate(() => [...document.scripts].map((x) => x.src))).toContain(`${APP_URL}${ourBundle}`);
-    await expect(approve!.getByRole('heading', { level: 1 })).toHaveText('Publish this capture', { timeout: 60_000 });
+    await expect(approve!.getByRole('heading', { level: 1 })).toHaveText('Save this capture', { timeout: 60_000 });
     for (const k of ['A', 'B', 'C']) {
       await expect(approve!.locator(`.approve-check-list [data-check="${k}"] .badge`)).toHaveAttribute('data-status', 'pass');
     }
     const tp = Date.now();
-    await approve!.locator('main').getByRole('button', { name: 'Connect MetaMask' }).click();
-    await approve!.getByRole('button', { name: 'Switch to Arkiv Rabdi' }).click();
     const fromBlock = await rabdiPub.getBlockNumber();
-    await approve!.getByRole('button', { name: 'Publish record' }).click();
-    await expect(approve!.getByRole('heading', { name: 'Published', exact: true })).toBeVisible({ timeout: 180_000 });
-    mark('publishS', tp);
+    await approve!.getByRole('button', { name: 'Upload and publish' }).click();
+    // A passing upload failure (network, 5xx, timeout) keeps the capture and the batch: try again.
+    const published = approve!.getByRole('heading', { name: 'Published', exact: true });
+    const failedUpload = approve!.getByRole('heading', { name: 'Upload failed' });
+    for (let retry = 0; ; retry++) {
+      await expect(published.or(failedUpload)).toBeVisible({ timeout: 420_000 });
+      if (await published.isVisible()) break;
+      const why = (await approve!.locator('.notice').filter({ has: failedUpload }).textContent()) ?? '';
+      errors.push(`upload: ${why}`);
+      test.info().annotations.push({ type: 'retried upload', description: why });
+      expect(retry, why).toBeLessThan(2);
+      await approve!.getByRole('button', { name: 'Try upload again' }).click();
+    }
+    mark('uploadAndPublishS', tp);
     await expect(approve!.getByText(/Record on Arkiv until /)).toBeVisible({ timeout: 30_000 });
     const entityKey = (await approve!.locator('.approve-record .mono-value').first().getAttribute('title')) as Hex;
     expect(entityKey).toMatch(/^0x[0-9a-f]{64}$/i);
@@ -562,8 +554,11 @@ test.describe('@live p2', () => {
       )
       .toBe('capture');
     expect(getAddress(row!.owner)).toBe(treasury.address);
-    expect(row!.evidenceRef).toBe(up.evidenceRef);
+    expect(row!.evidenceRef).toMatch(/^0x[0-9a-f]{64}$/);
+    const evidenceRef = row!.evidenceRef;
     expect(row!.batchId.toLowerCase()).toBe(batchId.toLowerCase());
+    pool = ((await storage('local', 'recall.pool')) as PoolEntry[]) ?? [];
+    expect(pool.find((b) => b.batchId.toLowerCase() === batchId.toLowerCase())?.used).toBe(true);
     expect(row!.canonicalUrl).toBe(canonicalUrl(PAGE));
     expect(row!.serverName).toBe(NOTICE_HOST);
     expect(row!.httpStatus).toBe(200);
@@ -580,10 +575,10 @@ test.describe('@live p2', () => {
       await expect
         .poll(
           async () => {
-            got = await downloadBytes(up.evidenceRef, [gw], { signal: AbortSignal.timeout(30_000) }).catch(() => undefined);
+            got = await downloadBytes(evidenceRef, [gw], { signal: AbortSignal.timeout(30_000) }).catch(() => undefined);
             return got?.rootVerified;
           },
-          { timeout: 180_000, intervals: [5_000], message: `download ${up.evidenceRef} from ${gw}` },
+          { timeout: 180_000, intervals: [5_000], message: `download ${evidenceRef} from ${gw}` },
         )
         .toBe(true);
       downloads[gw] = { ms: Date.now() - td, bytes: got!.bytes.length };
@@ -601,7 +596,7 @@ test.describe('@live p2', () => {
       expect(new TextDecoder().decode(f.body)).toContain('15 December');
     }
     // bzz.link's CID subdomain form serves manifests (/bzz), not raw /bytes: recorded, not required.
-    const cidUrl = `https://${swarmManifestCid(up.evidenceRef)}.bzz.link/`;
+    const cidUrl = `https://${swarmManifestCid(evidenceRef)}.bzz.link/`;
     const cidStatus = await fetch(cidUrl, { signal: AbortSignal.timeout(30_000) }).then((r) => r.status, () => 0);
 
     const after = await balances(treasury.address);
@@ -627,13 +622,13 @@ test.describe('@live p2', () => {
       captureAttempts: attempts,
       retriedErrors: errors,
       captureJobMs: state.finishedAt! - state.startedAt,
-      evidenceRef: up.evidenceRef,
+      evidenceRef: evidenceRef,
       evidenceBytes: firstBytes!.length,
       uploadUrl: UPLOAD_URL,
       arkiv: { entityKey, txHashes: arkivTxs, owner: treasury.address, chainId: RABDI_ID },
       record: { urlHash: row!.urlHash, bodySha256: row!.bodySha256, signedAt: String(row!.signedAt) },
       downloads,
-      bzzLinkBytesUrl: `https://bzz.link/bytes/${up.evidenceRef.slice(2)}`,
+      bzzLinkBytesUrl: `https://bzz.link/bytes/${evidenceRef.slice(2)}`,
       bzzLinkCid: { url: cidUrl, status: cidStatus },
       spent: { xbzz: formatUnits(spent.xbzz, 16), xdai: formatEther(spent.xdai), tglm: formatEther(spent.tglm) },
       timings,
