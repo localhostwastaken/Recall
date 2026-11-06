@@ -5,15 +5,26 @@ person who captured it: you trust the witness key you pin, and by default that i
 
 > **Judges: start here**
 > - **See a verified capture (no install, no wallet):** open the capture in the app:
->   <https://localhostwastaken.github.io/Recall/app/#/c/0xc50021a907dbd1d511d2e4a1482614647cbbb4a0dd2d4bf26ad70065b3611244>
+>   <https://localhostwastaken.github.io/Recall/app/#/c/0x617c879872510fe0c67931aa7530413172ac402bbb0f97f048dca046fee24436>
+>   (checks A to C run in your browser).
+> - **Check the same capture in other people's tools (don't trust our page):**
+>   - the record in Arkiv's own explorer:
+>     <https://rabdi.explorer.arkiv.network/entity/0x617c879872510fe0c67931aa7530413172ac402bbb0f97f048dca046fee24436>
+>   - the evidence file from Swarm's public gateway (drop it on the app's Home page; it verifies offline):
+>     <https://download.gateway.ethswarm.org/bytes/433dfd7f3ea174eb02d919c1a4c9181ac4358ca1df6d8419a275fdf06336bf53>
+>   - the storage payment (Approve + Create Batch) on Gnosisscan:
+>     <https://gnosisscan.io/address/0xd46480d1Ec02B8ce92aE383914026efD5F73f835>
+>
+>   Every capture page in the app has these "Check it yourself" links.
 > - **Install the extension and capture a page yourself:** download `recall-extension.zip` from the
 >   [v0.1.0-mumbai release](https://github.com/localhostwastaken/Recall/releases/tag/v0.1.0-mumbai), unzip it and "Load unpacked" in `chrome://extensions`
->   (steps under [Run it](#run-it)).
-> - **The app on Swarm (browse and verify):** feed manifest
->   `e002e9ab0bee50f874a8ee461fe053aca71c7e3be502b941d8933008e357f9e0` (one address that survives
->   republishing). Open it through any Bee node at `/bzz/<feed manifest>/`, for example a read-only one
->   started by `bash scripts/swarm-reader.sh` at `http://127.0.0.1:1733/bzz/<feed manifest>/`.
->   bzz.link will serve it once the Swarm team allowlists the hash (requested). Details under
+>   (steps under [Run it](#run-it)). Nothing to configure. No xBZZ? Pick **Use free storage instead**
+>   on the publish page (the Swarm gateway stores it; nobody can extend it, so it is for trying Recall).
+>   Brave: set `brave://settings/web3` > Default Ethereum wallet to "Extensions (no fallback)" so MetaMask answers.
+> - **The app on Swarm (browse and verify):** <https://recallapp.eth.limo> and <https://recallapp.bzz.link>
+>   (ENS `recallapp.eth` points at the Swarm feed manifest
+>   `e002e9ab0bee50f874a8ee461fe053aca71c7e3be502b941d8933008e357f9e0`, one address that survives
+>   republishing). Any Bee node also serves it at `/bzz/<feed manifest>/`. Details under
 >   [The web app](#the-web-app).
 > - **Run the Arkiv query:** `pnpm install && pnpm arkiv:query` (see [Writer wallets](#writer-wallets)),
 >   or the keyless `curl` there.
@@ -79,10 +90,10 @@ The app is also live on Swarm, so the verifier survives if GitHub Pages goes awa
 - **Storage:** postage batch `0x50c1a8d51231595606ea8730f14554c4cdbb5d64280e82063e9a24347dd1f3b9`
   (depth 18, 14 days, 1.276 xBZZ, paid by the treasury). Every transaction and value is in
   [arkiv/swarm.md](arkiv/swarm.md) and the [evidence log](docs/evidence-log.md).
-- **bzz.link is not working yet:** <https://bzz.link/bzz/e002e9ab0bee50f874a8ee461fe053aca71c7e3be502b941d8933008e357f9e0/> and
-  <https://bah5qcgza4abotkyl5zipq5fi5zdb7yctvstry7r34ublsqoysmyary2x7hqa.bzz.link/> show
-  `/forbidden` until the Swarm team allowlists the hash; we have asked. Once it does, bzz.link
-  serves the app.
+- **Open it by name:** <https://recallapp.eth.limo> and <https://recallapp.bzz.link>. The ENS name
+  `recallapp.eth` has a contenthash pointing at the feed manifest, so both gateways resolve it
+  (a raw `/bzz/<hash>/` on bzz.link still shows `/forbidden` for hashes the Swarm team has not
+  allowlisted; the ENS name does not need that).
 - **The public download gateway serves the files, but as downloads.**
   download.gateway.ethswarm.org answers `/bzz/...` with `Content-Disposition: attachment`, so a
   browser saves `index.html` instead of showing the app.
