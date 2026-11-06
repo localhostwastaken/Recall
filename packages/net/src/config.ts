@@ -6,6 +6,12 @@ export type NetConfig = {
   gnosis: { rpcUrl: string };
   app: { url: string };
   witness: { pinned: Address[] };
+  /**
+   * Public block explorers, so a person can open a record or a payment in the explorer's own
+   * page instead of trusting ours. Live only: the local devnet has none, so no explorer link is
+   * shown there.
+   */
+  explorers?: { arkiv?: string; gnosis?: string };
 };
 
 /** The host of the public Rabdi RPC (the SDK's `rabdi({accessKey})` uses the same one). */
@@ -33,6 +39,7 @@ export function liveConfig(env: Record<string, string>): NetConfig {
     gnosis: { rpcUrl: 'https://rpc.gnosischain.com' },
     app: { url: 'https://localhostwastaken.github.io/Recall/app/' },
     witness: { pinned: [] },
+    explorers: { arkiv: 'https://rabdi.explorer.arkiv.network', gnosis: 'https://gnosisscan.io' },
   };
 }
 
