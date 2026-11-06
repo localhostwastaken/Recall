@@ -479,6 +479,13 @@ async function installGuardedWallet(context: BrowserContext, stage: Stage) {
   return { wallet, sent, refused };
 }
 
+/** The opening: why bitchat (facts as reported by CyberInsider, 24 Jul 2026). */
+const CASE: CardSpec = {
+  kicker: 'July 2026',
+  title: 'India ordered GitHub to block the bitchat repositories within 3 hours.',
+  sub: 'Recall keeps verifiable proof of exactly what this code was.',
+  note: 'Source: CyberInsider, 24 Jul 2026',
+};
 const INTRO: CardSpec = {
   kicker: 'Recall',
   title: 'Prove what a website or a GitHub repo said at a moment in time.',
@@ -488,7 +495,8 @@ const INTRO: CardSpec = {
 const sectionCard = (step: string, title: string, sub: string): CardSpec => ({ step, title, sub });
 const END: CardSpec = {
   kicker: 'Recall',
-  title: 'Proof that outlives the page.',
+  title: 'A takedown can hide the original.',
+  sub: "It can't erase verifiable proof of exactly what the code was.",
   rows: [
     ['App', 'localhostwastaken.github.io/Recall/app'],
     ['App on Swarm', 'recallapp.bzz.link'],
@@ -535,10 +543,14 @@ async function run(context: BrowserContext, stage: Stage, o: Opts): Promise<void
   await fontsReady(main);
   await stage.show(main, 'main');
   await stage.where(null);
-  await stage.card(INTRO, 700);
+  await stage.card(CASE, 700);
   stage.beat('title');
+  await stage.roll('case card');
+  await sleep(7000);
+  await stage.card(null, 450);
+  await stage.card(INTRO, 500);
   await stage.roll('title card');
-  await sleep(5500);
+  await sleep(4500);
   await stage.cut();
 
   // b. The repository on GitHub.
@@ -560,7 +572,7 @@ async function run(context: BrowserContext, stage: Stage, o: Opts): Promise<void
   stage.beat('github');
   await stage.roll('github');
   await sleep(1500);
-  await stage.say('Code and pages change or vanish. Can you prove what this repo contained today?');
+  await stage.say('This is the repository the order named. Can we prove what it contained today?');
   await sleep(1800);
   await stage.scrollTo(330, 1600);
   await sleep(900);

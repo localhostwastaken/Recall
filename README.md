@@ -25,6 +25,21 @@ person who captured it: you trust the witness key you pin, and by default that i
 >   except the vendored TLSNotary code (the `extension/` fork of tlsn-extension and the verifier in
 >   `witness/`), whose upstream origin and our changes are listed in their NOTICE files.
 
+## Why bitchat?
+
+At 11:16 pm on 23 July 2026, India's Indian Cyber Crime Coordination Centre (I4C, Ministry of Home
+Affairs) ordered GitHub to disable access to three bitchat repositories within 3 hours, including
+[github.com/permissionlesstech/bitchat](https://github.com/permissionlesstech/bitchat). It cited
+Section 79(3)(b) of the IT Act, 2000 and Rule 3(1)(d) of the IT Rules: the Bluetooth mesh app could be
+used during internet shutdowns and impedes lawful interception. Jack Dorsey wrote on X: "the government
+of india does not like technologies like bitchat and wants it taken down." The Internet Freedom
+Foundation called the order "unconstitutional and authoritarian". A takedown can hide the original. It
+can't erase verifiable proof of exactly what the code was, so our demo captures that repository.
+Sources: [CyberInsider, 24 Jul 2026](https://cyberinsider.com/github-ordered-to-remove-decentralized-messaging-app-bitchat-in-india/),
+[The Cyber Sec Guru](https://thecybersecguru.com/news/india-github-bitchat-repository-takedown/).
+
+## What Recall does
+
 Official notices and policies get quietly edited or taken down. Recall lets a journalist or
 researcher capture a public HTTPS page so that anyone can later check, in a browser or fully
 offline, what the page said:

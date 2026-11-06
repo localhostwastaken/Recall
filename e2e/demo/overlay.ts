@@ -19,6 +19,8 @@ export type CardSpec = {
   /** [label, value] rows, shown in a list (the end card's links). */
   rows?: [string, string][];
   foot?: string;
+  /** A small, muted line under the rule (a source). */
+  note?: string;
   /** A big step number for section headers. */
   step?: string;
 };
@@ -156,6 +158,11 @@ export const OVERLAY_SCRIPT = String.raw`(() => {
       font: 700 22px/1.2 'Recall Demo Display', 'Bricolage Grotesque', system-ui, sans-serif;
     }
     .foot:empty { display: none; }
+    .note {
+      margin-top: 22px; color: #52607a;
+      font: 500 19px/1.4 'Recall Demo Sans', 'Public Sans', system-ui, sans-serif;
+    }
+    .note:empty { display: none; }
   ${'`'};
 
   const state = { caption: '', where: null, fast: false, card: null };
@@ -202,6 +209,7 @@ export const OVERLAY_SCRIPT = String.raw`(() => {
     const rule = el('div', 'rule', card);
     el('span', '', rule);
     el('span', '', rule);
+    const note = el('div', 'note', card);
     const rows = el('ul', 'rows', card);
     const foot = el('div', 'foot', card);
     const ring = el('div', 'ring', layer);
@@ -216,7 +224,7 @@ export const OVERLAY_SCRIPT = String.raw`(() => {
     const text = el('div', 'text', cap);
     const tick = el('div', 'tick', layer);
     document.documentElement.appendChild(host);
-    ui = { host, card, cardStep, kicker, h1, sub, rows, foot, ring, tap, chip, ptr, fast, cap, where, text, tick };
+    ui = { host, card, cardStep, kicker, h1, sub, note, rows, foot, ring, tap, chip, ptr, fast, cap, where, text, tick };
     render(false);
   };
 
@@ -259,6 +267,7 @@ export const OVERLAY_SCRIPT = String.raw`(() => {
         ui.rows.appendChild(li);
       }
       ui.foot.textContent = c.foot || '';
+      ui.note.textContent = c.note || '';
     }
     ui.card.classList.toggle('on', !!c);
   };

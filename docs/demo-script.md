@@ -4,6 +4,30 @@ The video tells one story: a university quietly moves a deadline from "15 Decemb
 "12 December", Recall proves both versions, and the proof survives when our witness, our
 website and even the internet connection are gone.
 
+## Opening: why bitchat
+
+The recorded video (`pnpm demo:record`, `e2e/demo/record-demo.ts`) opens on the bitchat case, then
+captures that repository:
+
+1. Title card: "July 2026: India ordered GitHub to block the bitchat repositories within 3 hours."
+   Small: "Source: CyberInsider, 24 Jul 2026". Then: "Recall keeps verifiable proof of exactly what
+   this code was."
+2. github.com/permissionlesstech/bitchat, captioned "This is the repository the order named. Can we
+   prove what it contained today?"
+3. End card: "A takedown can hide the original. It can't erase verifiable proof of exactly what the
+   code was."
+
+The facts, if asked: at 11:16 pm on 23 July 2026, India's Indian Cyber Crime Coordination Centre
+(I4C, Ministry of Home Affairs) ordered GitHub to disable access to three bitchat repositories within
+3 hours, including github.com/permissionlesstech/bitchat, citing Section 79(3)(b) of the IT Act, 2000
+and Rule 3(1)(d) of the IT Rules (the Bluetooth mesh app could be used during internet shutdowns and
+impedes lawful interception). Jack Dorsey on X: "the government of india does not like technologies
+like bitchat and wants it taken down." The Internet Freedom Foundation called the order
+"unconstitutional and authoritarian". Don't say the repository was taken down or that GitHub
+complied (unconfirmed), and don't say Recall defeats takedowns. Sources:
+[CyberInsider, 24 Jul 2026](https://cyberinsider.com/github-ordered-to-remove-decentralized-messaging-app-bitchat-in-india/),
+[The Cyber Sec Guru](https://thecybersecguru.com/news/india-github-bitchat-repository-takedown/).
+
 Rehearse steps 6 to 9 any time with `pnpm test:live --grep crops` (`e2e/live/p5-crops.spec.ts`).
 `RECALL_P5_STOP_WITNESS=1` makes it stop and restart the real witness container, as step 6 does.
 
