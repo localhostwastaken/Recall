@@ -150,7 +150,7 @@ function freeStorageCheck(arkivEndsAt: Date | null): CheckResult {
     status: 'unavailable',
     detail: `This capture used the gateway's free storage, which has no known end date.${
       arkivEndsAt ? ` Record on Arkiv until ${formatDay(arkivEndsAt)}.` : ''
-    }`,
+    } Nobody can pay to keep free storage alive, so download the evidence file to keep your own copy.`,
   };
 }
 

@@ -416,7 +416,7 @@ export function KeepAlive({
             {free ? (
               <p className="ka-lede">
                 {freeStorage
-                  ? "This capture used the gateway's free storage, which can't be extended."
+                  ? "This capture used the gateway's free storage, which can't be extended. Only the Arkiv record can; download the evidence file to keep your own copy."
                   : swarmQuote?.kind === 'unsupported'
                     ? "This capture's storage batch isn't one Recall created. Storage can't be extended."
                     : swarmQuote?.kind === 'unreadable'

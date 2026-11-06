@@ -619,7 +619,8 @@ type Funds = { kind: 'loading' } | { kind: 'unknown'; for?: Address } | { kind: 
 /** The storage choice stops waiting for a slow read after this long (the free option is never held back). */
 const CHECK_CAP_MS = 10_000;
 
-const FREE_NOTE = "Free: stored by the public Swarm gateway, no xBZZ needed. Less durable, and it can't be extended.";
+const FREE_NOTE =
+  "Free storage: the public Swarm gateway keeps it, no xBZZ needed. The gateway decides how long it stays, and nobody can pay to keep it alive. Good for trying Recall; use paid storage for evidence you'll need later.";
 
 const BUY_LABEL: Record<BuyStep, string> = {
   checking: 'Checking the earlier purchase…',
