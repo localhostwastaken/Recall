@@ -31,6 +31,17 @@ export const CAPTURE_STEPS = [
 /** Shown when witnesses are pinned: the same-page check after the signature check. */
 export const LOOKUP_STEP = 'Looking for earlier captures';
 
+/** A GitHub repository (R46): after the checks, the code of the notarized commit. */
+export const DOWNLOAD_STEP = 'Downloading the code';
+export const CODE_CHECK_STEP = 'Checking the code against the commit';
+
+/** The primary button on a GitHub repository page, and its sub-line. */
+export const REPO_BUTTON = 'Capture this repository';
+export const PAGE_BUTTON = 'Capture this page';
+export function repoSubline(branch: string): string {
+  return `branch ${branch} · notarizes GitHub's commit, then checks the code`;
+}
+
 /** The popup's footer helper while a capture can start (design brief 4.1). */
 export const CAPTURE_HELPER = 'Takes about 30 s and about 80 MB of data. Pages up to 64 KB.';
 
@@ -39,6 +50,8 @@ export type StepPlan = {
   lookupPlanned?: boolean;
   /** Step 3 with the checks done: the same-page check is running. */
   lookup?: boolean;
+  /** A GitHub repository capture: steps 4 and 5 download and check the code. */
+  repo?: unknown;
 };
 
 /**
@@ -49,7 +62,15 @@ export type StepPlan = {
 export function jobSteps(p: StepPlan): { labels: string[]; current: number } {
   const labels: string[] = [...CAPTURE_STEPS];
   if (p.lookupPlanned || p.lookup) labels.push(LOOKUP_STEP);
-  const label = p.step === 3 && p.lookup ? LOOKUP_STEP : CAPTURE_STEPS[Math.max(0, Math.min(2, p.step - 1))];
+  if (p.repo) labels.push(DOWNLOAD_STEP, CODE_CHECK_STEP);
+  const label =
+    p.repo && p.step === 4
+      ? DOWNLOAD_STEP
+      : p.repo && p.step === 5
+        ? CODE_CHECK_STEP
+        : p.step === 3 && p.lookup
+          ? LOOKUP_STEP
+          : CAPTURE_STEPS[Math.max(0, Math.min(2, p.step - 1))];
   return { labels, current: Math.max(0, labels.indexOf(label)) };
 }
 

@@ -10,11 +10,16 @@ import { MonoValue } from '../../recall/ui/MonoValue';
 import { loadSettings } from '../../recall/settings';
 import { focusOrOpenApproveTab } from '../../recall/appTabs';
 import { SettingsPanel } from './SettingsPanel';
+import { Onboarding } from './Onboarding';
+import { parseRepoPage, type RepoTarget } from '../../recall/gitRepo';
 import { CAPTURE_STATE_KEY, isLiveRunning, type CaptureState } from '../../recall/jobState';
 import type { PopupRequest } from '../../recall/messages';
 import {
   CAPTURE_HELPER,
+  PAGE_BUTTON,
+  REPO_BUTTON,
   approveUrl,
+  repoSubline,
   earlierCopy,
   type EarlierCaptures,
   checkLines,
@@ -96,6 +101,40 @@ function useEarlierCaptures(url: string | undefined): EarlierCaptures | undefine
   return state && state.url === url ? state.value : undefined;
 }
 
+type RepoInfo =
+  | { status: 'loading' }
+  | { status: 'ok'; target: RepoTarget; captureUrl: string }
+  | { status: 'error'; error: string };
+
+/**
+ * On a GitHub repository page (R46): the branch a capture would notarize (the default branch is
+ * looked up by the service worker) and the API URL it captures. Undefined elsewhere.
+ */
+function useRepoTarget(url: string | undefined): RepoInfo | undefined {
+  const isRepo = url ? parseRepoPage(url) !== null : false;
+  const [state, setState] = useState<{ url: string; value: RepoInfo } | undefined>(undefined);
+  useEffect(() => {
+    if (!url || !isRepo) return;
+    let live = true;
+    send({ type: 'recall.repoTarget', url })
+      .then((r) => r as { target?: RepoTarget; captureUrl?: string; error?: string } | undefined)
+      .catch((err: unknown) => ({ error: String(err) }) as { error?: string; target?: undefined; captureUrl?: undefined })
+      .then((r) => {
+        if (!live) return;
+        const value: RepoInfo =
+          r?.target && r.captureUrl
+            ? { status: 'ok', target: r.target, captureUrl: r.captureUrl }
+            : { status: 'error', error: r?.error ?? 'no answer' };
+        setState({ url, value });
+      });
+    return () => {
+      live = false;
+    };
+  }, [url, isRepo]);
+  if (!url || !isRepo) return undefined;
+  return state && state.url === url ? state.value : { status: 'loading' };
+}
+
 /** "Earlier captures": counts of verified records only (unverified ones are never counted). */
 function EarlierCapturesView({ value }: { value: EarlierCaptures | undefined }) {
   const v = earlierCopy(value);
@@ -160,7 +199,12 @@ export function Popup() {
   // Storage is chosen after the capture, in the Recall tab (R44): nothing here gates on it.
   // Only pages the extension can capture have a history to look up.
   const capturable = page && !pageBlockedReason(page.url) ? page.url : undefined;
-  const earlier = useEarlierCaptures(capturable);
+  // A GitHub repository page captures GitHub's API answer for the branch (R46): its history is
+  // that URL's.
+  const repo = useRepoTarget(capturable);
+  const earlier = useEarlierCaptures(
+    repo ? (repo.status === 'ok' ? repo.captureUrl : undefined) : capturable,
+  );
 
   // The service worker tries the URL the pinned witness announced on Arkiv, then the
   // settings URL; online needs /info within 2 s from a pinned signer.
@@ -220,14 +264,19 @@ export function Popup() {
   else if (page === undefined) disabledReason = 'Reading the current tab…';
   else if (page === null) disabledReason = 'Only https:// pages can be captured.';
   else if ((blocked = pageBlockedReason(page.url))) disabledReason = blocked;
+  else if (repo?.status === 'loading') disabledReason = 'Finding the branch on GitHub…';
+  else if (repo?.status === 'error')
+    disabledReason = `Couldn't read this repository from GitHub: ${repo.error.replace(/\.+$/, '')}.`;
   else if (witness === 'checking') disabledReason = 'Checking the witness…';
   else if (witness === 'offline')
     disabledReason = 'The witness is offline, so new captures are paused.';
   const busy = Boolean(running && mine);
-  const helper = disabledReason ?? CAPTURE_HELPER;
+  const helper =
+    disabledReason ?? (repo?.status === 'ok' ? repoSubline(repo.target.branch) : CAPTURE_HELPER);
 
   return (
     <div className="popup">
+      <Onboarding />
       <header className="popup-header">
         <h1 className="popup-title">Recall</h1>
         <div className="popup-header-tools">
@@ -291,7 +340,8 @@ export function Popup() {
                 />
                 <progress className="progress" aria-label="Capture progress" />
                 <p className="progress-text">
-                  {formatElapsed(now - mine.startedAt)} elapsed · usually 15–30 s
+                  {formatElapsed(now - mine.startedAt)} elapsed ·{' '}
+                  {mine.repo ? 'usually under a minute' : 'usually 15–30 s'}
                 </p>
                 <div className="popup-actions">
                   <button type="button" className="btn btn-secondary" onClick={cancel}>
@@ -386,8 +436,10 @@ export function Popup() {
                   <LoaderCircle size={16} strokeWidth={1.75} aria-hidden="true" className="spin" />
                   Capturing…
                 </>
+              ) : repo ? (
+                REPO_BUTTON
               ) : (
-                'Capture this page'
+                PAGE_BUTTON
               )}
             </button>
             <p id="capture-helper" className="popup-helper muted">
