@@ -82,7 +82,7 @@
 .ob-marker-done {
   border-color: var(--accent);
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .ob-marker.ob-marker-done::before,
@@ -113,7 +113,7 @@
   height: 56px;
   border-radius: var(--radius-2);
   background: var(--exhibit);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .ob-title {
@@ -152,7 +152,7 @@
 }
 
 .ob-link {
-  color: var(--accent);
+  color: var(--accent-text);
   font-size: var(--text-xs);
   line-height: var(--lh-xs);
   font-weight: 600;
@@ -161,7 +161,7 @@
 }
 
 .ob-link:hover {
-  color: var(--accent-hover);
+  color: var(--text);
 }
 
 .ob-actions {

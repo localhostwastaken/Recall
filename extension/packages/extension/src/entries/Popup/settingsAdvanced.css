@@ -28,7 +28,7 @@
 
 .sp-advanced-summary svg {
   flex: none;
-  color: var(--accent);
+  color: var(--accent-text);
   transition: transform var(--dur-fast) var(--ease-out);
 }
 

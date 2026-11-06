@@ -146,14 +146,14 @@ body {
   align-items: center;
   gap: var(--space-1);
   min-height: 32px;
-  color: var(--accent);
+  color: var(--accent-text);
   font-weight: 600;
   text-decoration: underline;
   text-underline-offset: 0.18em;
 }
 
 .link:hover {
-  color: var(--accent-hover);
+  color: var(--text);
 }
 
 .popup-header-tools {
