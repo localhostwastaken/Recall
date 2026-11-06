@@ -94,10 +94,28 @@ it, and what would have helped.
 - **Would help:** a way to register a schema/type so rows can be filtered by an allowed writer set
   or a reputation signal, or server-side ordering by `$createdAt` so the newest rows are not starved.
 
+## 9. `ownedBy` is not "written by", and entities are editable by default
+
+- **Expected:** `.ownedBy(W)` returns entities that W wrote, so it is safe for "the witness's own
+  profile".
+- **What happened:** `changeOwnership` needs no consent from the new owner. Anyone can create a
+  `recall.v1.witness` profile naming witness W with their own URL, then hand it to W; with an owner
+  filter and "newest wins", every extension would then connect to the attacker's server. A
+  reviewer found it; we reproduced it on the local node (SDK 1.0.1). Separately, entities are
+  patchable by their owner unless created with `readonly: true`, which we had not set.
+- **Reproduce:** attacker `createEntity(WitnessSchema, { witness: W, url: evil })`, then
+  `changeOwnership({ entityKey, newOwner: W })`; `select().from(WitnessSchema).where(eq('witness',
+  W)).ownedBy(W)` now includes it.
+- **Fix we used:** `.createdBy(W)` (`$creator` never changes), and `readonly: true` on every Recall
+  entity, with a test for each.
+- **Would help:** a warning in the `ownedBy` docs that ownership can be pushed onto anyone; an
+  opt-in "accept transfer" for recipients; and a flag that also forbids delete and transfer, for
+  records meant to be permanent while paid for.
+
 ## What worked well
 
 - Keyset paging (`gt('$key', last)` + `orderBy(asc('$key'))`) is stable while rows are being written,
   unlike offsets.
-- `.ownedBy(addr)` made witness discovery safe in one line.
+- `.createdBy(addr)` made witness discovery safe in one line, once we knew to use it instead of `ownedBy`.
 - `executeBatch` let one MetaMask prompt extend any number of records.
 - Fees are tiny: a capture write cost 0.000201535 tGLM; the witness profile 0.00015068 tGLM.

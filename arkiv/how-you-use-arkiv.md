@@ -13,11 +13,13 @@ captures by this witness". We deliberately do **not** trust any attribute: anyon
 `recall.v1.capture` row with any values, so every row is re-checked against its signed evidence
 before the app shows it as verified, and rows that fail sit behind "show unverified (n)".
 
-**Owners.** A capture is owned by the person who made it, because they pay for it and sign it in
-their own MetaMask; nobody else, including us, can change it. A witness profile is owned by the
-witness key itself, and the extension reads only profiles **owned by** the witness it trusts
-(`.ownedBy(witness)`), so nobody can redirect captures to a fake witness by writing a profile with
-the right attribute.
+**Owners and edits.** A capture is owned by the person who made it, because they pay for it and
+sign it in their own MetaMask. Every Recall entity is created **read-only**, so nobody (not us, not
+the owner) can change its content; its owner can still delete it or transfer it, which Arkiv has no
+flag against. A witness profile is created by the witness key itself, and the extension reads only
+profiles **created by** the witness it trusts (`.createdBy(witness)`, the `$creator` attribute). We
+first filtered on the owner, but anyone can create a profile naming the witness and then hand it
+to the witness with `changeOwnership`; the creator never changes.
 
 **Expiry.** A capture starts with 30 days. That is the honest default: it costs little, and it
 lives exactly as long as someone cares. Every entity has `permissionlessExtension: true`, so the
@@ -41,7 +43,7 @@ Live write: capture entity `0xc50021a907dbd1d511d2e4a1482614647cbbb4a0dd2d4bf26a
 | Read | Query | What the user sees |
 |---|---|---|
 | **listByUrl** | `eq('urlHash')` on captures and on confirmations, keyset-paged with `gt('$key', last)` + `orderBy(asc('$key'))`; each kind has its own row budget, and `truncated` is reported | The extension popup shows "earlier captures of this page" before you capture (and offers a confirmation for an identical body). The web app's page timeline and diff. `pnpm arkiv:query` |
-| **Owner-filtered discovery** | `eq('witness', w)` + `.ownedBy(w)`, newest `$createdAt` wins | The popup finds the witness and shows "Witness online" with no URL typed in. Our quick-tunnel URL changes on every restart; this is how extensions follow it |
+| **Creator-filtered discovery** | `eq('witness', w)` + `.createdBy(w)` (`$creator`), newest `$createdAt` wins | The popup finds the witness and shows "Witness online" with no URL typed in. Our quick-tunnel URL changes on every restart; this is how extensions follow it |
 | **getEntity** | by entity key | A shared capture link (`#/c/<entityKey>`) opens straight to its verified view. The approval tab checks for an existing identical record before writing again |
 | **Expiry** | `getEntity().$expiresAt` + `getBlockTiming()` | Check E, "Record on Arkiv until <date>", and the keep-alive preview (what it costs and the date the record would then last until) |
 
@@ -49,9 +51,10 @@ Live write: capture entity `0xc50021a907dbd1d511d2e4a1482614647cbbb4a0dd2d4bf26a
 
 | Arkiv feature | What the user sees because of it |
 |---|---|
-| Entities owned by a wallet | Each record carries the wallet that wrote it, and only that wallet could have written it; the approval tab uses the owner to avoid writing the same record twice |
+| Entities owned by a wallet | Each record names its owner, the capturer's wallet unless they transferred it (the `$creator` never changes); the capturer pays and signs, and the approval tab uses the owner to avoid writing the same record twice |
 | Indexed attributes + query | The page timeline, and "earlier captures" in the popup, for any URL, from any copy of the app |
-| `ownedBy` | Witness discovery that a stranger cannot hijack |
+| `readonly` creation flag | What a reader verified today is what the record says tomorrow: no one can rewrite a capture's hashes or a witness's URL in place |
+| `createdBy` (`$creator`) | Witness discovery that a stranger cannot hijack, even by handing the witness a profile |
 | Expiry | Check E and the "until <date>" line; a capture nobody keeps alive really goes away |
 | `permissionlessExtension` + batch extension | The Keep-alive button works for anyone, on someone else's capture, in one wallet prompt |
 | Public reads | Verification works from GitHub Pages, from Swarm, from a local build or from `pnpm arkiv:query`, with no Recall server |

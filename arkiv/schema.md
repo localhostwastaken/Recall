@@ -5,14 +5,18 @@ Recall writes three entity types to **Arkiv Rabdi** (chain 7794095). They are de
 and the extension, the web app and the scripts all use that one definition.
 
 Every entity is created with:
+- **`readonly: true`**: its attributes can never change, not even by its owner;
 - **expiry:** 30 days (`ExpirationTime.fromDays(30)`), which anyone can push further with keep-alive,
   up to the chain maximum of about 182 days ahead (`MAX_LIFETIME`, 7,884,000 blocks);
 - **`permissionlessExtension: true`**, so anyone, not only the owner, can extend it. A capture
   should outlive the interest of the person who made it: a reader who cares about a page can keep
   its evidence alive.
 
-Nobody can edit an entity's content after it is written; Recall never updates or deletes one. A new
-version of a page is a new capture.
+So nobody can edit a record's content, and anyone can extend it. Arkiv has no flag against the
+other two owner powers: the owner of a record can still **delete** it or **transfer** it to another
+wallet. Recall never does either; a new version of a page is a new capture. Records written before
+the read-only flag was added (the live demo capture and witness profile below, written on
+2026-11-06) are not read-only: their `creationFlags` show `"readonly":false`.
 
 ## `recall.v1.capture`: one witnessed version of a page
 
@@ -49,14 +53,16 @@ Written instead of a capture when a new capture's body is byte-identical to an e
 
 ## `recall.v1.witness`: where a witness can be reached
 
-Owner: **the witness's own signing key** (`0xC9319e18e86cd7EB653c0Ed0693c0cf5B63db37D` for the Recall
-witness), written by `pnpm witness:announce`. Live example: profile entity
+Creator (and owner): **the witness's own signing key** (`0xC9319e18e86cd7EB653c0Ed0693c0cf5B63db37D`
+for the Recall witness), written by `pnpm witness:announce`. Discovery counts only profiles whose
+**`$creator`** is the witness: the owner can change (anyone can create a profile and hand it to the
+witness), the creator cannot. Live example: profile entity
 `0xf7c813892f290fbb35aaa129e04759434b833d4f47d629a6917144ac28aa913a`
 (tx [`0x5a7f3b3e...5ab616`](https://rabdi.explorer.arkiv.network/tx/0x5a7f3b3e47dd042beb0a4cbcabd0f12cb597a06328e83cb497871bdc0a5ab616)).
 
 | Attribute | Type | Indexed | What it is | Why |
 |---|---|---|---|---|
-| `witness` | addr | **yes** | The witness address | The query, together with an owner filter ([how-you-use-arkiv.md](how-you-use-arkiv.md)) |
+| `witness` | addr | **yes** | The witness address | The query, together with a creator filter ([how-you-use-arkiv.md](how-you-use-arkiv.md)) |
 | `url` | str | no | The witness's current public URL | The extension connects there. A quick tunnel gets a new URL on every restart, so the witness announces again; the newest profile wins |
 
 ## The queries
@@ -65,8 +71,8 @@ witness), written by `pnpm witness:announce`. Live example: profile entity
 // Every capture of a page (keyset paging on $key, stable while rows are being written):
 select().from(CaptureSchema).where(and(eq('urlHash', key(h)), gt('$key', key(last)))).orderBy(asc('$key')).limit(100)
 // The same for confirmations (ConfirmationSchema).
-// A witness's current URL: only profiles written BY that witness count.
-select().from(WitnessSchema).where(eq('witness', addr(w))).ownedBy(w)
+// A witness's current URL: only profiles CREATED by that witness count ($creator never changes).
+select().from(WitnessSchema).where(eq('witness', addr(w))).createdBy(w)
 // Expiry, for check E and keep-alive:
 getEntity(key) -> $expiresAt;  getBlockTiming()
 ```

@@ -167,6 +167,13 @@ describe('redactKey', () => {
     expect(out).toContain('(timeout)');
   });
 
+  it('is idempotent: an already redacted Rabdi URL stays [key], not [key]]', () => {
+    const once = redactKey(`failed: https://${RABDI_RPC_HOST}/${ENC} (timeout)`, KEY);
+    expect(once).toContain(`https://${RABDI_RPC_HOST}/[key] (timeout)`);
+    expect(redactKey(once, KEY)).toBe(once);
+    expect(redactKey(redactKey(once))).toBe(once);
+  });
+
   it('keeps messages that have nothing secret, and ignores empty or missing keys', () => {
     const t = 'The record could not be read. https://rpc.example.org/arkiv';
     expect(redactKey(t, undefined, '', '  ')).toBe(t);

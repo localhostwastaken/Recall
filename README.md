@@ -1,28 +1,45 @@
 # Recall
 
-**Prove what a public web page said, on a given day, to anyone, without trusting us.**
+**Prove what a public web page said on a given day. Anyone can check it without trusting the
+person who captured it: you trust the witness key you pin, and by default that is ours.**
+
+> **Judges: start here**
+> - **See a verified capture (no install, no wallet):** open the capture in the app:
+>   <https://localhostwastaken.github.io/Recall/app/#/c/0xc50021a907dbd1d511d2e4a1482614647cbbb4a0dd2d4bf26ad70065b3611244>
+> - **Run the Arkiv query:** `pnpm install && pnpm arkiv:query` (see [Writer wallets](#writer-wallets)),
+>   or the keyless `curl` there.
+> - **Arkiv prize docs:** [arkiv/](arkiv/): [schema](arkiv/schema.md), [how we use Arkiv](arkiv/how-you-use-arkiv.md),
+>   [why Arkiv](arkiv/why-arkiv.md), [friction](arkiv/friction.md), [reach](arkiv/reach.md), [Swarm](arkiv/swarm.md).
+> - **EF CROPS:** [## CROPS](#crops) and [## Limitations](#limitations).
+> - **Every live value we measured:** [docs/evidence-log.md](docs/evidence-log.md).
+> - **Built from scratch at ETHGlobal Mumbai 2026:** everything here was written at the hackathon,
+>   except the vendored TLSNotary code (the `extension/` fork of tlsn-extension and the verifier in
+>   `witness/`), whose upstream origin and our changes are listed in their NOTICE files.
 
 Official notices and policies get quietly edited or taken down. Recall lets a journalist or
 researcher capture a public HTTPS page so that anyone can later check, in a browser or fully
-offline, that the page really said that:
+offline, what the page said:
 
 1. **Capture.** The Recall browser extension fetches the page over TLS together with an
-   independent **witness** (TLSNotary MPC-TLS). The witness never sees your keys or cookies, but it
-   can tell that the bytes really came from that server, and it signs a statement about them
-   (EIP-712).
+   independent **witness** (TLSNotary MPC-TLS). The witness never holds your keys, but it sees the
+   full request and response, can tell that the bytes really came from that server, and signs a
+   statement about them (EIP-712). Requests carry no cookies or login, because the witness refuses
+   any that do.
 2. **Store.** The signed evidence file (request, response, signature) goes to **Swarm**, stamped in
    your browser with a postage batch you paid for.
 3. **Index.** A small record (which page, which body hash, which witness, when, where the evidence
-   is) goes to **Arkiv**, written from your own MetaMask.
+   is) goes to **Arkiv**, written from your own MetaMask. Records are created read-only: nobody,
+   not even the person who wrote one, can change its content later.
 4. **Verify.** The Recall web app (or `pnpm arkiv:query`) finds every capture of a URL on Arkiv,
    downloads the evidence from any Swarm gateway, recomputes the Swarm hash, and re-runs every
    check itself: transcript hashes (A), the request and response (B), and the witness signature
-   against the witnesses *you* trust (C). It shows a timeline of versions and a diff ("15 December"
-   became "12 December"). A downloaded evidence file can be dropped into the app and verified with
-   the network switched off.
+   against the witnesses *you* trust (C). It shows a timeline of versions and a diff; our demo
+   scenario is a university notice whose deadline moves from "15 December" to "12 December". A
+   downloaded evidence file can be dropped into the app and verified with the network switched off.
 
 Live: the app at <https://localhostwastaken.github.io/Recall/app/>, the demo notice at
-<https://localhostwastaken.github.io/Recall/notice/>.
+<https://localhostwastaken.github.io/Recall/notice/>. A copy of the app on Swarm is being
+published. <!-- TODO: the app's Swarm reference and bzz.link URL after the live publish -->
 
 ## Demo
 
@@ -45,7 +62,7 @@ flowchart LR
   GN[("Gnosis<br/>postage batches")]
   READER["Any reader<br/>(web app, pnpm arkiv:query, offline file)"]
 
-  EXT <-->|"MPC-TLS via /proxy"| SITE
+  EXT <-->|"MPC-TLS via the witness /proxy"| SITE
   EXT <-->|"MPC session, signed statement"| W
   EXT -->|"client-stamped POST /chunks"| SW
   EXT -->|"pending record"| APP
@@ -74,43 +91,27 @@ and every live value we measured in [docs/evidence-log.md](docs/evidence-log.md)
 
 ## CROPS
 
-The lead property is **censorship resistance of the evidence**: once a page is captured, nothing
-Recall runs is needed to find it, fetch it or check it.
+The lead property is censorship resistance of the evidence: once a page is captured, nothing Recall
+runs is needed to find it, fetch it or check it.
 
-- **C: Censorship resistance.** We run one thing users depend on, the witness server (plus the
-  GitHub Pages copy of the app).
-  - If the witness goes away or refuses you, *new* captures stop (the popup says "witness offline"),
-    but every existing capture still verifies: the index is on Arkiv, the evidence on Swarm, and the
-    checks run in the reader's browser.
-  - Anyone can run another witness from `witness/`. Readers choose which witness keys they trust
-    (pinned in Settings), and a witness announces its URL on Arkiv, so no Recall server is needed
-    to find it.
-  - The app is static: GitHub Pages, any Swarm gateway (`pnpm publish:swarm`) or `pnpm --filter web
-    dev` from this repo. The Arkiv RPC and Swarm gateways can be swapped in Settings. A downloaded
-    evidence file verifies with the network switched off.
+- **C: Censorship resistance.** We run the witness (needed only for new captures; anyone can run
+  another from `witness/`, and readers pin the keys they trust) and the GitHub Pages copy of the app.
+  If either goes away, existing captures still verify from Arkiv, Swarm, any copy of the app or an
+  offline file, as long as the Arkiv record and the Swarm batch are paid for and the testnet runs.
 - **O: Open source.** MIT ([LICENSE](LICENSE)); the forked TLSNotary code keeps its MIT/Apache-2.0
-  notices. Everything (extension, witness, app, scripts, local devnet) builds and runs from this
-  repo alone; see [Run it](#run-it).
-- **P: Privacy.** No analytics or trackers in the app or the extension. What third parties learn:
-  - the **witness** sees the page you capture (Recall is for public pages; requests carry no cookies
-    or auth, the witness enforces that) and your IP address;
-  - the **Arkiv RPC** sees which URL hashes you look up; the **Swarm gateway** sees which evidence
-    you fetch; both see your IP;
-  - an Arkiv record is **public** and owned by the wallet that wrote it, so a capture links that
-    wallet to that page. Use a fresh wallet if that matters.
-- **S: Security.** Keys stay on the user's device: MetaMask holds the wallet key, the extension's
-  stamp key stays in `chrome.storage.local`, the witness key stays on the witness server.
-  - Trust assumptions: an evidence file is only as good as the witness that signed it (a witness
-    that colludes with a capturer could sign a false page), which is why readers pin witnesses and
-    a signature from an unknown key shows "unknown witness". tlsn alpha.15 is unaudited.
-  - Gateways and RPCs are not trusted: the Swarm root is recomputed locally, the checks are re-run
-    on every view, a record that disagrees with its evidence is hidden behind "show unverified",
-    and the captured page is shown only in a sandboxed iframe.
+  notices. Extension, witness, app, scripts and the local devnet all build and run from this repo.
+- **P: Privacy.** No analytics or trackers. The witness sees the page you capture and your IP; the
+  Cloudflare tunnel, Arkiv RPC, Swarm gateways, Gnosis RPC and GitHub Pages see your IP and what you
+  ask them for (details under [Limitations](#limitations)); the captured site sees the witness's IP,
+  not yours. A record is public and names the wallet that wrote it.
+- **S: Security.** Keys stay on the device (MetaMask; the stamp key in the extension; the witness key
+  on the witness). You trust the witness you pin; gateways and RPCs can withhold data but not forge
+  it, because every view recomputes the Swarm hash and re-runs the checks. tlsn alpha.15 is unaudited.
 
 ## Run it
 
-**Needs:** Node 22, pnpm 10 (`corepack enable`), Docker, and Chrome or Chromium. MetaMask for live
-writes.
+**Needs:** Node 22, pnpm 10 (`corepack enable`), Docker, and Chrome or Chromium. For live captures:
+MetaMask, a little tGLM on Arkiv Rabdi, and xBZZ plus xDAI on Gnosis.
 
 ```bash
 pnpm install
@@ -126,22 +127,27 @@ query below (`pnpm arkiv:query`).
 pnpm devnet:up         # Arkiv dev node :8545, Gnosis fork :9545, 3 Bee nodes :1633/:1643,
                        # TLS 1.2 notice fixture, witness :7047 (first run builds images; minutes)
 pnpm test              # Vitest: packages, app and scripts against the devnet
-(cd extension && npm install && RECALL_DEV_CA_DER_B64=$(base64 -i ../fixtures/notice/.certs/ca.der) npm run build)
+(cd extension && npm install && RECALL_DEV_CA_DER_B64="$(base64 < ../fixtures/notice/.certs/ca.der | tr -d '\n')" npm run build)
 pnpm test:e2e          # Playwright: extension + app journeys on the devnet (mock wallet)
-pnpm check:docs        # the submission docs are complete
+pnpm check:docs        # the submission docs are complete (--final: no placeholders left)
 pnpm devnet:down
 ```
 Details: [devnet/README.md](devnet/README.md).
 
-### The extension
+### The extension (live)
 ```bash
 pnpm extension:zip     # release build (Mozilla roots, no dev hooks) -> dist/recall-extension.zip
 ```
-Unzip it, open `chrome://extensions`, turn on Developer mode, "Load unpacked", pick the folder. Open
-a public HTTPS page that serves TLS 1.2 (the demo notice does), click the Recall icon, then
-"Capture this page". After the upload, an approval tab opens in the web app: connect MetaMask, let
-it add Arkiv Rabdi (chain 7794095), and publish. The first capture needs a postage batch: buy one on
-the app's Storage page (Gnosis, xBZZ).
+1. Unzip it, open `chrome://extensions`, turn on Developer mode, "Load unpacked", pick the folder.
+2. Copy the extension's ID from `chrome://extensions` into the app's **Settings > Extension ID**
+   (the Storage page needs it to hand batches to the extension).
+3. Funds: tGLM for Arkiv writes from <https://hub.arkiv.network/faucet>; xBZZ and a little xDAI on
+   Gnosis for storage. There is no public xBZZ faucet: we used a Swarm booth gift, or ask the team.
+4. Buy storage once on the app's **Storage** page: it offers 7 or 30 days (about 0.32 xBZZ per batch
+   for 7 days at today's price, plus a tiny xDAI fee); each capture uses one batch.
+5. Open a public HTTPS page that serves TLS 1.2 (the demo notice does), click the Recall icon, then
+   "Capture this page". After the upload an approval tab opens in the app: connect MetaMask, let it
+   add Arkiv Rabdi (chain 7794095), and publish.
 
 ### The web app
 - Hosted: <https://localhostwastaken.github.io/Recall/app/> (live networks).
@@ -151,9 +157,10 @@ the app's Storage page (Gnosis, xBZZ).
 
 ### Your own witness
 Copy `.env.example` to `.env.local`, run `pnpm witness:keygen` (writes the key, prints only the
-address), then `pnpm tunnel:up` (Docker witness plus a Cloudflare quick tunnel) and
-`pnpm witness:announce --net live` (writes the witness profile on Arkiv). Readers add your address in
-Settings to trust your captures.
+address), then `pnpm tunnel:up` (Docker witness plus a Cloudflare quick tunnel; needs `cloudflared`)
+and `pnpm witness:announce --net live` (writes the witness profile on Arkiv; the witness wallet needs
+a little tGLM, which the script tops up from your funding key). Readers add your address in Settings
+to trust your captures. Extensions only accept a profile **created** by the witness key itself.
 
 ## Writer wallets
 
@@ -161,10 +168,12 @@ Every Arkiv entity this project wrote on **Arkiv Rabdi** (chain 7794095) came fr
 
 | Wallet | Role | Writes |
 |---|---|---|
-| `0xd46480d1Ec02B8ce92aE383914026efD5F73f835` | Treasury, and the capturer's wallet in our live runs (MetaMask / the mock wallet backed by its key) | `recall.v1.capture` (and `recall.v1.confirmation`) records |
-| `0xC9319e18e86cd7EB653c0Ed0693c0cf5B63db37D` | The Recall witness signer | `recall.v1.witness` profile (its current URL); also the EIP-712 signer of every capture |
+| `0xd46480d1Ec02B8ce92aE383914026efD5F73f835` | Treasury, and the capturer's wallet in our live runs (MetaMask / the mock wallet backed by its key) | `recall.v1.capture` records (and the P0 test rows) |
+| `0xC9319e18e86cd7EB653c0Ed0693c0cf5B63db37D` | The Recall witness signer | `recall.v1.witness` profiles (its current URL); also the EIP-712 signer of every capture |
 
-In the product, capture records are written by whoever captures, from their own wallet.
+In the product, capture and confirmation records are written by whoever captures, from their own
+wallet. No `recall.v1.confirmation` has been written on Rabdi yet (they are exercised on the local
+devnet).
 
 **Run a query** (reads Rabdi with `@recall/net` `listByUrl`, then downloads and verifies each
 capture's evidence from Swarm):
@@ -176,22 +185,36 @@ pnpm arkiv:query
 pnpm arkiv:query --url 'https://localhostwastaken.github.io/Recall/notice/?run=xbvmqf0p'
 ```
 
-It prints the latest 5 captures of the page with signer, signedAt and evidenceRef, and marks the
-ones that verify A to C against the Recall witness. An `ARKIV_ACCESS_KEY` in `.env.local` is used
-when present (never printed); without one it uses the public, rate-limited endpoint. The query it
-runs: `select().from(recall.v1.capture).where(eq('urlHash', keccak256(canonicalUrl)))`, paged by
-`$key`.
+It checks the page's captures newest first until 5 verify A to C against the Recall witness, prints
+each with signer, signedAt and evidenceRef, and counts the rows it rejected. It exits non-zero when
+none verify. `ARKIV_ACCESS_KEY` (from the environment or `.env.local`) is used when set and never
+printed; without it the public, rate-limited endpoint is used.
+
+**Or with no tools but curl** (the public endpoint, no key; the `urlHash` is keccak256 of
+`https://localhostwastaken.github.io/Recall/notice/?run=0tzgmo55`):
+
+```bash
+curl -s https://rpc.rabdi.db-chain.testnet.arkiv.network -H 'content-type: application/json' --data @- <<'EOF'
+{"jsonrpc":"2.0","id":1,"method":"arkiv_query","params":["arkiv.schema = str('recall.v1.capture') AND urlHash = key(0x1dcb2cebcb3bd31e55a91320ca7523c83abc0faaad0b5b32c0cdd4ecce872540)",{"select":{"key":true,"owner":true,"creator":true,"expiresAt":true,"creationFlags":true,"attributes":{"witness":true,"signedAt":true,"evidenceRef":true,"batchId":true}},"limit":"0x5"}]}
+EOF
+```
+
+It returns entity `0xc50021a9...3611244` with its `evidenceRef` and `batchId`. That record was
+written before entities were made read-only, so it shows `"readonly":false`; records written from
+now on show `"readonly":true`.
 
 ## Limitations
 
 - **One witness.** Captures need the Recall witness (or another one someone runs). It currently runs
-  on a laptop behind a Cloudflare quick tunnel. Verification does not need it.
+  on a laptop behind a Cloudflare quick tunnel (`cloudflared`), so captures stop when that laptop
+  or tunnel is down. Verification does not need it.
 - **tlsn alpha.15 is unaudited.** TLSNotary `v0.1.0-alpha.15` has had no security audit, and nor has
   our signing patch.
 - **TLS 1.2 only.** The MPC-TLS in this tlsn version speaks TLS 1.2; sites that only offer TLS 1.3
   cannot be captured.
-- **64 KB response cap.** A capture is limited to about 64 KB of response, so large pages, video and
-  big files are out.
+- **64 KB response cap, static HTML only.** A capture holds at most about 64 KB of response. What is
+  captured is the HTML the server sent: pages that build their content with JavaScript capture
+  nearly empty, and previews never run the page's JavaScript (sandboxed iframe).
 - **About 77 MB of upload per capture.** MPC setup sends roughly 77 MB from the browser to the
   witness (measured: 77.0 MB in / 3.7 MB out). On a fast link a capture takes 5 to 30 s; on a slow
   link (a 5 Mbps venue uplink, in our case) it times out.
@@ -200,23 +223,35 @@ runs: `select().from(recall.v1.capture).where(eq('urlHash', keccak256(canonicalU
   gateways (api/download.gateway.ethswarm.org, bzz.link), which can refuse or take content down. The
   data stays on Swarm while its batch is paid; any Bee node or gateway can be set in Settings.
 - **The Arkiv access key ships in the client, by design.** It is a public rate-limit key baked into
-  the app and extension builds (never committed); anyone can read it from the bundle. Users can
-  replace it in Settings.
+  the app and extension builds (never committed); anyone can read it from the bundle, and it travels
+  in the Rabdi URL path, so it shows in network logs. Users can replace it in Settings.
+- **Who learns what.** The witness sees each captured page and your IP. The Cloudflare tunnel in
+  front of it sees your IP, the timing and the server name you capture. The Arkiv RPC sees which URL
+  hashes you look up; Swarm gateways see which evidence you fetch; the Gnosis RPC sees storage and
+  keep-alive reads; GitHub Pages serves the app. All of them see your IP. A record is public and
+  names its owner wallet, so a capture links that wallet to the page: use a fresh wallet if that
+  matters.
+- **Records are read-only, not undeletable.** Content can't be changed by anyone, and anyone can
+  extend a record, but its owner can still delete it or transfer it (Arkiv has no flag against
+  that). Records written before this rule (including the live demo capture above) are not
+  read-only. The evidence on Swarm is unaffected by either.
 - **A record's batchId is not cryptographically bound to its evidence.** The Swarm reference is
   bound (the root hash is recomputed), but the batch a record names could be any batch. The
-  keep-alive therefore checks that the batch exists on Gnosis and has Recall's size (depth 17,
-  immutable) before anyone pays to top it up.
-- Storage lasts as long as someone pays: a postage batch and an Arkiv record expire unless someone
-  uses keep-alive (permissionless; anyone can extend any capture).
+  keep-alive therefore checks that the batch exists on Gnosis and has Recall's shape (immutable,
+  depth 17 or 18) before anyone pays to top it up.
+- **Storage lasts as long as someone pays.** A postage batch and an Arkiv record expire unless someone
+  uses Keep alive (permissionless). The demo capture's batch is paid until about 2026-11-09; anyone
+  can extend it with Keep alive on the capture's page.
+- **Install and keys.** The extension installs only in developer mode ("Load unpacked"); it is not
+  in the Chrome Web Store. Its stamp key (which can only stamp chunks into batches it owns) is stored
+  unencrypted in `chrome.storage.local`.
 - Not legal-grade proof, and public pages only (no logins, no cookies).
 
 ## AI use
 
-<!-- AI-USE: wording to be confirmed with the team -->
-_Placeholder, to be confirmed by the team before submission:_ AI coding assistants were used during
-the hackathon to help draft the design and plan documents in `docs/superpowers/`, write and review
-code and tests, and draft documentation. The team made the product and design decisions, and every
-change was checked by tests against local devnets and live networks before it was kept.
+We used AI coding assistants to write code and tests; all design decisions were the team's. The
+specification and plan we wrote to drive the build are in [docs/superpowers/](docs/superpowers/)
+(25 recorded decisions).
 
 ## Licence and credits
 

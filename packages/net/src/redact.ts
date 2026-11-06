@@ -1,7 +1,8 @@
 import { RABDI_RPC_HOST } from './config';
 
 const SHORTEST_KEY = 4;
-const RABDI_PATH = new RegExp(`(${RABDI_RPC_HOST.replace(/\./g, '\\.')})/[^\\s"'<>)\\]]+`, 'gi');
+// A path that is already `[key]` is left alone, so redacting twice gives `[key]`, not `[key]]`.
+const RABDI_PATH = new RegExp(`(${RABDI_RPC_HOST.replace(/\./g, '\\.')})/(?!\\[key\\])[^\\s"'<>)\\]]+`, 'gi');
 
 /**
  * Removes secrets from text that may be shown or logged (an error message, a stack). Each given

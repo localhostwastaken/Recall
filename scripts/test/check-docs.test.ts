@@ -94,6 +94,20 @@ describe('check-docs', () => {
     expect(missing[0]).toContain(what);
   });
 
+  it('--final refuses placeholder markers, and the normal check allows them', () => {
+    const files = complete({
+      'README.md': `${README}\n<!-- DEMO-VIDEO: link -->\n`,
+      'arkiv/swarm.md': `${SWARM}\n<!-- TODO: the app's Swarm reference -->\n`,
+    });
+    const root = folder(files);
+    expect(checkDocs(root)).toEqual([]);
+    const final = checkDocs(root, { final: true });
+    expect(final).toHaveLength(2);
+    expect(final[0]).toMatch(/^README\.md:\d+: placeholder <!-- DEMO-VIDEO/);
+    expect(final[1]).toMatch(/^arkiv\/swarm\.md:\d+: placeholder <!-- TODO/);
+    expect(checkDocs(folder(complete()), { final: true })).toEqual([]);
+  });
+
   it('refuses the same value given as entity key, reference and batch ID', () => {
     const text = SWARM.replace(REF, KEY.slice(2)).replace(BATCH, KEY);
     expect(checkDocs(folder(complete({ 'arkiv/swarm.md': text }))).some((m) => m.includes('three different'))).toBe(true);

@@ -8,9 +8,9 @@ company policies, terms of service, price lists, press releases. Today they rely
 (easy to fake, easy to dispute) or on a single archive service (one organisation that can be asked
 to remove a page, and that only captures what it chooses to crawl).
 
-Recall gives them a capture that **anyone can check without trusting the person who made it, or
-us**: the TLS session was witnessed, the evidence is content-addressed on Swarm, and the index is
-public on Arkiv.
+Recall gives them a capture that **anyone can check without trusting the person who made it**: you
+trust the witness key you pin, and by default that is ours. The TLS session was witnessed, the
+evidence is content-addressed on Swarm, and the index is public and read-only on Arkiv.
 
 Others who benefit from the same records:
 - **Readers and editors** checking a story: they open a link and see the checks pass, no wallet or
@@ -27,8 +27,10 @@ Others who benefit from the same records:
 Yes:
 - **Verify (no install, no wallet):** open <https://localhostwastaken.github.io/Recall/app/> and look
   up `https://localhostwastaken.github.io/Recall/notice/?run=0tzgmo55`, or run `pnpm arkiv:query`.
-- **Capture:** load the extension (`pnpm extension:zip`, then "Load unpacked"), add Rabdi to MetaMask
-  and get a little tGLM; a postage batch is bought once on the app's Storage page.
+- **Capture:** load the extension (`pnpm extension:zip`, then "Load unpacked" in developer mode),
+  paste its ID into the app's Settings, get a little tGLM from <https://hub.arkiv.network/faucet>,
+  and buy a postage batch on the app's Storage page (xBZZ on Gnosis; there is no public xBZZ
+  faucet). Full steps: [README, Run it](../README.md#run-it).
 - **Run your own witness** from `witness/` and announce it on Arkiv (see the README).
 
 Today's real numbers, honestly: one developer and three non-coding teammates capturing and

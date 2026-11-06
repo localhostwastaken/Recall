@@ -1,5 +1,7 @@
 // Checks that the submission docs are complete. Run: `pnpm check:docs` (tsx scripts/check-docs.ts).
 // Exits 0 when everything is there, else 1 and lists each missing item.
+// `pnpm check:docs --final` also fails while a placeholder marker is left in README.md or
+// arkiv/*.md (`<!-- DEMO-VIDEO`, `<!-- AI-USE`, `<!-- TODO`): run it before submitting.
 //
 // README.md must have the sections `## CROPS` (one line each for C, O, P and S), `## Run it`,
 // `## Writer wallets` (with an address and `pnpm arkiv:query`), `## Limitations` and `## AI use`.
@@ -19,6 +21,9 @@ const CROPS_LETTERS: [letter: string, word: RegExp][] = [
   ['P', /priva(te|cy)/i],
   ['S', /secur(e|ity)/i],
 ];
+
+/** Markers of text still to be written; `--final` refuses them. */
+export const PLACEHOLDER_MARKERS = ['<!-- DEMO-VIDEO', '<!-- AI-USE', '<!-- TODO'] as const;
 
 const HEX32 = '0x[0-9a-fA-F]{64}';
 const ADDRESS = '0x[0-9a-fA-F]{40}';
@@ -44,7 +49,7 @@ function labelled(text: string, label: RegExp, value: string): string | null {
 }
 
 /** Every missing item, in plain words; empty when the docs are complete. */
-export function checkDocs(root: string): string[] {
+export function checkDocs(root: string, opts: { final?: boolean } = {}): string[] {
   const missing: string[] = [];
   const readmePath = join(root, 'README.md');
   if (!existsSync(readmePath)) {
@@ -97,17 +102,35 @@ export function checkDocs(root: string): string[] {
       missing.push('arkiv/swarm.md: the Bee node or gateway used (a line with "Bee node" or "gateway" and a URL)');
     }
   }
+
+  if (opts.final) {
+    for (const rel of ['README.md', ...ARKIV_FILES.map((n) => `arkiv/${n}.md`)]) {
+      const p = join(root, rel);
+      if (!existsSync(p)) continue;
+      readFileSync(p, 'utf8')
+        .split('\n')
+        .forEach((line, i) => {
+          const marker = PLACEHOLDER_MARKERS.find((m) => line.includes(m));
+          if (marker) missing.push(`${rel}:${i + 1}: placeholder ${marker} -->`);
+        });
+    }
+  }
   return missing;
 }
 
 const isMain = process.argv[1] !== undefined && import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
 if (isMain) {
-  const root = resolve(process.argv[2] ?? join(dirname(fileURLToPath(import.meta.url)), '..'));
-  const missing = checkDocs(root);
+  const args = process.argv.slice(2);
+  const final = args.includes('--final');
+  const dir = args.find((a) => !a.startsWith('--'));
+  const root = resolve(dir ?? join(dirname(fileURLToPath(import.meta.url)), '..'));
+  const missing = checkDocs(root, { final });
   if (missing.length > 0) {
     console.error(`check-docs: FAIL, ${missing.length} missing:`);
     for (const m of missing) console.error(`  - ${m}`);
     process.exit(1);
   }
-  console.log(`check-docs: OK (README sections, CROPS letters, writer wallets, ${ARKIV_FILES.length} arkiv/*.md, swarm.md values)`);
+  console.log(
+    `check-docs: OK (README sections, CROPS letters, writer wallets, ${ARKIV_FILES.length} arkiv/*.md, swarm.md values${final ? ', no placeholders' : ''})`,
+  );
 }

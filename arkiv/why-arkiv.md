@@ -7,7 +7,8 @@ would quietly break that promise if it sat in our own database.
 
 - **The index would have an off switch, and it would be ours.** Whoever runs the database can delete
   a capture, hide it, or stop answering, which is exactly what someone who edited a notice would
-  ask for. On Arkiv, a capture is owned by the capturer's wallet; we cannot remove or change it.
+  ask for. On Arkiv, a capture is read-only and owned by the capturer's wallet: we can neither
+  change nor remove it (only its owner could delete it).
 - **Verification would depend on a Recall server.** Today the web app (from GitHub Pages, Swarm or
   a local build) and `pnpm arkiv:query` read Arkiv directly. With Postgres, every reader would need
   our API to be up.
@@ -20,7 +21,7 @@ would quietly break that promise if it sat in our own database.
 - **Other apps would need our permission to read.** Any app can query `recall.v1.capture` by
   `urlHash`, for example to show "captured versions" next to a link, with no API key from us.
 - **Witness discovery would need a server.** The witness announces its own URL as an entity it
-  owns; the extension finds it with an owner-filtered query. With Postgres, we would run a
+  creates; the extension finds it with a creator-filtered query. With Postgres, we would run a
   directory that could point people at a fake witness.
 
 ## What we kept off Arkiv, and why

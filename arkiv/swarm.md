@@ -20,8 +20,9 @@ Arkiv.
 
 1. **One batch per capture.** The web app's Storage page buys immutable **depth-17** postage batches
    on Gnosis with MetaMask (`approve` xBZZ, then `createBatch` with **owner = the extension's stamp
-   address**), and hands them to the extension, which keeps a pool. Each capture takes a fresh batch,
-   so a capture's storage can be topped up on its own and a used stamp slot is never reused.
+   address**), and hands them to the extension, which keeps a pool. The Storage page offers 7 or 30
+   days (about 0.32 xBZZ for a 7-day batch at today's price). Each capture takes a fresh batch, so a
+   capture's storage can be topped up on its own and a used stamp slot is never reused.
 2. **Client-side stamping.** No Bee node owns the batch. The extension's offscreen document splits the
    evidence into chunks, stamps each chunk with the stamp key (bee-js `Stamper`), and pushes it with
    **`POST /chunks`** to a gateway or Bee node (default: `https://api.gateway.ethswarm.org`). The stamp
@@ -33,7 +34,7 @@ Arkiv.
    signedAt).
 4. **Keep-alive.** Anyone can `topUp` the batch on Gnosis (permissionless) and extend the Arkiv record,
    in one flow in the web app. Before paying, it checks that the batch exists and is a Recall batch
-   (immutable, depth 17).
+   (immutable, depth 17 or 18).
 
 ## One live example (2026-11-06, from [docs/evidence-log.md](../docs/evidence-log.md))
 
@@ -41,12 +42,19 @@ Arkiv.
   (type `recall.v1.capture` on Rabdi, tx
   [`0x512ad75ec7002990307ba29f763d2e3f9aa343b851abc4b39e6ab89bf4175d4f`](https://rabdi.explorer.arkiv.network/tx/0x512ad75ec7002990307ba29f763d2e3f9aa343b851abc4b39e6ab89bf4175d4f),
   block 279811, written by `0xd46480d1Ec02B8ce92aE383914026efD5F73f835`).
-  Verified view: <https://localhostwastaken.github.io/Recall/app/#/c/0xc50021a907dbd1d511d2e4a1482614647cbbb4a0dd2d4bf26ad70065b3611244>
+  Verified view: <https://localhostwastaken.github.io/Recall/app/#/c/0xc50021a907dbd1d511d2e4a1482614647cbbb4a0dd2d4bf26ad70065b3611244>.
+  This record was written before Recall entities were made read-only, so its `creationFlags` show
+  `"readonly":false`.
 - **Swarm reference** (its `evidenceRef`): `4dde720fa70159f4e335e165a2b8b93b5aec439ac9f5dbd06cf389856bb13202`
   (2723 bytes). Open it: <https://bzz.link/bytes/4dde720fa70159f4e335e165a2b8b93b5aec439ac9f5dbd06cf389856bb13202>
   or <https://download.gateway.ethswarm.org/bytes/4dde720fa70159f4e335e165a2b8b93b5aec439ac9f5dbd06cf389856bb13202>.
 - **Postage batch ID:** `0xde1b6b808de55064687e6c1ef7eae9aef91d9d9167d44719a2350fb3c6d8dd63`
-  (depth 17, bucket depth 16, immutable, 3 days; cost 0.1367189760376832 xBZZ).
+  (depth 17, bucket depth 16, immutable, 3 days; cost 0.1367189760376832 xBZZ). The live test harness
+  bought it directly with `buyBatch` (3 days, to stay under its spend cap) and, unlike the product,
+  **reused it for two captures**: this one and an earlier run's
+  (entity `0x6c488161621f449b4b21f165f9717a9c2da183ea45a7da28a4eb3084ca88123c`, Swarm reference
+  `d2e1d35391f0eec3c238918471adcded6e121b517b5b72560c34da1815cc6b1c`). The stamper state was kept,
+  so no stamp slot was reused. The product uses one batch per capture.
 - **Batch owner:** `0x5455B84fcB0a05C0B68F8262a183D7e28f2a4212` (the extension's stamp address; it signs
   the stamps). **Paid by** the treasury `0xd46480d1Ec02B8ce92aE383914026efD5F73f835`: approve tx
   [`0x57969134...93325f`](https://gnosisscan.io/tx/0x57969134d16aff5883a3f163e6f45fa7813889adca1a60e7e50811ab9093325f),
@@ -58,8 +66,8 @@ Arkiv.
 - The page it captured: `https://localhostwastaken.github.io/Recall/notice/?run=0tzgmo55`, body
   sha256 `0x99bb0a8d8c7026af50281298955f0447def7c5069c66de0566914ffe26932273` ("Deadline: 15 December").
 
-The batch was bought for 3 days (until about 2026-11-09 05:10 UTC); after that the evidence stays only
-if someone tops the batch up with keep-alive.
+The batch is paid until about 2026-11-09 05:10 UTC. After that the evidence stays only if someone
+tops the batch up: anyone can, with **Keep alive** on the capture's page in the app.
 
 ## The files that upload to Swarm and read from it
 
@@ -97,9 +105,10 @@ This buys a batch on the Gnosis fork, stamps a payload on the client, uploads it
 `pnpm publish:swarm --net local` prints the reference, and `http://localhost:1633/bzz/<ref>/` serves
 the app.
 
-**Upload (live, the product path):** load the extension (`pnpm extension:zip`), buy a batch on the
-app's Storage page (about 0.137 xBZZ for 3 days of depth 17, plus a tiny xDAI fee), capture the demo
-notice, and publish from the approval tab. The popup shows the `evidenceRef`, and the record's page
+**Upload (live, the product path):** load the extension (`pnpm extension:zip`) and paste its ID
+into the app's Settings, buy a batch on the app's Storage page (7 or 30 days; about 0.32 xBZZ for 7
+days, plus a tiny xDAI fee; there is no public xBZZ faucet), capture the demo notice, and publish
+from the approval tab. The popup shows the `evidenceRef`, and the record's page
 links to the evidence.
 
 ## In the demo video
@@ -120,8 +129,8 @@ view downloading the evidence from a different gateway and checking its root.
   the chain instead (12 blocks after the `createBatch` block). The gateway's `/batches` list is also
   about 1.8 MB, too heavy to poll from a browser.
 - **The minimum batch is huge for our files.** A depth-17 batch holds far more than one 3 KB evidence
-  file, but it is the smallest Recall can use, so each capture costs about 0.137 xBZZ for 3 days
-  (7 days would have been 0.319 xBZZ).
+  file, but it is the smallest Recall can use: our 3-day test batch cost 0.137 xBZZ, and the Storage
+  page's shortest option, 7 days, costs about 0.32 xBZZ per capture.
 - **bzz.link's CID subdomain form serves manifests only.** `https://<cid>.bzz.link/` answered 404 for
   raw-bytes evidence; the path form `https://bzz.link/bytes/<ref>` works.
 - **The local cluster needs three full Bee nodes.** With a light node, or only two nodes, Bee never
