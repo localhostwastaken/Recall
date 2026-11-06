@@ -182,21 +182,7 @@ export async function writeCapture(
   w: ArkivWallet,
   row: CaptureRow,
 ): Promise<{ entityKey: Hex; txHash: Hex }> {
-  const { entityKey, txHash } = await w.createEntity(
-    CaptureSchema,
-    {
-      urlHash: key(row.urlHash),
-      bodySha256: key(row.bodySha256),
-      serverName: row.serverName,
-      witness: addr(row.witness),
-      signedAt: u64(row.signedAt),
-      httpStatus: i32(row.httpStatus),
-      batchId: key(row.batchId),
-      evidenceRef: key(row.evidenceRef),
-      canonicalUrl: stringToBytes(row.canonicalUrl),
-    },
-    options(),
-  );
+  const { entityKey, txHash } = await w.createEntity(CaptureSchema, captureValues(row), options());
   return { entityKey, txHash };
 }
 
@@ -233,33 +219,94 @@ export async function writeWitnessProfile(
 
 const GIT_ID = /^[0-9a-f]{40}$/;
 
-export async function writeAttachment(
-  w: ArkivWallet,
-  row: AttachmentRow,
-): Promise<{ entityKey: Hex; txHash: Hex }> {
+function checkAttachment(row: Omit<AttachmentRow, 'parentCaptureKey'>): void {
   if (row.kind !== 'git') throw new Error(`unsupported attachment kind "${String(row.kind)}"`);
   if (row.proofLevel !== 1) throw new Error(`unsupported proof level ${String(row.proofLevel)}`);
   if (!GIT_ID.test(row.commitSha)) throw new Error('commitSha must be 40 lower-case hex digits');
   if (!GIT_ID.test(row.treeSha)) throw new Error('treeSha must be 40 lower-case hex digits');
   if (row.size < 0n) throw new Error('size must not be negative');
-  const { entityKey, txHash } = await w.createEntity(
-    AttachmentSchema,
-    {
-      parentCaptureKey: key(row.parentCaptureKey),
-      urlHash: key(row.urlHash),
-      sha256: key(row.sha256),
-      kind: str(row.kind),
-      commitSha: str(row.commitSha),
-      treeSha: str(row.treeSha),
-      proofLevel: i32(row.proofLevel),
-      evidenceRef: key(row.evidenceRef),
-      batchId: key(row.batchId),
-      size: u64(row.size),
-      contentType: str(row.contentType),
-    },
-    options(),
-  );
+}
+
+function attachmentValues(row: AttachmentRow) {
+  return {
+    parentCaptureKey: key(row.parentCaptureKey),
+    urlHash: key(row.urlHash),
+    sha256: key(row.sha256),
+    kind: str(row.kind),
+    commitSha: str(row.commitSha),
+    treeSha: str(row.treeSha),
+    proofLevel: i32(row.proofLevel),
+    evidenceRef: key(row.evidenceRef),
+    batchId: key(row.batchId),
+    size: u64(row.size),
+    contentType: str(row.contentType),
+  };
+}
+
+function captureValues(row: CaptureRow) {
+  return {
+    urlHash: key(row.urlHash),
+    bodySha256: key(row.bodySha256),
+    serverName: row.serverName,
+    witness: addr(row.witness),
+    signedAt: u64(row.signedAt),
+    httpStatus: i32(row.httpStatus),
+    batchId: key(row.batchId),
+    evidenceRef: key(row.evidenceRef),
+    canonicalUrl: stringToBytes(row.canonicalUrl),
+  };
+}
+
+const asPublic = (p: ArkivPublic | NetConfig): ArkivPublic =>
+  typeof (p as ArkivPublic).select === 'function' ? (p as ArkivPublic) : arkivPublic(p as NetConfig);
+
+/** Writes one attachment record. The `cfg` form exists for callers that pass it; it is not needed. */
+export async function writeAttachment(w: ArkivWallet, row: AttachmentRow): Promise<{ entityKey: Hex; txHash: Hex }>;
+export async function writeAttachment(
+  w: ArkivWallet,
+  cfg: NetConfig,
+  row: AttachmentRow,
+): Promise<{ entityKey: Hex; txHash: Hex }>;
+export async function writeAttachment(
+  w: ArkivWallet,
+  a: AttachmentRow | NetConfig,
+  b?: AttachmentRow,
+): Promise<{ entityKey: Hex; txHash: Hex }> {
+  const row = (b ?? a) as AttachmentRow;
+  checkAttachment(row);
+  const { entityKey, txHash } = await w.createEntity(AttachmentSchema, attachmentValues(row), options());
   return { entityKey, txHash };
+}
+
+/**
+ * The capture record and its attachment in ONE transaction (one wallet prompt). The capture's
+ * key is predicted from the writer's entity nonce and a salt, so the attachment can name it as
+ * its parent. Throws if the chain created the capture under another key (another create by the
+ * same account got in between); the attachment then names no capture and must be rewritten.
+ */
+export async function writeCaptureWithAttachment(
+  w: ArkivWallet,
+  pubOrCfg: ArkivPublic | NetConfig,
+  capture: CaptureRow,
+  attachment: Omit<AttachmentRow, 'parentCaptureKey'>,
+): Promise<{ captureKey: Hex; attachmentKey: Hex; txHash: Hex }> {
+  checkAttachment(attachment);
+  const owner = w.account?.address;
+  if (!owner) throw new Error('the wallet has no account');
+  const [predicted] = await asPublic(pubOrCfg).predictEntityKeys({ owner, count: 1 });
+  const row: AttachmentRow = { ...attachment, parentCaptureKey: predicted!.key };
+  const { expiration, flags } = options();
+  const { txHash, createdEntities } = await w.executeBatch({
+    creates: [
+      { schema: CaptureSchema, values: captureValues(capture), expiration, flags, salt: predicted!.salt },
+      { schema: AttachmentSchema, values: attachmentValues(row), expiration, flags },
+    ],
+  });
+  const [captureKey, attachmentKey] = createdEntities;
+  if (!captureKey || !attachmentKey || captureKey.toLowerCase() !== predicted!.key.toLowerCase()) {
+    throw new Error('the capture was created under another key than predicted; its attachment names no capture');
+  }
+  return { captureKey, attachmentKey, txHash };
 }
 
 /**
@@ -268,10 +315,11 @@ export async function writeAttachment(
  * row budget, like `listByUrl`.
  */
 export async function listAttachments(
-  pub: ArkivPublic,
+  pubOrCfg: ArkivPublic | NetConfig,
   parentCaptureKey: Hex,
   opts: { pageSize?: number; maxRows?: number } = {},
 ): Promise<{ rows: ListedAttachment[]; truncated: boolean }> {
+  const pub = asPublic(pubOrCfg);
   const { entities, truncated } = await collectPages(
     (after, limit) =>
       pub

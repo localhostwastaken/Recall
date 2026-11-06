@@ -14,8 +14,10 @@ import {
   blocksForDays,
   extendEntities,
   listAttachments,
+  listByUrl,
   readArkivExpiry,
   writeAttachment,
+  writeCaptureWithAttachment,
   type ArkivWallet,
   type AttachmentRow,
 } from '../src/index';
@@ -136,6 +138,28 @@ describe('attachments on the local Arkiv node', () => {
     expect(out.txHash).toMatch(/^0x[0-9a-f]{64}$/);
     const after = await readArkivExpiry(pub, [a.entityKey]);
     expect(after[0]!.expiresAtBlock).toBe(before[0]!.expiresAtBlock + blocksForDays(7));
+  });
+
+  it('writeCaptureWithAttachment writes both in one transaction, the attachment naming the capture', async () => {
+    const alice = await funded();
+    const urlHash = keccak256(stringToBytes(`https://api.github.recall.test/repos/o/r/branches/main?run=${randomUUID()}`));
+    const { parentCaptureKey: _unused, ...att } = row(h32('00'));
+    const out = await writeCaptureWithAttachment(arkivWallet(LOCAL, transport, alice), LOCAL, {
+      urlHash,
+      bodySha256: h32('ab'),
+      serverName: 'api.github.recall.test',
+      witness: alice.address,
+      signedAt: 1n,
+      httpStatus: 200,
+      batchId: h32('cd'),
+      evidenceRef: h32('ef'),
+      canonicalUrl: 'https://api.github.recall.test/repos/o/r/branches/main',
+    }, att);
+    const caps = await eventually(() => listByUrl(pub, urlHash), (r) => r.rows.length > 0);
+    expect(caps.rows.map((r) => r.entityKey)).toEqual([out.captureKey]);
+    const { rows } = await eventually(() => listAttachments(LOCAL, out.captureKey), (r) => r.rows.length > 0);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ ...att, entityKey: out.attachmentKey, parentCaptureKey: out.captureKey });
   });
 
   it('listAttachments stops at maxRows and says so', async () => {
