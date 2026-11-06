@@ -161,6 +161,17 @@ async function connectWallet(page: Page): Promise<void> {
   );
 }
 
+/**
+ * Clicks "Buy storage and publish" once the publish page has settled. MetaMask is not connected, so
+ * once the price is read the page puts free storage first and buying second. Before that, the
+ * primary button reads "Buy storage and publish" (disabled while the price loads) and turns into
+ * "Publish with free storage" in place: a click aimed at it in that moment uploads to free storage.
+ */
+async function buyWithoutWallet(page: Page): Promise<void> {
+  await expect(page.getByRole('button', { name: 'Publish with free storage' })).toBeVisible({ timeout: 15_000 });
+  await page.getByRole('button', { name: 'Buy storage and publish' }).click();
+}
+
 /** A server that answers 500 to everything (an upload node that is down). */
 async function brokenServer(): Promise<{ server: Server; url: string }> {
   const server = createServer((_req, res) => {
@@ -380,7 +391,7 @@ test.describe('@p2 capture first', () => {
     await app.evaluate(([k, v]) => localStorage.setItem(k, v), [key, earlier.txHash] as const);
     const sent: { chainId: number; to?: string }[] = [];
     const page = await approvalTab(captureId, (chainId, _h, to) => sent.push({ chainId, to: to?.toLowerCase() }));
-    await page.getByRole('button', { name: 'Buy storage and publish' }).click();
+    await buyWithoutWallet(page);
     const entityKey = await published(page);
     expect(createBatchesIn(sent)).toBe(0);
     const row = await readable(SETTLE_PAGE, entityKey);
@@ -396,7 +407,7 @@ test.describe('@p2 capture first', () => {
     const onSent = (chainId: number, _h: Hex, to: Address | undefined) => sent.push({ chainId, to: to?.toLowerCase() });
     const first = await approvalTab(captureId, onSent);
     const unusedBefore = (await pool()).filter((b) => !b.used).length;
-    await first.getByRole('button', { name: 'Buy storage and publish' }).click();
+    await buyWithoutWallet(first);
     // Bought and handed over: the extension holds the batch while Bee gets it ready.
     await expect.poll(async () => (await pool()).filter((b) => !b.used).length, { timeout: 120_000 }).toBe(unusedBefore + 1);
     await first.close();
