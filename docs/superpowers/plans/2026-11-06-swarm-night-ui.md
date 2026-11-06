@@ -19,6 +19,9 @@
 - Do not rename or remove existing labels, headings, button texts, `data-*` hooks or routes. If an e2e selector must change, say so in the task report.
 - `prefers-reduced-motion: reduce` → every animation renders its final state; WCAG AA in both themes; 44 px targets; no emoji icons; no horizontal scroll at 375 px.
 - Web unit tests: `pnpm -C apps/web test`. Extension unit tests: `pnpm -C extension/packages/extension test`. Net tests: `pnpm vitest run packages/net`. Typecheck: `pnpm -C apps/web typecheck`.
+- **Cut-off: branch ready for merge by 04:00 IST Sat 7 Nov** (main session then merges, redeploys and re-records the demo). If behind, drop from the end of the execution order (T8 first, then T7's idle loops), never ship a half task.
+- **Main session's hot files (avoid; conflicts expected only where listed):** `apps/web/src/routes/{Approve,Capture,Settings,Storage}.tsx`, `apps/web/src/{storage,attachments,verify}/*`, `apps/web/src/components/{RepoSnapshot,KeepAlive,TryIt}.tsx`, `extension/packages/extension/src/entries/Popup/*`, `extension/packages/extension/src/recall/*` (job, captureView, pendingUpload, chunkPush, repoSnapshot, errors), `e2e/demo/record-demo.ts`, `e2e/specs/p2-*.spec.ts`, `README.md`, `docs/demo-script.md`. Import from them freely; do not edit them. `routes/Home.tsx` is hot too but must change (T4/T6): keep the edit to replacing its JSX composition, so the rebase conflict is one block.
+- **The AWS runner is shared with the main session (one devnet, global fixture state).** Before every runner use, the controller messages session `eth-2026-a2` and waits for "box free"; implementers never start runner jobs themselves, they hand the exact command to the controller.
 - Docker is off on the Mac. Anything needing the devnet (net tests against Arkiv, Playwright e2e) runs on the AWS test runner via `/Users/madkeanuj/Code/Eth-2026/recall/.superpowers/sdd/2026-11-06-recall-mvp/testrunner.sh` (read it first; it rsyncs a worktree to the box and runs a command). If the runner is unavailable, report BLOCKED for that step only and continue.
 
 ## Review Focus
@@ -181,21 +184,17 @@
 - [ ] **Step 5:** e2e on the runner: add `@p4 library keep-alive` to `e2e/specs/p4-keepalive.spec.ts` reusing its mock-wallet fixture: open `#/library`, the seeded capture verifies, press Keep alive, complete the dialog, assert its days increased. Existing `@p4` specs still pass.
 - [ ] **Step 6: Commit** `feat(web): keep alive from the library with a live re-rank`.
 
-### Task 9: Extension popup (theme, logo, disclosure, success moment)
+### Task 9: Extension look (tokens, icons, logo) without touching Popup/*
 
 **Files:**
-- Modify: `extension/packages/extension/src/entries/Popup/Popup.tsx`, `popup.css`, `Onboarding.tsx` (header logo only)
-- Modify: `extension/packages/extension/src/recall/ui/base.css` if the popup sets a fixed light background
-- Test: `extension/packages/extension/test/` (existing popup tests; add `popupDetails.test.tsx`)
+- Modify: `extension/packages/extension/src/recall/ui/base.css` and `recall/ui/settings.css` only if they force a light background (the popup then follows `prefers-color-scheme` through the shared tokens)
+- (Icons and manifest were done in Task 2.)
+- Test: `extension/packages/extension` existing unit tests; add `test/tokensParity.test.ts` asserting the extension tokens file equals the web one.
 
-**Interfaces:**
-- Consumes: shared tokens (Task 1; the popup follows `prefers-color-scheme` through the media-query block, no toggle), `Logo` (Task 2, extension copy).
-- Produces: header shows `Logo` 20 px + "Recall"; technical facts in the popup (witness URL/address, hashes, batch ids, raw sizes) move into one `<details>` "Details" per screen without changing any button label or flow; the existing "capture verified, continue in the Recall tab" success notice gets a small static elephant-with-check SVG (CSS fade-in 200 ms; none under reduced motion). No new popup state (spec §12.5).
+**Interfaces:** consumes the tokens (Task 1) and icons (Task 2). **No edits to `entries/Popup/*` or `src/recall/*.ts`** (main session's hot files). The popup disclosure and success art from spec §7/§12.5 are deferred to after the hackathon; note this in the report.
 
-- [ ] **Step 1: Failing test:** rendering the popup in its "verified" state shows the success illustration (`[data-testid="popup-success-art"]`) and every previously visible button label still present; technical values are inside a closed `details` element.
-- [ ] **Step 2:** FAIL. **Step 3:** Implement. **Step 4:** `pnpm -C extension/packages/extension test` green; build the extension (`pnpm -C extension/packages/extension build`).
-- [ ] **Step 5:** e2e on the runner: `@p1` extension, `@p2` capture-first, approve, api, `@p3` settings pass (selector changes listed in the report). Screenshot the popup in dark and light.
-- [ ] **Step 6: Commit** `feat(extension): Swarm Night popup with logo, details disclosure and success art`.
+- [ ] **Step 1:** Failing parity test. **Step 2:** FAIL. **Step 3:** Fix any forced-light CSS. **Step 4:** `pnpm -C extension/packages/extension test` green; build the extension; screenshot the popup (onboarding + idle) in dark and light via the repo's Playwright extension fixture.
+- [ ] **Step 5: Commit** `feat(extension): Swarm Night colours and icons`.
 
 ### Task 10: Whole-branch verification and hand-off
 
@@ -210,4 +209,4 @@
 
 ## Execution order and parallelism
 
-`[T1, T2, T5]` in parallel (disjoint files) → `[T3, T9]` → `T4` → `[T6, T7]` (T6 owns `Home.tsx` section 3 + library files; T7 owns `Hero.tsx` + `heroStory.ts`; coordinate the single `Home.tsx` edit by landing T6 first) → `T8` → `T10`.
+`[T1, T2, T5]` in parallel (disjoint files; T5's runner step waits for the box) → `[T3, T9]` → `T4` → `[T6, T7]` (T6 owns `Home.tsx` section 3 + library files; T7 owns `Hero.tsx` + `heroStory.ts`; coordinate the single `Home.tsx` edit by landing T6 first) → `T8` → `T10`.
