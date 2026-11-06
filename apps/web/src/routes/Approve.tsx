@@ -679,7 +679,9 @@ export function Approve({ captureId }: { captureId: string | null }) {
       followed.current = true;
       const how: SaveHow = ready.pending.uploadMode === 'free' && ready.pending.storage !== 'ok' ? 'free' : 'stamped';
       followUpload(ready, how)
-        .then((next) => next && run('publish', next))
+        .then((next) => {
+          if (next && next.stored?.gatewayCopy !== 'unavailable') return run('publish', next);
+        })
         .catch((e) => {
           setSave(uploadFailed(how, e));
           void refreshOffer();
@@ -788,7 +790,8 @@ export function Approve({ captureId }: { captureId: string | null }) {
       // Nothing is uploaded before this request: the extension starts it once, whatever the clicks.
       await ext.send({ type: 'recall.uploadPending', captureId, mode: how === 'free' ? 'free' : 'stamped' }, { timeoutMs: 15_000, ...extOpts });
       const next = await followUpload(ready, how);
-      if (next) await run('publish', next);
+      // A stored copy the gateways did not confirm is shown first; the person publishes from there.
+      if (next && next.stored?.gatewayCopy !== 'unavailable') await run('publish', next);
     } catch (e) {
       setSave(uploadFailed(how, e));
       void refreshOffer();
