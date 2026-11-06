@@ -254,13 +254,11 @@ var options = {
       ],
     }),
     new CopyWebpackPlugin({
-      patterns: [
-        {
-          from: 'src/assets/img/icon-34.png',
-          to: BUILD_DIR,
-          force: true,
-        },
-      ],
+      patterns: ['icon-16.png', 'icon-32.png', 'icon-34.png', 'icon-48.png'].map((name) => ({
+        from: `src/assets/img/${name}`,
+        to: BUILD_DIR,
+        force: true,
+      })),
     }),
     new CopyWebpackPlugin({
       patterns: [
