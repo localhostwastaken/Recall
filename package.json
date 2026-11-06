@@ -20,7 +20,8 @@
     "tunnel:up": "bash scripts/tunnel.sh",
     "tunnel:down": "bash scripts/tunnel-stop.sh",
     "check:docs": "tsx scripts/check-docs.ts",
-    "arkiv:query": "tsx scripts/arkiv-query.ts"
+    "arkiv:query": "tsx scripts/arkiv-query.ts",
+    "demo:record": "tsx e2e/demo/record-demo.ts"
   },
   "devDependencies": {
     "@playwright/test": "1.49.1",
