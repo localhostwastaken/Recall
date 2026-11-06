@@ -218,9 +218,19 @@ const SETTINGS = `${APP}/#/settings`;
 const saveButton = (page: Page) => page.getByRole('button', { name: 'Save settings' });
 const stored = (page: Page) => page.evaluate((k) => localStorage.getItem(k), SETTINGS_KEY);
 
+/** The settings form sits behind one "Advanced" disclosure that starts folded: open it. */
+async function expandAdvanced(page: Page): Promise<void> {
+  const details = page.locator('details.settings-advanced');
+  if (!(await details.evaluate((d) => (d as HTMLDetailsElement).open))) {
+    await details.locator('summary').click();
+  }
+  await expect(details).toHaveJSProperty('open', true);
+}
+
 async function openSettings(page: Page): Promise<void> {
   await page.goto(SETTINGS);
   await expect(page.getByRole('heading', { level: 1, name: 'Settings' })).toBeVisible();
+  await expandAdvanced(page);
 }
 
 /** Serves `bytes` at /bytes/<ref> on the default download gateway, as a public gateway would. */
@@ -517,6 +527,7 @@ test.describe('@p3 settings web', () => {
     // Settings there: the built-in witness only, nothing planted shown, nothing can be saved.
     await page.goto(`${SHARED}#/settings`);
     await expect(page.getByRole('heading', { level: 1, name: 'Settings' })).toBeVisible();
+    await expandAdvanced(page);
     await expect(
       page.getByText("Settings can't be changed on a shared gateway address. Open the app from its own address (bzz.link or GitHub Pages) to change them."),
     ).toBeVisible();
@@ -662,6 +673,7 @@ test.describe('@p3 settings web', () => {
 
     await page.reload();
     await expect(page.getByRole('heading', { level: 1, name: 'Settings' })).toBeVisible();
+    await expandAdvanced(page);
     await expect(page.getByLabel('Gnosis RPC URL')).toHaveValue('https://gnosis.example.org');
     await expect(page.getByLabel('Swarm upload gateway')).toHaveValue('http://127.0.0.1:1633');
     await expect(page.getByLabel('Extension ID')).toHaveValue('b'.repeat(32));
@@ -697,6 +709,7 @@ test.describe('@p3 settings web', () => {
     page.on('pageerror', (e) => errors.push(e.message));
     await page.goto(SETTINGS);
     await expect(page.getByRole('heading', { level: 1, name: 'Settings' })).toBeVisible();
+    await expandAdvanced(page);
     await expect(page.getByLabel('Arkiv RPC URL')).toHaveValue(LOCAL.arkiv.rpcUrl);
     await expect(page.getByLabel('Swarm download gateway')).toHaveValue(NODE_DOWNLOAD);
     await expect(page.getByRole('list', { name: 'Trusted witnesses' })).toContainText('Recall Witness (default)');
@@ -784,6 +797,7 @@ test.describe('@p3 settings web', () => {
     expect(page.url()).not.toContain(KEY);
     // No text of the page shows the key while it is hidden.
     await page.reload();
+    await expandAdvanced(page);
     await expect(page.getByLabel('Arkiv access key')).toHaveAttribute('type', 'password');
     expect(await page.locator('body').innerText()).not.toContain(KEY);
     // Nothing logged it.
@@ -935,6 +949,11 @@ async function openPopup(page = POPUP_PAGE): Promise<{ tab: Page; popup: Page }>
 const openPanel = async (popup: Page) => {
   await popup.getByRole('button', { name: 'Settings', exact: true }).click();
   await expect(popup.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
+  // The whole form sits behind one "Advanced settings" disclosure that starts folded.
+  await expect(popup.getByText("Everything is preconfigured. You don't need to change anything here.")).toBeVisible();
+  const details = popup.locator('details.sp-advanced');
+  await details.locator('summary').click();
+  await expect(details).toHaveJSProperty('open', true);
 };
 
 test.describe('@p3 settings extension', () => {
