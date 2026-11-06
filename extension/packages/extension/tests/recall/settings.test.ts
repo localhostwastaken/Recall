@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  APP_CHOICES,
+  appChoiceOf,
   defaultSettings,
   isWitnessUrl,
   loadSettings,
@@ -100,6 +102,36 @@ describe('settings', () => {
     expect(mergeSettings({ net: 'local', witnessUrl: 'javascript:alert(1)' }).witnessUrl).toBe(d);
     expect(mergeSettings({ net: 'local', witnessUrl: 'https://w.example' }).witnessUrl).toBe(
       'https://w.example',
+    );
+  });
+
+  it('offers the app on GitHub Pages (the live default) and on Swarm under its ENS name', () => {
+    expect(APP_CHOICES.map((c) => [c.id, c.name, c.url])).toEqual([
+      ['pages', 'GitHub Pages (default)', 'https://localhostwastaken.github.io/Recall/app/'],
+      ['swarm', 'Swarm (recallapp.eth.limo)', 'https://recallapp.eth.limo/'],
+    ]);
+    expect(APP_CHOICES[0].url).toBe(defaultSettings('live').appUrl);
+  });
+
+  it('tells which app choice an address is, whatever its trailing slash or letter case', () => {
+    expect(appChoiceOf('https://localhostwastaken.github.io/Recall/app/')).toBe('pages');
+    expect(appChoiceOf('https://localhostwastaken.github.io/Recall/app')).toBe('pages');
+    expect(appChoiceOf(' https://recallapp.eth.limo ')).toBe('swarm');
+    expect(appChoiceOf('https://RecallApp.eth.limo/')).toBe('swarm');
+    // Anything else is a custom address: neither choice is selected.
+    expect(appChoiceOf('https://recallapp.bzz.link/')).toBeUndefined();
+    expect(appChoiceOf('http://localhost:5173')).toBeUndefined();
+    expect(appChoiceOf('https://recallapp.eth.limo/other/')).toBeUndefined();
+    expect(appChoiceOf('')).toBeUndefined();
+    expect(appChoiceOf('javascript:alert(1)')).toBeUndefined();
+  });
+
+  it('keeps an app address at the root of its host with one trailing slash', () => {
+    expect(mergeSettings({ net: 'live', appUrl: 'https://recallapp.eth.limo' }).appUrl).toBe(
+      'https://recallapp.eth.limo/',
+    );
+    expect(mergeSettings({ net: 'live', appUrl: 'https://recallapp.eth.limo/' }).appUrl).toBe(
+      'https://recallapp.eth.limo/',
     );
   });
 });

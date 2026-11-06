@@ -5,7 +5,9 @@ import { BUILT_IN_ARKIV_KEY } from '../../recall/build';
 import { MonoValue } from '../../recall/ui/MonoValue';
 import {
   ADDRESS_ERROR,
+  APP_CHOICES,
   FREE_MODE_NOTE,
+  appChoiceOf,
   keyHelper,
   defaultSettings,
   loadSettings,
@@ -156,6 +158,7 @@ export function SettingsPanel({
   const [advanced, setAdvanced] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const uploadModeName = useId();
+  const appChoiceName = useId();
 
   useEffect(() => {
     loadSettings()
@@ -192,6 +195,7 @@ export function SettingsPanel({
     );
   }
 
+  const appChoice = appChoiceOf(draft.appUrl);
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => {
     setDraft((d) => (d ? { ...d, [key]: value } : d));
     setStatus('');
@@ -402,6 +406,35 @@ export function SettingsPanel({
                 </button>
               </div>
             </div>
+          </section>
+
+          <section className="sp-section" aria-labelledby="sp-app">
+            <h3 id="sp-app" className="section-label">
+              Recall app
+            </h3>
+            <fieldset className="sp-radios" aria-describedby="sp-app-help">
+              <legend className="visually-hidden">Recall app</legend>
+              {APP_CHOICES.map((c) => (
+                <label key={c.id} className="sp-radio">
+                  <input
+                    type="radio"
+                    name={appChoiceName}
+                    checked={appChoice === c.id}
+                    onChange={() => {
+                      set('appUrl', c.url);
+                      setErrors((e) => ({ ...e, appUrl: undefined }));
+                    }}
+                  />
+                  <span className="sp-radio-name">{c.name}</span>
+                  <span className="sp-radio-desc">{c.desc}</span>
+                </label>
+              ))}
+            </fieldset>
+            <p className="sp-helper" id="sp-app-help">
+              {appChoice
+                ? 'Where the publish tab opens. Your choice fills in App URL below.'
+                : 'A custom address is set in App URL below.'}
+            </p>
           </section>
 
           <section className="sp-section" aria-labelledby="sp-endpoints">

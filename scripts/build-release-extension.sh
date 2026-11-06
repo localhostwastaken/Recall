@@ -61,9 +61,11 @@ fail() { echo "release build check FAILED: $*" >&2; exit 1; }
 [ -f "$OUT/manifest.json" ] || fail "no $OUT/manifest.json"
 name="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).name)' "$OUT/manifest.json")"
 [ "$name" = "Recall" ] || fail "manifest name is '$name', expected 'Recall'"
-# Only the GitHub Pages app may message a release build (no localhost, no shared bzz.link origins).
+# Only the app on GitHub Pages and on its two Swarm hosts (ENS recallapp.eth) may message a release
+# build: exact hosts, no localhost, no wildcard (shared) bzz.link origins.
 connectable="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).externally_connectable.matches.join(" "))' "$OUT/manifest.json")"
-[ "$connectable" = "https://localhostwastaken.github.io/*" ] || fail "externally_connectable is '$connectable', expected only https://localhostwastaken.github.io/*"
+expected_connectable="https://localhostwastaken.github.io/* https://recallapp.eth.limo/* https://recallapp.bzz.link/*"
+[ "$connectable" = "$expected_connectable" ] || fail "externally_connectable is '$connectable', expected exactly '$expected_connectable'"
 
 # The release manifest carries the fixed public key (utils/recallManifest.js), so every "Load unpacked"
 # of the release gets the same extension ID, the one the web app defaults to.

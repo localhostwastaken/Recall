@@ -170,6 +170,36 @@ function appUrlFrom(v: unknown, fallback: string): string {
   return u.search || u.hash ? c.value : `${c.value.replace(/\/+$/, '')}/`;
 }
 
+export type AppChoice = 'pages' | 'swarm';
+
+/**
+ * The two public copies of the Recall web app, offered as one choice above the App URL field.
+ * Both can publish with the release extension (its externally_connectable lists both hosts).
+ * GitHub Pages is the live default; the Swarm copy is the ENS name recallapp.eth.
+ */
+export const APP_CHOICES: readonly { id: AppChoice; name: string; desc: string; url: string }[] = [
+  {
+    id: 'pages',
+    name: 'GitHub Pages (default)',
+    desc: 'localhostwastaken.github.io',
+    url: liveConfig({}).app.url,
+  },
+  {
+    id: 'swarm',
+    name: 'Swarm (recallapp.eth.limo)',
+    desc: 'The same app, served from Swarm by its ENS name.',
+    url: 'https://recallapp.eth.limo/',
+  },
+];
+
+/** Which choice an App URL is (trailing slash and letter case aside); undefined for any other address. */
+export function appChoiceOf(appUrl: string): AppChoice | undefined {
+  const normal = appUrlFrom(appUrl, '');
+  if (!normal) return undefined;
+  const href = new URL(normal).href;
+  return APP_CHOICES.find((c) => c.url === href)?.id;
+}
+
 /** Valid addresses only (checksummed form), each once. A list with nothing valid trusts nobody. */
 function pinnedFrom(list: unknown[]): Address[] {
   const out: Address[] = [];

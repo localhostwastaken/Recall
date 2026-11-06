@@ -16,10 +16,20 @@ const { recallManifest, RELEASE_CONNECTABLE, RELEASE_KEY, RELEASE_EXTENSION_ID }
 const FIXED_ID = 'mgpclfpdgpinofgpgfeodcbmlfaglmnp';
 
 describe('the shipped manifest', () => {
-  it('a release build accepts messages from the GitHub Pages app only', () => {
+  it('a release build accepts messages from the app on GitHub Pages and on its two Swarm hosts only', () => {
     const release = recallManifest(source, { dev: false });
-    expect(RELEASE_CONNECTABLE).toEqual(['https://localhostwastaken.github.io/*']);
-    expect(release.externally_connectable).toEqual({ matches: ['https://localhostwastaken.github.io/*'] });
+    const hosts = [
+      'https://localhostwastaken.github.io/*',
+      'https://recallapp.eth.limo/*',
+      'https://recallapp.bzz.link/*',
+    ];
+    expect(RELEASE_CONNECTABLE).toEqual(hosts);
+    expect(release.externally_connectable).toEqual({ matches: hosts });
+    // Exact hosts only: no wildcard host (a shared gateway origin), no plain http, no localhost.
+    for (const m of release.externally_connectable.matches) {
+      expect(m, m).toMatch(/^https:\/\/[a-z0-9.-]+\/\*$/);
+      expect(m, m).not.toContain('localhost:');
+    }
     expect(release.name).toBe('Recall');
     // Everything else is the source manifest, plus the fixed key.
     const { key, ...rest } = release;

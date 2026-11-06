@@ -22,11 +22,21 @@ function extensionIdFromKey(keyB64) {
 const RELEASE_EXTENSION_ID = extensionIdFromKey(RELEASE_KEY);
 
 /**
- * Pages that may message the extension (externally_connectable) in a release build: the GitHub
- * Pages app only. The localhost app and Bee origins and *.bzz.link (shared gateway origins, where
- * any site could call the extension) stay in dev builds, which the e2e tests use.
+ * Pages that may message the extension (externally_connectable) in a release build: the Recall
+ * web app on GitHub Pages and the same app on Swarm under its ENS name, as exact hosts.
+ * recallapp.eth.limo and recallapp.bzz.link serve whatever the ENS name recallapp.eth points at,
+ * and only the name's owner can change that, so they are trusted as much as the GitHub Pages
+ * site. Wildcards such as *.bzz.link stay dev-only: every Swarm site gets a bzz.link subdomain,
+ * so a wildcard would let any site call the extension. The localhost app and Bee origins stay in
+ * dev builds too, which the e2e tests use. What a listed page can do is limited anyway (R27): it
+ * reads the stamp address, hands over batches that are checked on-chain, needs a capture's
+ * 128-bit id to read it, and a "published" claim is checked on Arkiv.
  */
-const RELEASE_CONNECTABLE = ['https://localhostwastaken.github.io/*'];
+const RELEASE_CONNECTABLE = [
+  'https://localhostwastaken.github.io/*',
+  'https://recallapp.eth.limo/*',
+  'https://recallapp.bzz.link/*',
+];
 
 /** Hosts that play GitHub on the devnet (fixtures/notice); dev builds only. */
 const DEV_GITHUB_HOST_PERMISSIONS = ['https://api.github.recall.test/*', 'https://codeload.github.recall.test/*'];

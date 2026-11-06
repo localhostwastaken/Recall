@@ -3,6 +3,8 @@ import type { EvidenceFile } from '@recall/evidence';
 import {
   approveUrl,
   storageUrl,
+  timelineUrl,
+  captureUrl,
   checkLines,
   jobSteps,
   earlierCopy,
@@ -215,6 +217,18 @@ describe('capture view copy', () => {
     expect(storageUrl('https://localhostwastaken.github.io/Recall/app/', ext)).toBe(
       `https://localhostwastaken.github.io/Recall/app/#/storage?ext=${ext}`,
     );
+  });
+
+  it('builds the same links on the app on Swarm, which is served at the root of its host', () => {
+    const id = 'a'.repeat(32);
+    const ext = 'b'.repeat(32);
+    const key = `0x${'c'.repeat(64)}`;
+    for (const app of ['https://recallapp.eth.limo/', 'https://recallapp.bzz.link/']) {
+      expect(approveUrl(app, id, ext)).toBe(`${app}#/approve/${id}?ext=${ext}`);
+      expect(storageUrl(app, ext)).toBe(`${app}#/storage?ext=${ext}`);
+      expect(timelineUrl(app, key)).toBe(`${app}#/u/${key}`);
+      expect(captureUrl(app, key)).toBe(`${app}#/c/${key}`);
+    }
   });
 
   it('a kept capture points to the Recall tab, where storage is chosen (R44)', () => {
