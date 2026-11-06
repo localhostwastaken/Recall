@@ -52,6 +52,7 @@ function parts(root: HTMLElement) {
     eye: root.querySelector('#duo-eye'),
     ear: root.querySelector('#duo-ear'),
     card: root.querySelector<HTMLElement>('.hero-card'),
+    slot: root.querySelector<HTMLElement>('.hero-slot'),
     pill: root.querySelector<HTMLElement>('.hero-card .ccard-pill'),
     bar: root.querySelector<HTMLElement>('.hero-card .ccard-bar-fill'),
   };
@@ -108,6 +109,8 @@ export function playHeroStory(root: HTMLElement, opts: { reducedMotion: boolean 
     // The start frame, applied now (before the first paint), so the final frame never flashes.
     p.steps.forEach((s) => s.classList.remove('is-on'));
     if (p.card) gsap.set(p.card, { autoAlpha: 0, y: 24 });
+    // The card's empty slot shows a dashed outline until the card lands on it.
+    if (p.slot) gsap.set(p.slot, { '--slot-o': 1 });
     if (p.pill) gsap.set(p.pill, { scale: 0 });
     if (p.bar) gsap.set(p.bar, { scaleX: 0, transformOrigin: 'left center' });
     if (p.fills.length) gsap.set(p.fills, { scaleX: 0, transformOrigin: 'left center' });
@@ -154,6 +157,7 @@ export function playHeroStory(root: HTMLElement, opts: { reducedMotion: boolean 
     if (p.fills[3]) tl.to(p.fills[3], { scaleX: 1, duration: 0.4 }, 2.75).add(on(3), '<');
     if (p.trunk) tl.to(p.trunk, { rotation: 0, duration: 0.8, ease: 'elastic.out(1, 0.55)' }, 2.75);
     if (p.card) tl.to(p.card, { autoAlpha: 1, y: 0, duration: 0.6, ease: 'back.out(1.6)' }, 2.85);
+    if (p.slot) tl.to(p.slot, { '--slot-o': 0, duration: 0.2, ease: 'none' }, 3.3);
     if (p.pill) tl.to(p.pill, { scale: 1, duration: 0.35, ease: 'back.out(3)' }, 3.2);
     if (p.bar) tl.to(p.bar, { scaleX: 1, duration: 0.8 }, 3.2);
     // 6. "forgets" comes back together: Recall doesn't forget.
