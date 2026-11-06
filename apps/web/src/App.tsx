@@ -1,16 +1,20 @@
 import { useEffect, useRef } from 'react';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { WalletChip } from './components/WalletChip';
+import { SiteFooter } from './components/SiteFooter';
+import { SiteHeader } from './components/SiteHeader';
 import { routeId, useRoute, type Route } from './router';
 import { Approve } from './routes/Approve';
 import { Capture } from './routes/Capture';
 import { FileCheck } from './routes/FileCheck';
 import { Home } from './routes/Home';
+import { Library } from './routes/Library';
 import { Settings } from './routes/Settings';
 import { Storage } from './routes/Storage';
 import { Timeline } from './routes/Timeline';
+import { flushPendingSection } from './sectionNav';
 import { ToastProvider } from './ui/Toast';
 import './app.css';
+import './components/shell.css';
 
 function NotFound({ path }: { path: string }) {
   return (
@@ -27,6 +31,8 @@ function Page({ route }: { route: Route }) {
   switch (route.name) {
     case 'home':
       return <Home />;
+    case 'library':
+      return <Library key={routeId(route)} q={route.q} type={route.type} sort={route.sort} />;
     case 'url':
       // Keyed by the address, so moving between two timelines never carries state over.
       return <Timeline key={route.urlHash} urlHash={route.urlHash} />;
@@ -46,17 +52,6 @@ function Page({ route }: { route: Route }) {
   }
 }
 
-/** The brand mark: a filed page with a citrus corner, in the accent colour. Decorative. */
-function ArchiveMark() {
-  return (
-    <svg className="archive-mark" viewBox="0 0 32 36" width="26" height="30" aria-hidden="true" fill="none">
-      <path d="M6 3h17l6 6v24H6V3Z" fill="var(--accent-soft)" stroke="currentColor" strokeWidth="2" />
-      <path d="M23 3v7h6" fill="var(--citrus)" />
-      <path d="M23 3v7h6M11 15h13M11 20h13M11 25h8M2 8v26" stroke="currentColor" strokeWidth="2" />
-    </svg>
-  );
-}
-
 export function App() {
   const route = useRoute();
   const main = useRef<HTMLElement>(null);
@@ -70,13 +65,10 @@ export function App() {
     }
     document.querySelector<HTMLElement>('main h1')?.focus({ preventScroll: true });
     window.scrollTo(0, 0);
+    // A header link to a landing section (How it works, Sponsors, Get the extension) clicked on
+    // another page: the new page is rendered now, so finish the scroll.
+    flushPendingSection();
   }, [routeId(route)]);
-
-  const link = (href: string, name: Route['name'], label: string) => (
-    <a href={href} aria-current={route.name === name ? 'page' : undefined}>
-      {label}
-    </a>
-  );
 
   return (
     <ToastProvider>
@@ -91,20 +83,7 @@ export function App() {
       >
         Skip to content
       </a>
-      <header className="site-header">
-        <div className="container header-row">
-          <a className="brand" href="#/">
-            <ArchiveMark />
-            Recall
-          </a>
-          <nav aria-label="Main" className="nav">
-            {link('#/', 'home', 'Home')}
-          </nav>
-          <div className="header-tools">
-            <WalletChip />
-          </div>
-        </div>
-      </header>
+      <SiteHeader route={route} />
       <main id="main" ref={main} tabIndex={-1} className="container page">
         <ErrorBoundary
           key={routeId(route)}
@@ -113,15 +92,7 @@ export function App() {
           <Page route={route} />
         </ErrorBoundary>
       </main>
-      <footer className="site-footer">
-        <div className="container footer-row">
-          <p className="muted">No trackers. Verification runs in your browser. TLSNotary alpha (unaudited) · testnet.</p>
-          {/* Everything is preconfigured, so settings live here and not in the main navigation. */}
-          <a className="footer-link" href="#/settings" aria-current={route.name === 'settings' ? 'page' : undefined}>
-            Advanced settings
-          </a>
-        </div>
-      </footer>
+      <SiteFooter route={route} />
     </ToastProvider>
   );
 }

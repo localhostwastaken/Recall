@@ -16,12 +16,12 @@
 }
 
 a {
-  color: var(--accent);
+  color: var(--accent-text);
   text-underline-offset: 0.18em;
 }
 
 a:hover {
-  color: var(--accent-hover);
+  color: var(--text);
 }
 
 /* Skip link: off-screen until focused. */
@@ -41,84 +41,7 @@ a:hover {
   top: var(--space-2);
 }
 
-/* Header: sticky on the cream paper, one hairline, no shadow. */
-.site-header {
-  position: sticky;
-  top: 0;
-  z-index: var(--z-header);
-  background: var(--bg);
-  border-bottom: 1px solid var(--border);
-}
-
-.header-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2) var(--space-5);
-  min-height: 72px;
-  padding-top: var(--space-2);
-  padding-bottom: var(--space-2);
-}
-
-.brand {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: var(--control-h);
-  font-family: var(--font-display);
-  font-size: 28px;
-  line-height: 1;
-  font-weight: 700;
-  letter-spacing: -0.045em;
-  color: var(--text);
-  text-decoration: none;
-}
-
-.archive-mark {
-  flex: none;
-  color: var(--accent);
-}
-
-.brand:hover {
-  color: var(--text);
-}
-
-.nav {
-  display: flex;
-  gap: var(--space-1);
-}
-
-.nav a {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: var(--control-h);
-  padding: 0 var(--space-3);
-  border-radius: var(--radius-1);
-  color: var(--text-muted);
-  text-decoration: none;
-  font-size: var(--text-md);
-  line-height: var(--lh-md);
-  font-weight: 600;
-}
-
-.nav a:hover {
-  color: var(--text);
-  background: var(--surface-sunken);
-}
-
-.nav a[aria-current='page'] {
-  color: var(--accent);
-  background: var(--accent-soft);
-}
-
-.header-tools {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2) var(--space-3);
-  margin-left: auto;
-}
+/* The sticky header, its nav and the footer are styled in components/shell.css. */
 
 .wallet-chip {
   display: inline-flex;
@@ -181,13 +104,6 @@ h1[tabindex='-1']:focus-visible {
   display: grid;
   gap: var(--space-4);
   max-width: var(--measure);
-}
-
-.site-footer {
-  border-top: 1px solid var(--border);
-  padding: var(--space-5) 0;
-  font-size: var(--text-sm);
-  line-height: var(--lh-sm);
 }
 
 /* Form controls. Inputs use --border-strong so their edges reach 3:1. */
@@ -273,7 +189,7 @@ h1[tabindex='-1']:focus-visible {
   background: none;
   border: 0;
   font: inherit;
-  color: var(--accent);
+  color: var(--accent-text);
   text-decoration: underline;
   cursor: pointer;
 }
@@ -286,7 +202,7 @@ h1[tabindex='-1']:focus-visible {
   min-height: var(--control-h);
   padding: 0;
   background: transparent;
-  color: var(--accent);
+  color: var(--accent-text);
   border: 0;
   border-radius: var(--radius-1);
   cursor: pointer;
@@ -499,7 +415,7 @@ h1[tabindex='-1']:focus-visible {
   display: flex;
   align-items: center;
   font-weight: 600;
-  color: var(--accent);
+  color: var(--accent-text);
   border-radius: var(--radius-1);
 }
 
@@ -631,7 +547,7 @@ h1[tabindex='-1']:focus-visible {
 
 .why-witness > summary {
   cursor: pointer;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .why-witness > p {
@@ -713,7 +629,7 @@ a.btn-secondary:hover {
 
 .tech-details > summary {
   cursor: pointer;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .tech-details > p {

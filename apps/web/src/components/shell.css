@@ -1,0 +1,331 @@
+/* Shell: the sticky header, the phone menu, the theme toggle and the footer. Tokens only (no raw
+   colours). This file is bundled before base.css and web.css, so rules here are scoped under
+   .site-header / .site-footer to win over their equal-specificity .btn and a:hover rules. */
+
+:root {
+  --header-h: 64px;
+  --icon-btn: 40px;
+}
+
+/* Anchored sections (How it works, Sponsors, Install) must not hide under the sticky header. */
+html {
+  scroll-padding-top: calc(var(--header-h) + var(--space-4));
+}
+
+/* Header: sticky, 64 px, one hairline, translucent so the page shows faintly through. */
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-header);
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+}
+
+.site-header .header-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  min-height: var(--header-h);
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.site-header .brand {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  margin-right: auto;
+  border-radius: var(--radius-1);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.site-header .brand:hover {
+  color: var(--text);
+}
+
+.site-header .nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.site-header .nav a,
+.site-header .menu-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-1);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+  font-weight: 600;
+  white-space: nowrap;
+  text-decoration: none;
+  transition: color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out);
+}
+
+.site-header .nav a:hover,
+.site-header .menu-link:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+/* The current page: darker, bolder and underlined (not colour alone). */
+.site-header .nav a[aria-current='page'] {
+  color: var(--text);
+  font-weight: 700;
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 8px;
+}
+
+.site-header .header-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-left: 0;
+}
+
+/* The theme toggle and the phone menu button: 40 px round, a 44 px hit area. */
+.round-btn {
+  position: relative;
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: var(--icon-btn);
+  height: var(--icon-btn);
+  padding: 0;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+
+.round-btn::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+}
+
+.round-btn:hover {
+  background: var(--surface-2);
+}
+
+.round-btn:focus-visible {
+  outline-offset: 2px;
+}
+
+.round-btn[aria-expanded='true'] {
+  background: var(--surface-2);
+}
+
+/* Header buttons are pills, like every button in the new look. */
+.site-header .header-cta,
+.site-header .menu-cta,
+.site-header .wallet-chip .btn {
+  min-height: var(--icon-btn);
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+}
+
+.site-header .header-cta,
+.site-header .menu-cta {
+  padding: 0 var(--space-5);
+  font-weight: 700;
+}
+
+.site-header .header-cta {
+  position: relative;
+}
+
+.site-header .header-cta::after {
+  content: '';
+  position: absolute;
+  inset: -2px 0;
+}
+
+.site-header .wallet-chip {
+  flex-wrap: nowrap;
+}
+
+.site-header .menu-btn {
+  display: none;
+}
+
+.site-header .header-menu {
+  display: none;
+}
+
+/* Narrow desktop and tablet (below 1040 px): the wallet chip no longer fits next to the other
+   header items, so it moves into the menu panel. */
+@media (max-width: 1039px) {
+  .site-header .header-wallet {
+    display: none;
+  }
+
+  .site-header .menu-btn {
+    display: inline-grid;
+  }
+
+  .site-header .header-menu {
+    position: absolute;
+    top: calc(100% + var(--space-2));
+    right: var(--space-4);
+    z-index: var(--z-header);
+    display: grid;
+    gap: var(--space-1);
+    width: min(360px, calc(100% - 2 * var(--space-4)));
+    padding: var(--space-3);
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-2);
+    box-shadow: var(--shadow-2);
+  }
+
+  /* Only the wallet chip lives in the panel at this width. */
+  .site-header .menu-link,
+  .site-header .menu-cta {
+    display: none;
+  }
+
+  .site-header .menu-wallet .wallet-chip {
+    flex-wrap: wrap;
+  }
+
+  .site-header .menu-wallet .wallet-chip .btn {
+    min-height: 44px;
+  }
+}
+
+/* Phone: logo, Library, theme toggle, menu button. The rest opens in the panel. */
+@media (max-width: 760px) {
+  .site-header .header-row {
+    gap: var(--space-2);
+  }
+
+  .site-header .header-tools {
+    gap: var(--space-2);
+  }
+
+  .site-header .nav .nav-wide,
+  .site-header .header-wide {
+    display: none;
+  }
+
+  .site-header .header-menu {
+    left: var(--space-4);
+    width: auto;
+  }
+
+  .site-header .menu-link {
+    display: inline-flex;
+    padding: 0 var(--space-3);
+    font-size: var(--text-md);
+    line-height: var(--lh-md);
+  }
+
+  .site-header .menu-cta {
+    display: inline-flex;
+    margin-top: var(--space-2);
+    min-height: 44px;
+  }
+
+  .menu-wallet {
+    margin-top: var(--space-2);
+    padding: var(--space-3) var(--space-3) var(--space-1);
+    border-top: 1px solid var(--border);
+  }
+}
+
+/* Footer: the standing note and the advanced settings, then the judges' links. */
+.site-footer {
+  border-top: 1px solid var(--border);
+  padding: var(--space-5) 0;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+}
+
+.site-footer .footer-stack {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.site-footer .footer-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-5);
+}
+
+.site-footer .footer-judges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.site-footer .footer-label {
+  font-weight: 700;
+  color: var(--text);
+}
+
+.site-footer .footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-2);
+  /* The links carry 8 px of padding; pull them back so their text lines up with the label. */
+  margin: 0 0 0 calc(-1 * var(--space-2));
+  padding: 0;
+  list-style: none;
+}
+
+.site-footer .footer-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 44px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-1);
+  color: var(--accent-text);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.site-footer .footer-link:hover {
+  color: var(--accent-text);
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+
+.site-footer .footer-link[aria-current='page'] {
+  color: var(--text);
+}
+
+@media (max-width: 760px) {
+  .site-footer {
+    padding: var(--space-4) 0;
+  }
+
+  .site-footer .footer-row .footer-link {
+    margin-left: calc(-1 * var(--space-2));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .site-header .nav a,
+  .site-header .menu-link,
+  .round-btn {
+    transition: none;
+  }
+}
