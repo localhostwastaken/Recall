@@ -49,11 +49,17 @@ async function beeView(uploadUrl: string, f: typeof fetch): Promise<BeeView | nu
       credentials: 'omit' as const,
       cache: 'no-store' as const,
     };
-    const [b, c] = await Promise.all([f(`${base}/batches`, opts), f(`${base}/chainstate`, opts)]);
-    if (!b.ok || !c.ok) return null;
-    const list = ((await b.json()) as { batches?: { batchID?: unknown; start?: unknown }[] })
-      .batches;
+    // /chainstate first: public gateways answer it 404, and their /batches is a ~2 MB list of
+    // every batch on the network, which is then not worth downloading on every poll.
+    const c = await f(`${base}/chainstate`, opts);
+    if (!c.ok) return null;
     const { block } = (await c.json()) as { block?: unknown };
+    const b = await f(`${base}/batches`, opts);
+    if (!b.ok) return null;
+    const body = (await b.json()) as unknown;
+    const list = (Array.isArray(body) ? body : (body as { batches?: unknown } | null)?.batches) as
+      | { batchID?: unknown; start?: unknown }[]
+      | undefined;
     if (!Array.isArray(list) || typeof block !== 'number') return null;
     const starts = new Map<string, number>();
     for (const x of list) {

@@ -531,7 +531,9 @@ describe('pending records', () => {
     const cid = newCaptureId();
     await savePending(rec(cid, Date.now()), area);
     for (const wrong of [cid.toUpperCase(), cid.slice(1), `${cid}0`, newCaptureId(), 7, null]) {
-      expect(await discardPending(wrong, area)).toEqual({ error: 'no pending capture with this id' });
+      expect(await discardPending(wrong, area)).toEqual({
+        error: 'no pending capture with this id',
+      });
     }
     expect(await readPending(cid, area)).not.toBeNull();
     expect(await discardPending(cid, area)).toEqual({ ok: true });
@@ -719,6 +721,37 @@ describe('offscreen upload', () => {
       });
     expect((await at(105n)).pick).toEqual(candidates[1]);
     expect((await at(101n)).pick).toBeNull();
+  });
+
+  it('a gateway without /chainstate: the chain decides and /batches is never downloaded', async () => {
+    // The public gateway: /chainstate 404, /batches a bare ~2 MB list of every batch.
+    const gw = vi.fn(async (u: string) =>
+      u.endsWith('/chainstate') ? json('Not Found', false) : json([]),
+    );
+    const r = await pickUsable(candidates, 'https://gw', {
+      fetch: gw,
+      blockNumber: async () => 105n,
+      batchTtl: longTtl,
+    });
+    expect(r.pick).toEqual(candidates[1]);
+    expect(gw.mock.calls.map(([u]) => u)).toEqual(['https://gw/chainstate']);
+    // A node that shares /chainstate may still list batches as a bare array.
+    const bare = vi.fn(async (u: string) =>
+      u.endsWith('/batches')
+        ? json([{ batchID: id(2).slice(2), start: 95 }])
+        : json({ block: 107 }),
+    );
+    const chain = vi.fn(async () => 0n);
+    expect(
+      (
+        await pickUsable(candidates, 'http://bee', {
+          fetch: bare,
+          blockNumber: chain,
+          batchTtl: longTtl,
+        })
+      ).pick,
+    ).toEqual(candidates[1]);
+    expect(chain).not.toHaveBeenCalled();
   });
 
   it('re-checks each lifetime on chain and reports expired or short batches dead', async () => {
