@@ -57,7 +57,7 @@ const capturePage = (key: Hex) => `${APP}/#/c/${key}`;
 async function openHomeTools(page: Page): Promise<void> {
   await page.goto(`${APP}/#/`);
   const more = page.locator('details', { has: page.locator('summary', { hasText: 'More ways to check' }) });
-  if (!(await more.evaluate((d) => (d as HTMLDetailsElement).open))) await more.locator('summary').click();
+  if (!(await more.evaluate((d) => (d as HTMLDetailsElement).open))) await more.locator(':scope > summary').click(); // its own summary, not the nested "Compare a file" one
 }
 const file = (name: string, bytes: Uint8Array, mimeType = 'application/octet-stream') => ({
   name,
