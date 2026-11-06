@@ -26,6 +26,8 @@ pub const SERVER_NAME_CASE: &str = "recall: server name must be lowercase";
 pub const REVEAL_TOO_LARGE: &str = "recall: reveal config too large";
 pub const BUSY: &str = "recall: witness busy, try again shortly";
 pub const REGISTER_TIMEOUT: &str = "recall: register timed out";
+pub const TOO_MANY_FROM_CLIENT: &str = "recall: too many sessions from this client";
+pub const PROVER_TIMEOUT: &str = "recall: prover did not connect in time";
 
 /// Most reveal ranges a client may send per direction (a Recall capture
 /// reveals everything, normally as one range).

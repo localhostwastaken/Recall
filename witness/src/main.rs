@@ -6,8 +6,8 @@ mod tests;
 
 use async_tungstenite::tungstenite::Message;
 use axum::{
-    extract::{Query, State},
-    http::StatusCode,
+    extract::{ConnectInfo, Query, State},
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::get,
     serve::ListenerExt,
@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use alloy_signer_local::PrivateKeySigner;
 use recall_witness::{attest, gates};
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tlsn::transcript::PartialTranscript;
@@ -37,8 +37,13 @@ use ws::{TungsteniteStream, WsUpgrade};
 use ws_stream_tungstenite::WsStream;
 
 /// Recall: how long a registered session (and its single /proxy relay) may
-/// live: 30 s to connect the prover + 120 s verification + 30 s reveal config.
+/// live: 10 s to connect the prover + 120 s verification + 30 s reveal config
+/// (with margin).
 const SESSION_TTL: Duration = Duration::from_secs(180);
+
+/// Recall: after `session_registered`, the prover must open /verifier within
+/// this time, or the session ends and frees its slot (ruling R24).
+const PROVER_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Recall: how long a new /session socket may take to send `register`.
 const REGISTER_TIMEOUT: Duration = Duration::from_secs(10);
@@ -126,13 +131,22 @@ async fn main() {
         max_recv: env_usize("MAX_RECV_DATA", 65536),
     };
     let max_sessions = env_usize("MAX_SESSIONS", 3);
-    if max_sessions == 0 {
-        error!("MAX_SESSIONS must be at least 1");
+    let max_sessions_per_ip = env_usize("MAX_SESSIONS_PER_IP", 2);
+    if max_sessions == 0 || max_sessions_per_ip == 0 {
+        error!("MAX_SESSIONS and MAX_SESSIONS_PER_IP must be at least 1");
         std::process::exit(1);
     }
+    // Only behind the Cloudflare tunnel, where every request carries the
+    // header and nothing else can reach the witness, is CF-Connecting-IP the
+    // client address. Otherwise the header is attacker-controlled.
+    let trust_cf_header = env_var("TRUST_CF_HEADER").as_deref() == Some("1");
     info!(
-        "Limits: maxSentData <= {}, maxRecvData <= {}, concurrent sessions <= {}",
-        limits.max_sent, limits.max_recv, max_sessions
+        "Limits: maxSentData <= {}, maxRecvData <= {}, concurrent sessions <= {} ({} per client), client IP from {}",
+        limits.max_sent,
+        limits.max_recv,
+        max_sessions,
+        max_sessions_per_ip,
+        if trust_cf_header { "CF-Connecting-IP" } else { "the socket peer" }
     );
 
     // Create application state with session storage and the witness config
@@ -143,6 +157,9 @@ async fn main() {
         dev_allow_hosts: Arc::new(dev_allow_hosts),
         limits,
         session_slots: Arc::new(Semaphore::new(max_sessions)),
+        per_ip: Arc::new(PerIpLimiter::new(max_sessions_per_ip)),
+        trust_cf_header,
+        prover_connect_timeout: PROVER_CONNECT_TIMEOUT,
     });
 
     // Build router with routes
@@ -178,7 +195,7 @@ async fn main() {
         addr
     );
 
-    axum::serve(listener, app)
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .await
         .expect("Server error");
 }
@@ -330,6 +347,118 @@ pub(crate) struct AppState {
     pub(crate) limits: gates::Limits,
     /// Recall: admission control, one permit per live session (MAX_SESSIONS).
     pub(crate) session_slots: Arc<Semaphore>,
+    /// Recall: live sessions per client (MAX_SESSIONS_PER_IP).
+    pub(crate) per_ip: Arc<PerIpLimiter>,
+    /// Recall: take the client IP from CF-Connecting-IP (TRUST_CF_HEADER=1).
+    pub(crate) trust_cf_header: bool,
+    /// Recall: how long the prover may take to open /verifier.
+    pub(crate) prover_connect_timeout: Duration,
+}
+
+/// Recall: counts live sessions per client key. A slot is held through an
+/// [`IpSlot`] guard, which always gives it back on drop.
+pub(crate) struct PerIpLimiter {
+    max: usize,
+    counts: std::sync::Mutex<HashMap<IpAddr, usize>>,
+}
+
+impl PerIpLimiter {
+    pub(crate) fn new(max: usize) -> Self {
+        Self {
+            max,
+            counts: std::sync::Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Takes a slot for `key`, or `None` if it already has `max` sessions.
+    fn try_acquire(self: &Arc<Self>, key: IpAddr) -> Option<IpSlot> {
+        let mut counts = self.counts.lock().unwrap_or_else(|e| e.into_inner());
+        let count = counts.entry(key).or_insert(0);
+        if *count >= self.max {
+            return None;
+        }
+        *count += 1;
+        Some(IpSlot {
+            limiter: self.clone(),
+            key,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn live(&self) -> usize {
+        self.counts
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .sum()
+    }
+}
+
+pub(crate) struct IpSlot {
+    limiter: Arc<PerIpLimiter>,
+    key: IpAddr,
+}
+
+impl Drop for IpSlot {
+    fn drop(&mut self) {
+        let mut counts = self.limiter.counts.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = counts.get_mut(&self.key) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                counts.remove(&self.key);
+            }
+        }
+    }
+}
+
+/// Recall: everything a live session holds against the admission limits.
+/// Dropping it frees the global permit and the per-client slot.
+struct SessionSlot {
+    _global: OwnedSemaphorePermit,
+    _client: IpSlot,
+}
+
+/// Recall: the key a client is counted under. `CF-Connecting-IP` only when
+/// trusted (else the socket peer). IPv4-mapped IPv6 counts as its IPv4
+/// address, and IPv6 as its /64 (one subscriber usually owns a whole /64).
+fn client_key(peer: SocketAddr, headers: &HeaderMap, trust_cf_header: bool) -> IpAddr {
+    let ip = trust_cf_header
+        .then(|| headers.get("cf-connecting-ip"))
+        .flatten()
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<IpAddr>().ok())
+        .unwrap_or(peer.ip());
+    match ip {
+        IpAddr::V4(_) => ip,
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => {
+                let s = v6.segments();
+                IpAddr::V6(std::net::Ipv6Addr::new(s[0], s[1], s[2], s[3], 0, 0, 0, 0))
+            }
+        },
+    }
+}
+
+/// Recall: aborts the verifier task (and cleans its session up) when the
+/// /session handler ends for any reason, e.g. the client hung up before the
+/// prover connected. On a normal finish the task is already done.
+struct VerifierTaskGuard {
+    task: tokio::task::AbortHandle,
+    state: Arc<AppState>,
+    session_id: String,
+}
+
+impl Drop for VerifierTaskGuard {
+    fn drop(&mut self) {
+        if !self.task.is_finished() {
+            info!("[{}] Session socket ended first, cancelling verifier task", self.session_id);
+            self.task.abort();
+        }
+        let state = self.state.clone();
+        let session_id = std::mem::take(&mut self.session_id);
+        tokio::spawn(async move { cleanup_session(&state, &session_id).await });
+    }
 }
 
 // Query parameters for verifier WebSocket connection
@@ -429,10 +558,13 @@ pub(crate) async fn info_handler(State(state): State<Arc<AppState>>) -> impl Int
 // WebSocket session handler for extension
 pub(crate) async fn session_ws_handler(
     ws: WsUpgrade,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
+    let client = client_key(peer, &headers, state.trust_cf_header);
     ws.max_incoming(SESSION_MAX_MESSAGE)
-        .on_upgrade(move |socket| handle_session_websocket(socket, state))
+        .on_upgrade(move |socket| handle_session_websocket(socket, state, client))
 }
 
 /// Helper to send typed server messages
@@ -458,7 +590,11 @@ async fn send_error(socket: &mut TungsteniteStream, message: &str) {
 }
 
 // Handle the session WebSocket connection with typed message protocol
-async fn handle_session_websocket(mut socket: TungsteniteStream, state: Arc<AppState>) {
+async fn handle_session_websocket(
+    mut socket: TungsteniteStream,
+    state: Arc<AppState>,
+    client: IpAddr,
+) {
     use futures_util::StreamExt;
 
     // Generate session ID upfront (but don't send yet - wait for register)
@@ -545,10 +681,20 @@ async fn handle_session_websocket(mut socket: TungsteniteStream, state: Arc<AppS
         }
     };
 
-    // Recall: admission control. The permit lives as long as the verifier
-    // task, so at most MAX_SESSIONS MPC sessions run at once.
-    let permit = match state.session_slots.clone().try_acquire_owned() {
-        Ok(permit) => permit,
+    // Recall: admission control. A per-client slot first (so one client
+    // cannot take every global slot), then a global permit. Both live in the
+    // verifier task and are freed when it ends or is cancelled.
+    let Some(client_slot) = state.per_ip.try_acquire(client) else {
+        warn!("[{}] Registration rejected: too many sessions from {}", session_id, client);
+        send_error(&mut socket, gates::TOO_MANY_FROM_CLIENT).await;
+        let _ = socket.close(None).await;
+        return;
+    };
+    let slot = match state.session_slots.clone().try_acquire_owned() {
+        Ok(permit) => SessionSlot {
+            _global: permit,
+            _client: client_slot,
+        },
         Err(_) => {
             warn!("[{}] Registration rejected: witness busy", session_id);
             send_error(&mut socket, gates::BUSY).await;
@@ -606,7 +752,7 @@ async fn handle_session_websocket(mut socket: TungsteniteStream, state: Arc<AppS
     // Spawn the verifier task with the result sender
     let session_id_clone = session_id.clone();
     let state_clone = state.clone();
-    tokio::spawn(async move {
+    let task = tokio::spawn(async move {
         run_verifier_task(
             session_id_clone,
             session_config,
@@ -615,10 +761,16 @@ async fn handle_session_websocket(mut socket: TungsteniteStream, state: Arc<AppS
             prover_socket_rx,
             result_tx,
             state_clone,
-            permit,
+            slot,
         )
         .await;
     });
+    // Recall: from here on, any return from this handler cancels the task.
+    let _task_guard = VerifierTaskGuard {
+        task: task.abort_handle(),
+        state: state.clone(),
+        session_id: session_id.clone(),
+    };
 
     info!(
         "[{}] Verifier task spawned, waiting for prover connection and reveal config",
@@ -707,8 +859,21 @@ async fn handle_session_websocket(mut socket: TungsteniteStream, state: Arc<AppS
         );
     }
 
-    // Wait for verification result
-    match result_rx.await {
+    // Wait for verification result. Recall: keep reading the socket so a
+    // client that hangs up cancels the session (via the task guard).
+    let outcome = loop {
+        tokio::select! {
+            result = &mut result_rx => break result,
+            msg = socket.next() => match msg {
+                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => {
+                    warn!("[{}] Session socket closed before the result", session_id);
+                    return;
+                }
+                Some(Ok(_)) => continue,
+            },
+        }
+    };
+    match outcome {
         Ok(result) if result.error.is_some() => {
             let err_msg = result.error.as_deref().unwrap_or("Unknown error");
             error!("[{}] ❌ {}", session_id, err_msg);
@@ -1059,8 +1224,9 @@ async fn run_verifier_task(
     socket_rx: oneshot::Receiver<TungsteniteStream>,
     result_tx: oneshot::Sender<VerificationResult>,
     state: Arc<AppState>,
-    // Recall: held until this task ends (admission control).
-    _permit: OwnedSemaphorePermit,
+    // Recall: admission slot, released before the result is sent so a
+    // client's next session never sees its own finished one as live.
+    slot: SessionSlot,
 ) {
     info!(
         "[{}] Verifier task started, waiting for WebSocket connection...",
@@ -1072,7 +1238,7 @@ async fn run_verifier_task(
     );
 
     // Wait for WebSocket connection with timeout
-    let connection_timeout = Duration::from_secs(30);
+    let connection_timeout = state.prover_connect_timeout;
     let socket_result = timeout(connection_timeout, socket_rx).await;
 
     let socket = match socket_result {
@@ -1096,10 +1262,9 @@ async fn run_verifier_task(
                 "[{}] ⏱️  Timed out waiting for WebSocket connection after {:?}",
                 session_id, connection_timeout
             );
-            let _ = result_tx.send(VerificationResult::error(
-                "Timed out waiting for the prover to connect",
-            ));
             cleanup_session(&state, &session_id).await;
+            drop(slot);
+            let _ = result_tx.send(VerificationResult::error(gates::PROVER_TIMEOUT));
             return;
         }
     };
@@ -1152,6 +1317,9 @@ async fn run_verifier_task(
     if let Some(msg) = &result.error {
         error!("[{}] ❌ {}", session_id, msg);
     }
+    // Recall: clean up and free the slot first, then deliver the result.
+    cleanup_session(&state, &session_id).await;
+    drop(slot);
     if result_tx.send(result).is_err() {
         error!(
             "[{}] ❌ Failed to send result to extension - channel closed",
@@ -1160,9 +1328,6 @@ async fn run_verifier_task(
     } else {
         info!("[{}] ✅ Result sent to extension", session_id);
     }
-
-    // Clean up session (if it still exists in the map)
-    cleanup_session(&state, &session_id).await;
 
     info!("[{}] Verifier task completed and cleaned up", session_id);
 }
