@@ -118,8 +118,75 @@ describe('previewDocument', () => {
     const out = previewDocument('text', 'Line one\n<script>alert(1)</script> <a href="http://x.test">not a link</a> & more');
     expectLockedDown(out);
     const doc = parse(out);
-    expect(doc.querySelector('pre')?.textContent).toBe('Line one\n<script>alert(1)</script> <a href="http://x.test">not a link</a> & more');
-    expect(doc.querySelector('a')).toBeNull();
+    const box = doc.querySelector('body > div');
+    expect(box?.textContent).toBe('Line one\n<script>alert(1)</script> <a href="http://x.test">not a link</a> & more');
+    expect(doc.querySelector('style')?.textContent).toContain('white-space:pre-wrap');
+    expect(doc.querySelector('pre, a, script')).toBeNull();
+  });
+
+  it('shows a plain-text capture that starts with, or is only, newlines', () => {
+    for (const text of ['\n\n\n', '\nfirst line is empty\nsecond', '']) {
+      const out = previewDocument('text', text);
+      expect(out, JSON.stringify(text)).not.toContain(UNAVAILABLE);
+      expectLockedDown(out);
+      expect(parse(out).querySelector('body > div')?.textContent).toBe(text);
+      expect(safe(out)).toBe(true);
+    }
+  });
+});
+
+describe('previewDocument: layout attributes and quirks pages', () => {
+  it('keeps table layout attributes, which are not URLs', () => {
+    const out = previewDocument(
+      'html',
+      '<!doctype html><body><table width="600" border="1" cellpadding="4" cellspacing="0" bgcolor="#eee" align="center">' +
+        '<tr><td colspan="2" rowspan="3" align="right" valign="top" width="50%" nowrap>a</td><th scope="col" abbr="b" headers="h1">b</th></tr></table>' +
+        '<font color="red" size="3" face="serif">f</font><ol start="3" type="a"><li>x</li></ol></body>',
+    );
+    expect(out).not.toContain(UNAVAILABLE);
+    expectLockedDown(out);
+    const doc = parse(out);
+    const td = doc.querySelector('td');
+    expect(td?.getAttribute('colspan')).toBe('2');
+    expect(td?.getAttribute('rowspan')).toBe('3');
+    expect(td?.getAttribute('align')).toBe('right');
+    expect(td?.getAttribute('valign')).toBe('top');
+    expect(td?.getAttribute('width')).toBe('50%');
+    expect(td?.hasAttribute('nowrap')).toBe(true);
+    const table = doc.querySelector('table');
+    expect(table?.getAttribute('width')).toBe('600');
+    expect(table?.getAttribute('border')).toBe('1');
+    expect(table?.getAttribute('cellpadding')).toBe('4');
+    expect(table?.getAttribute('bgcolor')).toBe('#eee');
+    expect(doc.querySelector('th')?.getAttribute('scope')).toBe('col');
+    expect(doc.querySelector('font')?.getAttribute('face')).toBe('serif');
+    expect(doc.querySelector('ol')?.getAttribute('start')).toBe('3');
+  });
+
+  it('still strips src, background, poster and cite when they point outside', () => {
+    const out = previewDocument(
+      'html',
+      '<!doctype html><body><img src="http://x.test/a.png" width="10" alt="outside">' +
+        '<table background="http://x.test/bg.png" width="5"><tr><td background="http://x.test/bg2.png" colspan="2">c</td></tr></table>' +
+        '<video poster="http://x.test/p.png" src="http://x.test/v.mp4" width="20"></video>' +
+        '<blockquote cite="http://x.test/q">q</blockquote><q cite="http://x.test/q2">q2</q></body>',
+    );
+    expect(out).not.toContain(UNAVAILABLE);
+    expectLockedDown(out);
+    expect(out).not.toContain('x.test');
+    const doc = parse(out);
+    expect(doc.querySelector('img')?.hasAttribute('src')).toBe(false);
+    expect(doc.querySelector('img')?.getAttribute('width')).toBe('10');
+    expect(doc.querySelector('[background], [poster], [cite]')).toBeNull();
+    expect(doc.querySelector('td')?.getAttribute('colspan')).toBe('2');
+  });
+
+  it('renders a quirks-mode page whose structure changes once a doctype is added', () => {
+    const out = previewDocument('html', '<p><table><tr><td>x</td></tr></table>');
+    expect(out).not.toContain(UNAVAILABLE);
+    expectLockedDown(out);
+    expect(safe(out)).toBe(true);
+    expect(parse(out).querySelector('td')?.textContent).toBe('x');
   });
 });
 

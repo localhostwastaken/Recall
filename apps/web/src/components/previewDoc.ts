@@ -44,6 +44,14 @@ const SANITIZE = {
   ALLOW_DATA_ATTR: false,
   // Any URL that is left (an image source, a background) must be a data: image.
   ALLOWED_URI_REGEXP: /^data:image\/(?:png|gif|jpe?g|webp|bmp|avif|x-icon)[;,]/i,
+  // Layout attributes hold numbers, colours and keywords, never a URL, so they skip the URI check
+  // above (which would drop `colspan="2"`). `src`, `background`, `poster` and `cite` are NOT here:
+  // they keep going through the data: image check.
+  ADD_URI_SAFE_ATTR: [
+    'colspan', 'rowspan', 'width', 'height', 'align', 'valign', 'border', 'cellpadding', 'cellspacing', 'bgcolor', 'color',
+    'size', 'face', 'lang', 'dir', 'scope', 'start', 'type', 'min', 'max', 'span', 'abbr', 'headers', 'nowrap', 'hspace',
+    'vspace', 'frame', 'rules', 'summary', 'char', 'charoff',
+  ],
 };
 
 /** What the preview shows when a page cannot be shown safely. */
@@ -55,7 +63,9 @@ const UNAVAILABLE =
 const FORBIDDEN =
   'template, svg, math, script, noscript, form, link, iframe, frame, frameset, object, embed, portal, fencedframe, [href], [*|href]';
 
-const PLAIN_TEXT_STYLE = 'pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:14px/1.45 ui-monospace,Menlo,Consolas,monospace}';
+// A div, not a pre: the parser drops a newline at the start of a pre, so text of only newlines
+// would not survive the fixed-point check. `pre-wrap` keeps every line break and space.
+const PLAIN_TEXT_STYLE = 'div{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:14px/1.45 ui-monospace,Menlo,Consolas,monospace}';
 
 const escapeText = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
@@ -74,11 +84,27 @@ export function safe(out: string): boolean {
   return bases.length === 1 && bases[0].getAttribute('target') === '_blank' && !bases[0].hasAttribute('href');
 }
 
+/**
+ * A page parsed without a doctype is in quirks mode, and the same markup parsed WITH ours is not
+ * (`<p><table>` nests in one and not in the other). So serialise, add the doctype, parse and
+ * serialise again until the string stops changing (at most 3 rounds). `safe` then checks the
+ * result; a string that still moves after 3 rounds fails it and is not shown.
+ */
+function settle(html: string): string {
+  let out = html;
+  for (let i = 0; i < 3; i++) {
+    const next = `<!doctype html>${new DOMParser().parseFromString(out, 'text/html').documentElement.outerHTML}`;
+    if (next === out) break;
+    out = next;
+  }
+  return out;
+}
+
 export function previewDocument(kind: 'html' | 'text', text: string): string {
   const source =
     kind === 'html'
       ? text
-      : `<!doctype html><html><head><style>${PLAIN_TEXT_STYLE}</style></head><body><pre>${escapeText(text)}</pre></body></html>`;
+      : `<!doctype html><html><head><style>${PLAIN_TEXT_STYLE}</style></head><body><div>${escapeText(text)}</div></body></html>`;
   const clean = DOMPurify.sanitize(source, SANITIZE);
   const doc = new DOMParser().parseFromString(clean, 'text/html');
   const base = doc.createElement('base');
@@ -88,6 +114,6 @@ export function previewDocument(kind: 'html' | 'text', text: string): string {
   csp.setAttribute('content', CSP);
   doc.head.prepend(base);
   doc.head.prepend(csp); // first, so it covers everything after it
-  const out = `<!doctype html>${doc.documentElement.outerHTML}`;
+  const out = settle(`<!doctype html>${doc.documentElement.outerHTML}`);
   return safe(out) ? out : UNAVAILABLE;
 }
