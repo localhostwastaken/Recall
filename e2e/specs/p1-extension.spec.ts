@@ -34,6 +34,10 @@ test('@p1 extension loads and popup shows active tab URL', async () => {
       witnessUrl: 'http://localhost:7047',
       pinnedWitnesses: [],
       appUrl: 'http://localhost:5173',
+      arkivRpcUrl: 'http://localhost:8545',
+      arkivAccessKey: '',
+      uploadUrl: 'http://localhost:1633',
+      uploadMode: 'stamped',
     });
   } finally {
     await context.close();
