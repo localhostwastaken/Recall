@@ -22,6 +22,7 @@ import {
   recallSent as recallSentKey,
   settlePurchase,
 } from '../storage/buy';
+import './storage.css';
 
 const MAX_BATCHES = 20;
 const DEFAULT_BATCHES = 4;
@@ -467,216 +468,226 @@ export function Storage() {
       ) : null}
 
       <form
-        className="stack"
+        className="stack storage-form"
         onSubmit={(e) => {
           e.preventDefault();
           if (!running && !blocker) void run(false);
         }}
       >
-        <section className="stack" aria-label="Owner">
-          {extChoice.kind === 'ask' ? (
-            <div className="ext-choice">
-              <Notice
-                kind="warn"
-                title="Which extension should own this storage?"
-                actions={
-                  <>
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      disabled={linkOwner.kind !== 'ok'}
-                      onClick={() => linkOwner.kind === 'ok' && adoptLinkExtension(extChoice.linkId, linkOwner.address)}
-                    >
-                      Use this extension
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-secondary"
-                      onClick={() => setExtChoice({ kind: 'settled', extensionId: extChoice.settingsId })}
-                    >
-                      Keep my Settings
-                    </button>
-                  </>
-                }
-              >
-                <p>
-                  {extChoice.settingsId
-                    ? `This link uses extension ${extChoice.linkId}, which isn't the one in your Settings.`
-                    : `This link uses extension ${extChoice.linkId}, and your Settings name no extension yet.`}
-                </p>
-                <p>
-                  {linkOwner.kind === 'ok' ? (
+        <div className="storage-main">
+          <section className="stack" aria-label="Owner">
+            {extChoice.kind === 'ask' ? (
+              <div className="ext-choice">
+                <Notice
+                  kind="warn"
+                  title="Which extension should own this storage?"
+                  actions={
                     <>
-                      It reports the stamp address <MonoValue value={linkOwner.address} />. The batches you buy belong to that
-                      address, so use it only if it is your Recall extension.
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        disabled={linkOwner.kind !== 'ok'}
+                        onClick={() => linkOwner.kind === 'ok' && adoptLinkExtension(extChoice.linkId, linkOwner.address)}
+                      >
+                        Use this extension
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={() => setExtChoice({ kind: 'settled', extensionId: extChoice.settingsId })}
+                      >
+                        Keep my Settings
+                      </button>
                     </>
-                  ) : linkOwner.kind === 'checking' ? (
-                    'Asking it for its stamp address…'
-                  ) : (
-                    'It did not answer, so it cannot be used.'
-                  )}
-                </p>
-              </Notice>
-            </div>
-          ) : extLink.kind === 'connected' ? (
-            <p className="owner-row">
-              Owner (extension): <MonoValue value={extLink.address} />
-            </p>
-          ) : extLink.kind === 'checking' ? (
-            <p className="owner-row muted">Looking for the Recall extension…</p>
-          ) : (
-            <>
+                  }
+                >
+                  <p>
+                    {extChoice.settingsId
+                      ? `This link uses extension ${extChoice.linkId}, which isn't the one in your Settings.`
+                      : `This link uses extension ${extChoice.linkId}, and your Settings name no extension yet.`}
+                  </p>
+                  <p>
+                    {linkOwner.kind === 'ok' ? (
+                      <>
+                        It reports the stamp address <MonoValue value={linkOwner.address} />. The batches you buy belong to that
+                        address, so use it only if it is your Recall extension.
+                      </>
+                    ) : linkOwner.kind === 'checking' ? (
+                      'Asking it for its stamp address…'
+                    ) : (
+                      'It did not answer, so it cannot be used.'
+                    )}
+                  </p>
+                </Notice>
+              </div>
+            ) : extLink.kind === 'connected' ? (
               <p className="owner-row">
-                Recall extension not found. Install it, or set its ID in <a href="#/settings">Settings</a>.
+                Owner (extension): <MonoValue value={extLink.address} />
               </p>
+            ) : extLink.kind === 'checking' ? (
+              <p className="owner-row muted">Looking for the Recall extension…</p>
+            ) : (
+              <>
+                <p className="owner-row">
+                  Recall extension not found. Install it, or set its ID in <a href="#/settings">Settings</a>.
+                </p>
+                <Field
+                  label="Owner address"
+                  value={ownerText}
+                  onChange={(e) => setOwnerText(e.target.value)}
+                  onBlur={() => setOwnerTouched(true)}
+                  error={ownerTouched && !typedOwner ? 'Enter a 0x address (42 characters).' : undefined}
+                  helper="The stamp address shown in the extension. Only this key can use the storage you buy."
+                  placeholder="0x…"
+                  spellCheck={false}
+                  autoComplete="off"
+                  disabled={locked}
+                />
+              </>
+            )}
+          </section>
+
+          <div className="stack-tight">
+            <Segmented
+              legend="Storage for"
+              className="segmented-stack"
+              value={size}
+              options={SIZE_OPTIONS}
+              onChange={setSize}
+              disabled={locked}
+            />
+            <p className="field-helper">
+              Each batch holds one capture. Buy a few now, and every capture after that needs just one MetaMask confirmation.
+            </p>
+          </div>
+          <div className="storage-row">
+            <div className="storage-count">
               <Field
-                label="Owner address"
-                value={ownerText}
-                onChange={(e) => setOwnerText(e.target.value)}
-                onBlur={() => setOwnerTouched(true)}
-                error={ownerTouched && !typedOwner ? 'Enter a 0x address (42 characters).' : undefined}
-                helper="The stamp address shown in the extension. Only this key can use the storage you buy."
-                placeholder="0x…"
-                spellCheck={false}
-                autoComplete="off"
+                label="Number of batches"
+                type="number"
+                inputMode="numeric"
+                min={1}
+                max={MAX_BATCHES}
+                step={1}
+                value={countText}
+                onChange={(e) => setCountText(e.target.value)}
+                onBlur={() => setCountTouched(true)}
+                error={countTouched && !countValid ? `Enter a whole number from 1 to ${MAX_BATCHES}.` : undefined}
+                helper="One batch = one capture."
                 disabled={locked}
               />
-            </>
-          )}
-        </section>
-
-        <div className="stack-tight">
-          <Segmented
-            legend="Storage for"
-            className="segmented-stack"
-            value={size}
-            options={SIZE_OPTIONS}
-            onChange={setSize}
-            disabled={locked}
-          />
-          <p className="field-helper">
-            Each batch holds one capture. Buy a few now, and every capture after that needs just one MetaMask confirmation.
-          </p>
+            </div>
+            <Segmented
+              legend="Storage lasts"
+              value={days}
+              options={[
+                { value: 7, label: '7 days' },
+                { value: 30, label: '30 days' },
+              ]}
+              onChange={setDays}
+              disabled={locked}
+            />
+          </div>
         </div>
-        <Field
-          label="Number of batches"
-          type="number"
-          inputMode="numeric"
-          min={1}
-          max={MAX_BATCHES}
-          step={1}
-          value={countText}
-          onChange={(e) => setCountText(e.target.value)}
-          onBlur={() => setCountTouched(true)}
-          error={countTouched && !countValid ? `Enter a whole number from 1 to ${MAX_BATCHES}.` : undefined}
-          helper="One batch = one capture."
-          disabled={locked}
-        />
-        <Segmented
-          legend="Storage lasts"
-          value={days}
-          options={[
-            { value: 7, label: '7 days' },
-            { value: 30, label: '30 days' },
-          ]}
-          onChange={setDays}
-          disabled={locked}
-        />
 
-        <p className="price" aria-live="polite">
-          {price.kind === 'loading' ? (
-            <span className="muted">Reading the storage price…</span>
-          ) : price.kind === 'error' ? (
-            <>
-              Couldn&apos;t read the storage price from Gnosis.{' '}
-              <button type="button" className="link-btn" onClick={() => setPriceTry((n) => n + 1)}>
-                Try again
+        <div className="storage-side">
+          <div className="storage-summary">
+            <p className="price" aria-live="polite">
+              {price.kind === 'loading' ? (
+                <span className="muted">Reading the storage price…</span>
+              ) : price.kind === 'error' ? (
+                <>
+                  Couldn&apos;t read the storage price from Gnosis.{' '}
+                  <button type="button" className="link-btn" onClick={() => setPriceTry((n) => n + 1)}>
+                    Try again
+                  </button>
+                </>
+              ) : countValid ? (
+                // Round the unit up once and multiply it, so "n × a = b" is exact and never below the real cost.
+                <span className="tabular">{priceLine(count, price.perBatch, price.gasPrice)}</span>
+              ) : (
+                <span className="muted">Choose 1 to {MAX_BATCHES} batches to see the cost.</span>
+              )}
+            </p>
+
+            <div className="actions">
+              <button
+                type="submit"
+                className="btn btn-primary btn-wide"
+                disabled={running || blocker !== null}
+                aria-busy={running || undefined}
+              >
+                {label}
               </button>
-            </>
-          ) : countValid ? (
-            // Round the unit up once and multiply it, so "n × a = b" is exact and never below the real cost.
-            <span className="tabular">{priceLine(count, price.perBatch, price.gasPrice)}</span>
-          ) : (
-            <span className="muted">Choose 1 to {MAX_BATCHES} batches to see the cost.</span>
-          )}
-        </p>
+              <p className="field-helper">
+                {blocker ??
+                  `Storage is paid in xBZZ and network fees in xDAI, both on Gnosis. MetaMask asks for two confirmations per batch${
+                    extLink.kind === 'connected' ? ', then to switch to Arkiv for your captures' : ''
+                  }.`}
+              </p>
+            </div>
+          </div>
 
-        <div className="actions">
-          <button
-            type="submit"
-            className="btn btn-primary btn-wide"
-            disabled={running || blocker !== null}
-            aria-busy={running || undefined}
-          >
-            {label}
-          </button>
-          <p className="field-helper">
-            {blocker ??
-              `Storage is paid in xBZZ and network fees in xDAI, both on Gnosis. MetaMask asks for two confirmations per batch${
-                extLink.kind === 'connected' ? ', then to switch to Arkiv for your captures' : ''
-              }.`}
-          </p>
+          {running ? (
+            <section className="stack" aria-label="Progress">
+              <progress
+                className="progress"
+                max={phase === 'buying' ? slots.length : undefined}
+                value={phase === 'buying' ? bought : undefined}
+              />
+              <p className="progress-text" role="status">
+                {progressText}
+              </p>
+            </section>
+          ) : null}
+
+          {outcome ? (
+            <section className="stack" aria-label="Result">
+              <OutcomeNotice
+                key={outcome.seq}
+                outcome={outcome}
+                remaining={remaining}
+                busy={running}
+                handoff={extLink.kind !== 'connected' ? 'none' : handedOver ? 'done' : 'failed'}
+                switched={switched}
+                onSwitch={() => void switchToArkiv()}
+                onRetry={() => void run(slots.some((s) => s.batchId || s.txHash))}
+              />
+              {extWarning ? (
+                <Notice
+                  kind="warn"
+                  title="The extension was not updated"
+                  actions={
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={async () => {
+                        const ids = slots.flatMap((s) => (s.batchId && !registered.has(s.batchId) ? [s.batchId] : []));
+                        try {
+                          const added = await addBatches(ids, extOpts);
+                          ids.forEach((id) => registered.add(id));
+                          showPool(Promise.resolve(added));
+                          setExtWarning(null);
+                          setHandedOver(allHandedOver(slots));
+                        } catch (err) {
+                          setExtWarning(reason(err));
+                        }
+                      }}
+                    >
+                      Try again
+                    </button>
+                  }
+                >
+                  The batches are bought, but the extension did not accept them: {extWarning}.
+                </Notice>
+              ) : null}
+            </section>
+          ) : null}
         </div>
       </form>
 
-      {running ? (
-        <section className="stack" aria-label="Progress">
-          <progress
-            className="progress"
-            max={phase === 'buying' ? slots.length : undefined}
-            value={phase === 'buying' ? bought : undefined}
-          />
-          <p className="progress-text" role="status">
-            {progressText}
-          </p>
-        </section>
-      ) : null}
-
-      {outcome ? (
-        <section className="stack" aria-label="Result">
-          <OutcomeNotice
-            key={outcome.seq}
-            outcome={outcome}
-            remaining={remaining}
-            busy={running}
-            handoff={extLink.kind !== 'connected' ? 'none' : handedOver ? 'done' : 'failed'}
-            switched={switched}
-            onSwitch={() => void switchToArkiv()}
-            onRetry={() => void run(slots.some((s) => s.batchId || s.txHash))}
-          />
-          {extWarning ? (
-            <Notice
-              kind="warn"
-              title="The extension was not updated"
-              actions={
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={async () => {
-                    const ids = slots.flatMap((s) => (s.batchId && !registered.has(s.batchId) ? [s.batchId] : []));
-                    try {
-                      const added = await addBatches(ids, extOpts);
-                      ids.forEach((id) => registered.add(id));
-                      showPool(Promise.resolve(added));
-                      setExtWarning(null);
-                      setHandedOver(allHandedOver(slots));
-                    } catch (err) {
-                      setExtWarning(reason(err));
-                    }
-                  }}
-                >
-                  Try again
-                </button>
-              }
-            >
-              The batches are bought, but the extension did not accept them: {extWarning}.
-            </Notice>
-          ) : null}
-        </section>
-      ) : null}
-
       {slots.length > 0 ? (
-        <section aria-labelledby="batches-heading" className="stack">
+        <section aria-labelledby="batches-heading" className="stack storage-batches">
           <h2 id="batches-heading" className="section-title">
             Batches
           </h2>

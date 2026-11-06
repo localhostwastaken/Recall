@@ -321,7 +321,7 @@ export function Settings() {
           <div ref={form} className="stack settings-form">
             <fieldset className="settings-fieldset" disabled={shared}>
             <legend className="visually-hidden">Witnesses, endpoints and extension</legend>
-            <section className="settings-section" aria-labelledby="witnesses-heading">
+            <section className="settings-section settings-witnesses" aria-labelledby="witnesses-heading">
               <h2 id="witnesses-heading" className="section-title">
                 Trusted witnesses
               </h2>
@@ -388,7 +388,7 @@ export function Settings() {
               </div>
             </section>
 
-            <section className="settings-section" aria-labelledby="endpoints-heading">
+            <section className="settings-section settings-endpoints" aria-labelledby="endpoints-heading">
               <h2 id="endpoints-heading" className="section-title">
                 Endpoints
               </h2>
@@ -483,7 +483,7 @@ export function Settings() {
               </div>
             </section>
 
-            <section className="settings-section" aria-labelledby="extension-heading">
+            <section className="settings-section settings-extension" aria-labelledby="extension-heading">
               <h2 id="extension-heading" className="section-title">
                 Extension
               </h2>
