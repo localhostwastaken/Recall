@@ -132,10 +132,10 @@ test.describe('@live p1', () => {
     });
     expect(build).toEqual({ name: 'Recall', hook: 'undefined' });
 
-    // The tunnel serves the live witness, signing with the expected key.
+    // The public witness (the deployed server or a tunnel) signs with the expected key.
     const witnessUrl = process.env.WITNESS_PUBLIC_URL ?? '';
-    expect(witnessUrl, 'WITNESS_PUBLIC_URL (.env.local) must be the tunnel URL: run pnpm tunnel:up').toMatch(
-      /^https:\/\/[a-z0-9-]+\.trycloudflare\.com\/?$/,
+    expect(witnessUrl, 'WITNESS_PUBLIC_URL (.env.local) must be the public https witness URL').toMatch(
+      /^https:\/\/[a-z0-9.-]+\/?$/,
     );
     const info = await fetch(new URL('/info', witnessUrl), { signal: AbortSignal.timeout(15_000) })
       .then((r) => r.json() as Promise<{ signer?: string }>)
