@@ -1,0 +1,281 @@
+/* The one capture card (spec 4.4). 16 px inside, 14 px corners, three rows: title + address,
+   status + facts, time left + one action. In a grid every card is the same height and the
+   bottom row lines up (flex column, footer margin-top: auto). */
+.ccard {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  height: 100%;
+  min-width: 0;
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2, 14px);
+  color: var(--text);
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+
+.ccard:hover,
+.ccard:focus-within {
+  border-color: var(--border-strong);
+}
+
+.ccard-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.ccard-fav {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-1);
+  background: var(--surface-2, var(--surface-sunken));
+  border: 1px solid var(--border);
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.ccard-ttl {
+  flex: 1;
+  min-width: 0;
+}
+
+.ccard-title {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 20px;
+  font-weight: 700;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The title link covers the whole card; only the action slot sits above it. */
+.ccard-link {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: inherit;
+  text-decoration: none;
+}
+
+.ccard-link::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+
+.ccard-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.ccard-link:focus-visible {
+  outline: none;
+}
+
+.ccard-link:focus-visible::after {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.ccard-addr {
+  margin: 2px 0 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ccard-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-muted);
+}
+
+.ccard-facts > li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ccard-facts svg {
+  flex: none;
+}
+
+/* Status pill: icon + word + colour, never colour alone. */
+.ccard-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 24px;
+  padding: 0 var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill, 999px);
+  font-size: 12px;
+  line-height: 1;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.pill-pass {
+  color: var(--pass);
+  background: var(--pass-bg);
+  border-color: color-mix(in srgb, var(--pass) 45%, transparent);
+}
+
+.pill-na {
+  color: var(--text-muted);
+  background: var(--surface-2, var(--surface-sunken));
+  border-color: var(--border);
+}
+
+.pill-warn {
+  color: var(--warn);
+  background: var(--warn-bg);
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+}
+
+.pill-fail {
+  color: var(--fail);
+  background: var(--fail-bg);
+  border-color: color-mix(in srgb, var(--fail) 45%, transparent);
+}
+
+.ccard-rank {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill, 999px);
+  background: var(--life-bg, var(--info-bg));
+  color: var(--life, var(--info));
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 13px;
+}
+
+.ccard-foot {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-4);
+  margin-top: auto;
+}
+
+.ccard-life {
+  flex: 1;
+  min-width: 0;
+}
+
+.ccard-life-label {
+  margin: 0 0 6px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ccard-life-label b {
+  color: var(--life, var(--info));
+  font-weight: 700;
+}
+
+.ccard-bar {
+  display: block;
+  height: 6px;
+  border-radius: 6px;
+  background: var(--surface-2, var(--surface-sunken));
+  overflow: hidden;
+}
+
+.ccard-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 6px;
+  background: var(--life, var(--info));
+  transform-origin: left center;
+}
+
+.ccard-life.is-soon .ccard-life-label b {
+  color: var(--warn);
+}
+
+.ccard-life.is-soon .ccard-bar-fill {
+  background: var(--warn);
+}
+
+.ccard-life.is-unknown .ccard-bar-fill {
+  background: var(--text-muted);
+}
+
+/* The action slot sits above the stretched title link. */
+.ccard-action {
+  position: relative;
+  z-index: 1;
+  flex: none;
+}
+
+/* The card action: an orange-outline pill, 36 px tall with a 44 px hit area. */
+.btn-card {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  height: 36px;
+  min-height: 36px;
+  padding: 0 var(--space-4);
+  border: 1.5px solid var(--accent);
+  border-radius: var(--radius-pill, 999px);
+  background: transparent;
+  color: var(--accent-text, var(--accent));
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.btn-card::before {
+  content: '';
+  position: absolute;
+  inset: -4px;
+}
+
+.btn-card:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
+.btn-card:disabled {
+  border-color: var(--border-strong);
+  color: var(--text-muted);
+  cursor: not-allowed;
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ccard {
+    transition: none;
+  }
+}
