@@ -1,0 +1,95 @@
+/* "Try it in 2 minutes": numbered steps beside a "verify an example" card. Tokens only. */
+.tryit {
+  display: grid;
+  gap: var(--space-5);
+}
+
+.tryit-steps {
+  display: grid;
+  gap: var(--space-4);
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tryit-step {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.tryit-marker {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.tryit-text {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.tryit-name {
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  line-height: var(--lh-lg);
+  font-weight: 600;
+}
+
+.tryit-action {
+  margin-top: var(--space-2);
+}
+
+.tryit-link,
+.tryit-action {
+  gap: var(--space-1);
+}
+
+.tryit-link {
+  display: inline-flex;
+  align-items: center;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.tryit-example {
+  display: grid;
+  align-content: start;
+  justify-items: start;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--citrus-soft);
+  border: 1px solid var(--citrus);
+  border-radius: var(--radius-2);
+}
+
+.tryit-example-title {
+  font-size: var(--text-lg);
+  line-height: var(--lh-lg);
+  font-weight: 600;
+}
+
+@media (min-width: 900px) {
+  .tryit {
+    grid-template-columns: minmax(0, 7fr) minmax(0, 4fr);
+    gap: var(--space-6);
+  }
+}
+
+@media (max-width: 599px) {
+  .tryit-example .btn,
+  .tryit-action {
+    width: 100%;
+  }
+}

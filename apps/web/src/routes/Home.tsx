@@ -2,6 +2,7 @@ import { canonicalPageUrl, decodeEvidence, urlHash } from '@recall/evidence';
 import { arkivPublic, listByUrl } from '@recall/net';
 import { useEffect, useState } from 'react';
 import { sha256 } from 'viem';
+import { TryIt } from '../components/TryIt';
 import { downloadEvidence } from '../download';
 import { errorText } from '../errors';
 import { getNetConfig } from '../net';
@@ -64,7 +65,8 @@ function Search() {
           onChange={(e) => setValue(e.target.value)}
           onBlur={() => value !== '' && check()}
         />
-        <button type="submit" className="btn btn-primary">
+        {/* The page's one primary action is "Get the extension" in the Try it panel. */}
+        <button type="submit" className="btn btn-secondary">
           Show captures
         </button>
       </form>
@@ -246,6 +248,7 @@ export function Home() {
           Prove what a web page said, <mark className="hl">even after it changes.</mark>
         </p>
       </div>
+      <TryIt />
       <div className="home-grid">
         <Search />
         <div className="home-side panel">
