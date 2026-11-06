@@ -785,3 +785,19 @@
     transition: none;
   }
 }
+
+/* Install on tablets: stacked cards keep the screenshot beside the text at a sensible size instead
+   of a full-width image. Phones (below 600 px) keep the stacked image. */
+@media (min-width: 600px) and (max-width: 900px) {
+  .inst-step {
+    display: grid;
+    grid-template-columns: minmax(0, 18rem) minmax(0, 1fr);
+    column-gap: var(--space-5);
+    align-items: start;
+  }
+
+  .inst-step > .inst-shot {
+    grid-row: 1 / span 4;
+    margin-bottom: 0;
+  }
+}
