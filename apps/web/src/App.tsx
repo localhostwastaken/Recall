@@ -59,6 +59,7 @@ function ThemeMenu() {
 
 export function App() {
   const route = useRoute();
+  const isLanding = route.name === 'home';
   const main = useRef<HTMLElement>(null);
   const first = useRef(true);
 
@@ -91,11 +92,13 @@ export function App() {
       >
         Skip to content
       </a>
-      <header className="site-header">
+      <header className={`site-header${isLanding ? ' landing-header' : ''}`}>
         <div className="container header-row">
           <a className="brand" href="#/">
+            {isLanding && <span className="recall-brand-mark" aria-hidden="true">R</span>}
             Recall
           </a>
+          {isLanding ? <nav className="landing-nav" aria-label="Main"><button type="button" onClick={() => { const story = document.getElementById('deadline-story'); story?.scrollIntoView({ behavior: 'auto' }); document.getElementById('story-title')?.focus({ preventScroll: true }); }}>See the example</button><a href="#/reader">Open reader</a></nav> : <>
           <nav aria-label="Main" className="nav">
             {link('#/reader', 'reader', 'Find captures')}
             {link('#/settings', 'settings', 'Settings')}
@@ -104,14 +107,16 @@ export function App() {
             <WalletChip />
             <ThemeMenu />
           </div>
+          </>}
         </div>
       </header>
-      <main id="main" ref={main} tabIndex={-1} className="container page">
+      <main id="main" ref={main} tabIndex={-1} className={`container page${isLanding ? ' landing-page' : ''}`}>
         <Page route={route} />
       </main>
-      <footer className="site-footer">
+      <footer className={isLanding ? 'landing-footer' : 'site-footer'}>
         <div className="container">
-          <p className="muted">Evidence checks run in your browser. Arkiv uses a test network. Source authenticity depends on the witness.</p>
+          <p className={isLanding ? undefined : 'muted'}>Evidence checks run in your browser. Arkiv uses a test network. Source authenticity depends on the witness.</p>
+          {isLanding && <a href="#/reader">Recall / Reader</a>}
         </div>
       </footer>
     </ToastProvider>
