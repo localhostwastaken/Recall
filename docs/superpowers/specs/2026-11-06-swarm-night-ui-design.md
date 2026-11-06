@@ -344,3 +344,28 @@ Folder: `/Users/madkeanuj/Code/Eth-2026/recall/.superpowers/brainstorm/50119-179
 - `mascot-duo-v2.html`: the owl-and-elephant duo with the GSAP story.
 - `logo-final.html`: logo C, refined.
 Open them in a browser directly (they load GSAP and Google Fonts from CDNs; the product must not).
+
+## 12. Decisions settled after the builder check (the designer's calls, flagged for the user)
+1. **Hero card status is earned, not staged.** On load the page starts the real verification of
+   the example capture in the background (the same call section 2 uses; share the result). The
+   hero card's pill reads "Checking…" (grey) until the result arrives, then pops to the real
+   verdict. The story does not wait for data: if the result comes after the story ends, the pill
+   pops when it arrives. Section 2's "Run the checks" still runs visibly (it may reuse the cached
+   result, but reveals rows one by one). If Arkiv or Swarm is unreachable, the pill says "Not
+   checked" (grey) and section 2 shows the honest error.
+2. **Keep alive only on verified cards**, matching `Capture.tsx` today. On a card that is not
+   verified yet, the button is disabled with the label "Keep alive" and a tooltip/aria-description
+   "Available after this capture is checked"; cards in view are verified lazily, so it enables
+   quickly. Unverified (failed) cards are hidden behind "Show unverified (n)" and never offer it.
+3. **Keep alive on a page card extends only the newest verified capture of that page** (its Arkiv
+   record plus its one Swarm batch), which is also the record the ranking uses. No multi-batch flow.
+4. **Card titles:** for page captures, read `<title>` from the verified response body (DOMParser in
+   the browser, text only, trimmed to 120 chars); fall back to host + path. For repo captures, use
+   `owner/repo` from the git attachment. Unverified cards show host + path.
+5. **Popup success illustration** goes on the existing "capture verified, continue in the Recall
+   tab" success notice. No new popup state; the idle-after-publish assertions stay as they are.
+6. **Install section, step 3** keeps three steps but adds one honest line: "Saving a capture uses
+   MetaMask and free test tokens (tGLM from the Arkiv faucet); free storage needs no xBZZ." with a
+   link to the faucet.
+7. The wallet chip stays in the header (an e2e spec clicks "Connect MetaMask" inside `header`).
+   The light-only assertions in `p3-settings.spec.ts` are expected to change with dark mode.
