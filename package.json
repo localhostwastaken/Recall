@@ -11,6 +11,8 @@
     "test:e2e": "playwright test -c e2e --project=local",
     "test:live": "playwright test -c e2e --project=live",
     "extension:release": "bash scripts/build-release-extension.sh",
+    "extension:zip": "bash scripts/package-extension.sh",
+    "publish:swarm": "tsx scripts/publish-swarm.ts",
     "tunnel:up": "bash scripts/tunnel.sh",
     "tunnel:down": "bash scripts/tunnel-stop.sh"
   },
