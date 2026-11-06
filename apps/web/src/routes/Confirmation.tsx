@@ -216,7 +216,7 @@ function ConfirmationView({ entityKey, row }: { entityKey: Hex; row: Row }) {
       <p>
         <a href={`#/c/${row.captureKey}`}>View the capture it confirms</a>
       </p>
-      <section className="stack" aria-labelledby="conf-storage">
+      <section className="stack panel" aria-labelledby="conf-storage">
         <h2 className="section-title" id="conf-storage">
           Storage
         </h2>

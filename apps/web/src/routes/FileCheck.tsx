@@ -36,10 +36,9 @@ export function FileCheck() {
       <p className="muted">
         File: <span className="mono">{dropped.name}</span>
       </p>
+      <VerdictLine verdict={verdictOf(report, file?.bytes)} />
       <Notice kind="info" title="Checked offline. A–C ran in your browser; storage (E) was not checked." />
       {facts ? <ExhibitCard facts={facts} unverified={report?.C.status !== 'pass'} /> : null}
-      <VerdictLine verdict={verdictOf(report, file?.bytes)} />
-      <WhyWitness />
       <CheckPanel
         report={report}
         storage="offline"
@@ -58,6 +57,7 @@ export function FileCheck() {
           setFileError(undefined);
         }}
       />
+      <WhyWitness />
       {facts ? <Preview facts={facts} /> : null}
     </>
   );
