@@ -69,7 +69,7 @@ describe('listAllCaptures / listAllAttachments (devnet)', () => {
       contentType: 'application/gzip',
     });
 
-    const mine = (rows: { entityKey: Hex }[]) => rows.filter((r) => keys.includes(r.entityKey));
+    const mine = <R extends { entityKey: Hex }>(rows: R[]): R[] => rows.filter((r) => keys.includes(r.entityKey));
     const all = await eventually(
       () => listAllCaptures(pub, { pageSize: 2, maxRows: 100_000 }),
       (r) => mine(r.rows).length === 3,
