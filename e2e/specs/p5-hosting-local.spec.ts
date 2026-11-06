@@ -241,7 +241,8 @@ test('@p5 live-mode state file and feed index memory', async () => {
     writeFileSync(join(dir, 'index.html'), '<!doctype html><title>state</title><p>state test</p>');
     const stateFile = join(dir, 'state.json');
     const topic = `recall-state-${Date.now()}`;
-    const base = ['--net', 'live', '--gnosis-rpc', LOCAL.gnosis.rpcUrl, '--bee', BEE, '--yes', '--days', '1', '--dir', dir, '--feed', '--feed-topic', topic];
+    // --read: a live run reads back through the public download gateway by default; here the site is only on the local node.
+    const base = ['--net', 'live', '--gnosis-rpc', LOCAL.gnosis.rpcUrl, '--bee', BEE, '--read', BEE, '--yes', '--days', '1', '--dir', dir, '--feed', '--feed-topic', topic];
     // A public test key owns the feed (a live run reads HOSTING_FEED_KEY, and .env.local may hold a real one).
     const env = { TREASURY_PRIVATE_KEY: BEE_COMPOSE_FAUCET_KEY, HOSTING_FEED_KEY: OTHER_WALLET_KEY, RECALL_STATE_FILE: stateFile };
     const state = () => JSON.parse(readFileSync(stateFile, 'utf8')) as { batch: Record<string, string>; lastFeed: Record<string, string> };

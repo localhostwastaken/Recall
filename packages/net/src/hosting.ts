@@ -479,3 +479,82 @@ export function resumeCommand(o: { net: string; batchId: string; dir: string; be
     ...(o.feedTopic ? [`--feed --feed-topic ${q(o.feedTopic)}`] : []),
   ].join(' ');
 }
+
+// ---- reading the published site back ----------------------------------------------------------
+
+/**
+ * True for a redirect to a gateway's moderation page (`https://bzz.link/forbidden?hash=<ref>`):
+ * api.gateway.ethswarm.org and bzz.link answer HTML of a hash that is not allowlisted that way,
+ * while the bytes themselves are fine and served by download.gateway.ethswarm.org.
+ */
+export function isModerationRedirect(status: number, location: string | null | undefined): boolean {
+  return status >= 300 && status < 400 && /\/forbidden(?:[/?#]|$)/i.test(location ?? '');
+}
+
+export type ReadVerdict = 'verified' | 'mismatch' | 'moderated' | 'unreachable';
+export type ReadResult = { gateway: string; url: string; verdict: ReadVerdict; detail: string };
+
+/**
+ * Fetches `url` once and compares it to `want`. A redirect is looked at before it is followed
+ * (`redirect: 'manual'`): one to a moderation page is `moderated`, never "other bytes"; another
+ * redirect is followed (at most 3 hops). A bad status or a network error is `unreachable`.
+ */
+export async function readOnce(url: string, want: Uint8Array, timeoutMs = REQUEST_TIMEOUT_MS): Promise<{ verdict: ReadVerdict; detail: string }> {
+  let target = url;
+  for (let hop = 0; hop < 4; hop++) {
+    const res = await fetch(target, { redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) }).catch((e: Error) => e);
+    if (res instanceof Error) return { verdict: 'unreachable', detail: res.message };
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get('location');
+      await res.body?.cancel().catch(() => undefined);
+      if (isModerationRedirect(res.status, location)) return { verdict: 'moderated', detail: `HTTP ${res.status} to ${location}` };
+      if (!location) return { verdict: 'unreachable', detail: `HTTP ${res.status} without a Location` };
+      target = new URL(location, target).toString();
+      continue;
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      return { verdict: 'unreachable', detail: `HTTP ${res.status}` };
+    }
+    const got = Buffer.from(await res.arrayBuffer().catch(() => new ArrayBuffer(0)));
+    return got.equals(Buffer.from(want))
+      ? { verdict: 'verified', detail: `${got.length} bytes` }
+      : { verdict: 'mismatch', detail: `${got.length} bytes, expected ${want.length}` };
+  }
+  return { verdict: 'unreachable', detail: 'too many redirects' };
+}
+
+/**
+ * What the read-back results of one file add up to. Verified by ANY read gateway is verified
+ * (the others only warn: a moderated page is "held by gateway moderation (needs allowlisting)",
+ * not "other bytes"). With no gateway verifying it: other bytes are an error, a moderation hold
+ * is an error (the bytes could not be checked anywhere), and plain unreachable is an error
+ * locally but only "unconfirmed" (gateway lag) when `lagTolerant`.
+ */
+export function judgeReadBack(
+  label: string,
+  results: ReadResult[],
+  lagTolerant: boolean,
+): { verified: ReadResult | undefined; error?: string; unconfirmed?: string; warnings: string[] } {
+  const verified = results.find((r) => r.verdict === 'verified');
+  const warnings = results
+    .filter((r) => r.verdict !== 'verified')
+    .map((r) =>
+      r.verdict === 'moderated'
+        ? `${label}: held by gateway moderation (needs allowlisting) at ${r.url} (${r.detail})`
+        : r.verdict === 'mismatch'
+          ? `${label}: ${r.url} served other bytes (${r.detail})`
+          : `${label}: ${r.url} did not answer with the file (${r.detail})`,
+    );
+  if (verified) return { verified, warnings };
+  const where = results.map((r) => r.gateway).join(', ');
+  const mismatch = results.find((r) => r.verdict === 'mismatch');
+  if (mismatch) {
+    return { verified: undefined, error: `${label}: ${mismatch.url} served other bytes than the local file (${mismatch.detail}); no read gateway verified them`, warnings };
+  }
+  if (results.some((r) => r.verdict === 'moderated')) {
+    return { verified: undefined, error: `${label}: held by gateway moderation (needs allowlisting) at ${where}; no read gateway verified the bytes`, warnings };
+  }
+  const why = `${label}: not reachable through ${where}`;
+  return lagTolerant ? { verified: undefined, unconfirmed: why, warnings } : { verified: undefined, error: why, warnings };
+}

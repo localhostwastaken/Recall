@@ -16,6 +16,11 @@
 //   --depth 17|18      Depth of a bought batch (default 18, about 21 MB of stamp capacity).
 //   --dir <path>       Publish this folder instead of building apps/web first. A warning is
 //                      printed when the folder was built for the other network than --net.
+//   --read <url>       Where the site and the feed are read back for verification (default: the
+//                      public download gateway on live, the --bee node locally). Uploads still go
+//                      to --bee. api.gateway.ethswarm.org and bzz.link hold the HTML of a hash
+//                      that is not allowlisted (a redirect to /forbidden): that is reported as
+//                      "held by gateway moderation", not as other bytes.
 //   --gnosis-rpc <url> Gnosis RPC to read and pay on (default: the net's own).
 //   --feed             Also write a Swarm feed update that points at the new site, and print the
 //                      feed manifest reference: a URL that keeps working when the site is
@@ -87,10 +92,12 @@ import {
   feedUpdate,
   isClientError,
   isRetryable,
+  judgeReadBack,
   nextFeedIndex,
   pushChunk,
   pushFeedUpdate,
   readFeed,
+  readOnce,
   recordBatch,
   recordFeed,
   refuseNewBuy,
@@ -100,6 +107,7 @@ import {
   zeroObfuscation,
   Bee,
   type PublishState,
+  type ReadResult,
   type RetryOptions,
 } from '../packages/net/src/hosting';
 
@@ -223,17 +231,6 @@ const postageAbi = parseAbi([
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-/** GET with a few tries: a gateway may lag behind the push. Resolves with the last response, or undefined. */
-async function fetchWithTries(url: string, tries: number, waitMs: number, ok: (r: Response) => boolean): Promise<Response | undefined> {
-  let last: Response | undefined;
-  for (let i = 0; i < tries; i++) {
-    last = await fetch(url, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }).catch(() => undefined);
-    if (last && ok(last)) return last;
-    if (i < tries - 1) await sleep(waitMs);
-  }
-  return last;
-}
-
 const encodePath = (p: string) => p.split('/').map(encodeURIComponent).join('/');
 
 // ---- the state file: a live run's paid-for batch, so a failure never costs a second purchase ----
@@ -257,6 +254,7 @@ async function main() {
       days: { type: 'string', default: '30' },
       depth: { type: 'string', default: '18' },
       dir: { type: 'string' },
+      read: { type: 'string' },
       'gnosis-rpc': { type: 'string' },
       'max-xbzz': { type: 'string', default: DEFAULT_MAX_XBZZ },
       'new-batch': { type: 'boolean', default: false },
@@ -284,6 +282,10 @@ async function main() {
   }
   const cfg = net === 'local' ? LOCAL : liveConfig({});
   const beeUrl = (values.bee ?? cfg.swarm.uploadUrl).replace(/\/+$/, '');
+  // Uploads go to beeUrl. Everything READ back (the site, the feed) goes to readUrl: on live a
+  // download-only gateway, because the upload gateway and bzz.link redirect HTML of a hash that is
+  // not allowlisted to a moderation page.
+  const readUrl = (values.read ?? (live ? cfg.swarm.downloadUrls[0] : beeUrl)).replace(/\/+$/, '');
   const gnosisRpc = values['gnosis-rpc'] ?? cfg.gnosis.rpcUrl;
   hide(envLocal('ARKIV_ACCESS_KEY'));
 
@@ -519,34 +521,56 @@ async function main() {
     say(`Uploaded ${pushed} chunks (${bytesTotal} bytes of files). Site manifest: ${ref}`);
     saveBatch({ status: 'uploaded', siteRef: ref, at: now() });
 
-    // Read the site back through the node the way a visitor would, BEFORE a feed is pointed at it.
-    // Locally any miss is an error. On a public gateway an unreachable page only leaves the site
-    // "unconfirmed" (HTML may be held for moderation, the network may lag), but a page that arrives
-    // with other bytes is always an error.
+    // Read the site back the way a visitor would, BEFORE a feed is pointed at it, through the read
+    // gateway (and, on live, the other public read points when it cannot). A file verified by any
+    // of them is verified; a gateway that holds it for moderation is only a warning then. With no
+    // gateway verifying it: other bytes or a moderation hold are errors, and on live an unreachable
+    // page only leaves the site "unconfirmed" (the network may lag).
     const problems: string[] = [];
     const unconfirmed: string[] = [];
-    const tries = live ? 4 : 1;
-    const check = async (label: string, url: string, want: Buffer) => {
-      const got = await fetchWithTries(url, tries, 5000, (r) => r.ok);
-      if (got?.ok) {
-        if (Buffer.from(await got.arrayBuffer()).equals(want)) return say(`Verified: ${label} (${url}).`);
-        problems.push(`${label}: ${url} served other bytes than the local file`);
-        return;
+    const readPoints = [...new Set([readUrl, ...(live ? [cfg.swarm.downloadUrls[0], beeUrl] : [])])];
+    const check = async (label: string, path: string, want: Buffer) => {
+      const results: ReadResult[] = [];
+      for (const gateway of readPoints) {
+        const url = `${gateway}${path}`;
+        let r = await readOnce(url, want);
+        // Only "unreachable" is worth another look (live: 3 more, 5 s apart); a hold or a mismatch is final.
+        for (let i = 0; live && i < 3 && r.verdict === 'unreachable'; i++) {
+          await sleep(5000);
+          r = await readOnce(url, want);
+        }
+        results.push({ gateway, url, ...r });
+        if (r.verdict === 'verified') break;
       }
-      const why = `${label}: ${url} did not answer with the file (${got ? `HTTP ${got.status}` : 'unreachable'})`;
-      if (live) {
-        console.warn(`Warning: ${why}. A gateway can hold content until it is approved; check again later.`);
-        unconfirmed.push(why);
-      } else problems.push(why);
+      const j = judgeReadBack(label, results, live);
+      for (const w of j.warnings) console.warn(`Warning: ${w}`);
+      if (j.verified) {
+        say(`Verified: ${label} (${j.verified.url}).`);
+        // For the page people open first, also look at the other public read points once, so a
+        // moderation hold is reported (a warning: the read gateway verified the bytes).
+        for (const gateway of live && label === 'index document' ? [beeUrl, 'https://bzz.link'] : []) {
+          if (results.some((r) => r.gateway === gateway)) continue;
+          const url = `${gateway}${path}`;
+          const o = await readOnce(url, want);
+          if (o.verdict === 'verified') say(`Also readable at ${url}.`);
+          else if (o.verdict === 'moderated') {
+            console.warn(`Warning: ${label}: held by gateway moderation (needs allowlisting) at ${url}; share the read gateway link until the Swarm team allowlists the hash.`);
+          } else say(`Note: ${url} did not serve the ${label} (${o.detail}).`);
+        }
+      } else if (j.error) problems.push(j.error);
+      else if (j.unconfirmed) {
+        console.warn(`Warning: ${j.unconfirmed}. A gateway can lag behind the push; check again later.`);
+        unconfirmed.push(j.unconfirmed);
+      }
     };
     const indexBytes = readFileSync(join(webDir, INDEX_DOCUMENT));
-    await check('index document', `${beeUrl}/bzz/${ref}/`, indexBytes);
+    await check('index document', `/bzz/${ref}/`, indexBytes);
     // One script, read through the manifest: it spans many chunks, so it proves the chunk tree too.
     const js = files
       .filter((f) => /\.m?js$/.test(f.path))
       .map((f) => ({ ...f, size: statSync(f.abs).size }))
       .sort((a, b) => b.size - a.size)[0];
-    if (js) await check('JS asset', `${beeUrl}/bzz/${ref}/${encodePath(js.path)}`, readFileSync(js.abs));
+    if (js) await check('JS asset', `/bzz/${ref}/${encodePath(js.path)}`, readFileSync(js.abs));
     else say('No JS asset in the site to read back.');
     if (problems.length) throw new Error(`verification failed:\n  ${problems.join('\n  ')}`);
 
@@ -596,22 +620,22 @@ async function main() {
         // a few seconds after the push: poll until it names the new manifest.
         let seenAt: { reference: string; index: string } | undefined;
         for (let i = 0; i < (live ? 24 : 40); i++) {
-          seenAt = await readFeed(beeUrl, feedSigner.owner, topic);
+          seenAt = await readFeed(readUrl, feedSigner.owner, topic);
           if (seenAt?.reference === ref) break;
           await sleep(1500);
         }
         if (seenAt?.reference === ref) {
           say(`Verified: the feed (index ${seenAt.index}) points at ${ref}.`);
-          await check('feed manifest', `${beeUrl}/bzz/${feed.manifestRef}/`, indexBytes);
+          await check('feed manifest', `/bzz/${feed.manifestRef}/`, indexBytes);
         } else if (seenAt) {
           // A readable update that is not ours (a lower index, or another site) is never "just lag".
           problems.push(
             `the feed points at ${seenAt.reference} (index ${seenAt.index}), not at ${ref} (index ${index}): another update, or a node that has not got ours. Do not publish again before this is explained`,
           );
         } else if (live) {
-          console.warn(`Warning: the feed has no readable update through ${beeUrl} yet; check it later.`);
+          console.warn(`Warning: the feed has no readable update through ${readUrl} yet; check it later.`);
         } else {
-          problems.push(`the feed has no readable update through ${beeUrl}`);
+          problems.push(`the feed has no readable update through ${readUrl}`);
         }
         if (problems.length) throw new Error(`verification failed:\n  ${problems.join('\n  ')}`);
       }
@@ -623,18 +647,22 @@ async function main() {
     say('');
     say(`bzz reference: ${ref}`);
     say(`batch: ${paidBatch} (owner ${account.address}, depth ${batchDepth})`);
-    say(`via your Bee node: ${beeUrl}/bzz/${ref}/`);
+    say(`${readUrl === beeUrl ? 'via your Bee node' : 'read gateway (works now)'}: ${readUrl}/bzz/${ref}/`);
     say(`bzz.link: https://${cid}.bzz.link/`);
     say(`bzz.link (path form): https://bzz.link/bzz/${ref}/`);
+    if (live) {
+      say(`note: bzz.link and ${beeUrl} hold the HTML of a hash until the Swarm team allowlists it (gateway moderation); until then share the read gateway link.`);
+    }
     if (feed) {
       say('');
       say(`feed owner: ${feed.owner}`);
       say(`feed topic: ${topicName} (${topic.toHex()})`);
       say(`feed update: index ${feed.index} -> ${ref}`);
       say(`feed manifest reference: ${feed.manifestRef}`);
-      say(`feed via your Bee node: ${beeUrl}/bzz/${feed.manifestRef}/`);
+      say(`feed ${readUrl === beeUrl ? 'via your Bee node' : 'read gateway (works now)'}: ${readUrl}/bzz/${feed.manifestRef}/`);
       say(`feed bzz.link: https://${new Reference(feed.manifestRef).toCid('feed')}.bzz.link/`);
       say(`feed bzz.link (path form): https://bzz.link/bzz/${feed.manifestRef}/`);
+      if (live) say('note: the feed manifest hash needs the same allowlisting before bzz.link serves it.');
     }
     if (live) {
       updateState((st) => {

@@ -19,11 +19,14 @@ import {
   feedTopic,
   feedUpdate,
   isClientError,
+  isModerationRedirect,
   isRetryable,
+  judgeReadBack,
   nextFeedIndex,
   parseRetryAfter,
   pushChunk,
   pushFeedUpdate,
+  readOnce,
   recordBatch,
   recordFeed,
   refuseNewBuy,
@@ -31,6 +34,7 @@ import {
   retryWithBackoff,
   socAddress,
   type PublishState,
+  type ReadResult,
 } from '../src/hosting';
 import { QUOTE_TOLERANCE_PERCENT, Stamper, buyBatch } from '../src/index';
 
@@ -505,5 +509,75 @@ describe('recordBatch (the live state file)', () => {
 
   it('works on an empty state', () => {
     expect(recordBatch({}, { status: 'uploaded', siteRef: '11'.repeat(32), at: 't' }).batch).toEqual({ status: 'uploaded', siteRef: '11'.repeat(32), at: 't' });
+  });
+});
+
+describe('reading the site back: gateway moderation is not "other bytes"', () => {
+  const FILE = Buffer.from('<!doctype html><title>Recall</title>');
+  const FORBIDDEN = 'https://bzz.link/forbidden?hash=7d1e7327';
+
+  it('recognises the redirect to the moderation page', () => {
+    expect(isModerationRedirect(302, FORBIDDEN)).toBe(true);
+    expect(isModerationRedirect(301, 'https://bzz.link/forbidden')).toBe(true);
+    expect(isModerationRedirect(307, '/forbidden?hash=ab')).toBe(true); // relative
+    expect(isModerationRedirect(302, 'https://example.org/page#/forbidden')).toBe(true);
+    expect(isModerationRedirect(302, 'https://bzz.link/forbiddenly')).toBe(false); // another path
+    expect(isModerationRedirect(302, 'https://bzz.link/bzz/ab/')).toBe(false); // an ordinary redirect
+    expect(isModerationRedirect(200, FORBIDDEN)).toBe(false); // not a redirect
+    expect(isModerationRedirect(302, null)).toBe(false);
+  });
+
+  it('classifies what a gateway answers: verified, mismatch, moderated, unreachable', async () => {
+    const same = await node(() => ({ status: 200, body: FILE.toString() }));
+    expect(await readOnce(`${same.url}/bzz/ab/`, FILE)).toMatchObject({ verdict: 'verified' });
+
+    const other = await node(() => ({ status: 200, body: '<html>something else</html>' }));
+    expect(await readOnce(`${other.url}/bzz/ab/`, FILE)).toMatchObject({ verdict: 'mismatch' });
+
+    // The live finding: api.gateway and bzz.link answer 302 to /forbidden for HTML of a hash that is not allowlisted.
+    const held = await node(() => ({ status: 302, headers: { location: FORBIDDEN } }));
+    const verdict = await readOnce(`${held.url}/bzz/ab/`, FILE);
+    expect(verdict.verdict).toBe('moderated');
+    expect(verdict.detail).toContain('forbidden');
+    expect(held.seen).toHaveLength(1); // the redirect was looked at, not followed to the moderation page
+
+    const missing = await node(() => json(404, 'not found'));
+    expect(await readOnce(`${missing.url}/bzz/ab/`, FILE)).toMatchObject({ verdict: 'unreachable', detail: 'HTTP 404' });
+    expect(await readOnce('http://127.0.0.1:9/bzz/ab/', FILE, 2000)).toMatchObject({ verdict: 'unreachable' });
+  });
+
+  it('follows an ordinary redirect to the real file', async () => {
+    const n = await node((r) => (r.url === '/real' ? { status: 200, body: FILE.toString() } : { status: 302, headers: { location: '/real' } }));
+    expect(await readOnce(`${n.url}/bzz/ab/`, FILE)).toMatchObject({ verdict: 'verified' });
+    expect(n.seen.map((r) => r.url)).toEqual(['/bzz/ab/', '/real']);
+  });
+
+  const r = (gateway: string, verdict: ReadResult['verdict'], detail = ''): ReadResult => ({ gateway, url: `${gateway}/bzz/ab/`, verdict, detail });
+
+  it('a gateway that verified the bytes settles it; a moderation hold elsewhere is only a warning', () => {
+    const j = judgeReadBack('index document', [r('https://api.gateway', 'moderated', 'HTTP 302'), r('https://download.gateway', 'verified')], true);
+    expect(j.verified?.gateway).toBe('https://download.gateway');
+    expect(j.error).toBeUndefined();
+    expect(j.unconfirmed).toBeUndefined();
+    expect(j.warnings).toEqual([expect.stringContaining('held by gateway moderation (needs allowlisting)')]);
+    expect(j.warnings[0]).not.toContain('other bytes');
+  });
+
+  it('with no gateway verifying: a hold is an error that says moderation, other bytes is an error that says bytes', () => {
+    const held = judgeReadBack('index document', [r('https://bzz.link', 'moderated', 'HTTP 302')], true);
+    expect(held.error).toContain('held by gateway moderation (needs allowlisting)');
+    expect(held.error).toContain('no read gateway verified the bytes');
+    expect(held.error).not.toContain('other bytes');
+    const bad = judgeReadBack('JS asset', [r('https://a', 'mismatch', '9 bytes, expected 3'), r('https://b', 'unreachable', 'HTTP 404')], true);
+    expect(bad.error).toContain('served other bytes');
+    expect(bad.verified).toBeUndefined();
+  });
+
+  it('only unreachable pages are lag: a warning ("unconfirmed") on live, an error locally', () => {
+    const live = judgeReadBack('JS asset', [r('https://a', 'unreachable', 'HTTP 404')], true);
+    expect(live.error).toBeUndefined();
+    expect(live.unconfirmed).toContain('not reachable');
+    const local = judgeReadBack('JS asset', [r('http://localhost:1633', 'unreachable', 'HTTP 404')], false);
+    expect(local.error).toContain('not reachable');
   });
 });
