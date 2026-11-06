@@ -5,7 +5,7 @@ import type { Hex } from 'viem';
 import { KeepAlive } from '../components/KeepAlive';
 import type { PageEntry } from './model';
 import type { LibraryData } from './useLibrary';
-import { barPercent, celebrateCard, flipRerank, prefersReducedMotion } from './rerank';
+import { barPercent, celebrateCard, flipRerank, prefersReducedMotion, type Stop } from './rerank';
 import './keepAlive.css';
 
 export const KEEP_ALIVE_HINT = 'Available after this capture is checked';
@@ -62,20 +62,36 @@ function slotFor(urlHash: Hex): HTMLElement | null {
   return null;
 }
 
-/** Runs `fn` once the slot's keep-alive dialog is closed (now, if it is not open). */
-function afterDialogCloses(slot: HTMLElement | null, fn: () => void): void {
-  const dialog = slot?.querySelector('dialog');
-  if (!slot || !dialog || !dialog.open) {
-    window.setTimeout(fn, 0);
-    return;
-  }
+/**
+ * Runs `fn` once no dialog is open inside `root` (on the next tick, if none is). A card must not
+ * move while any card's modal is open: moving its node would drop the dialog from the top layer.
+ * Returns a stop that forgets the wait.
+ */
+function whenNoDialogOpen(root: HTMLElement, fn: () => void): Stop {
+  let timer = 0;
+  let over = false;
   // `close` does not bubble, but a capturing listener on an ancestor still sees it.
-  const onClose = (e: Event) => {
-    if (e.target !== dialog) return;
-    slot.removeEventListener('close', onClose, true);
-    window.setTimeout(fn, 0);
+  const onClose = () => schedule();
+  const check = () => {
+    if (over) return;
+    if (root.isConnected && root.querySelector('dialog[open]')) {
+      root.addEventListener('close', onClose, true);
+      return;
+    }
+    over = true;
+    root.removeEventListener('close', onClose, true);
+    fn();
   };
-  slot.addEventListener('close', onClose, true);
+  const schedule = () => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(check, 0);
+  };
+  schedule();
+  return () => {
+    over = true;
+    window.clearTimeout(timer);
+    root.removeEventListener('close', onClose, true);
+  };
 }
 
 /**
@@ -110,11 +126,19 @@ export function useKeepAliveRerank(
   const inFlight = useRef(new Map<Hex, number>());
   const done = useRef(new Set<Hex>());
   const mounted = useRef(true);
+  /** Waits, moves, count-ups and glows under way: ended when the page goes away. */
+  const running = useRef(new Set<Stop>());
   useEffect(() => {
     mounted.current = true;
+    const stops = running.current;
     return () => {
       mounted.current = false;
+      for (const stop of [...stops]) stop();
+      stops.clear();
     };
+  }, []);
+  const track = useCallback((stop: Stop) => {
+    running.current.add(stop);
   }, []);
 
   const letGo = useCallback((urlHash: Hex) => {
@@ -163,7 +187,12 @@ export function useKeepAliveRerank(
         continue;
       }
       const slot = slotFor(urlHash);
-      afterDialogCloses(slot, () => {
+      if (!slot) {
+        // The card is not on screen (filtered out): just show the new days.
+        letGo(urlHash);
+        continue;
+      }
+      const play = () => {
         if (!mounted.current || !heldRef.current.has(urlHash)) return;
         const current = slotFor(urlHash);
         const grid = current?.closest<HTMLElement>('[data-library-grid]') ?? null;
@@ -175,11 +204,12 @@ export function useKeepAliveRerank(
         }
         const reducedMotion = prefersReducedMotion();
         const fromBar = barPercent(card);
-        flipRerank(grid, mutate, { reducedMotion });
-        if (!reducedMotion && card) celebrateCard(card, from, to, fromBar);
-      });
+        track(flipRerank(grid, mutate, { reducedMotion }));
+        if (!reducedMotion && card) track(celebrateCard(card, from, to, fromBar));
+      };
+      track(whenNoDialogOpen(slot.closest<HTMLElement>('[data-library-grid]') ?? slot, play));
     }
-  }, [settled, live, held, letGo]);
+  }, [settled, live, held, letGo, track]);
 
   return { days, onExtended };
 }
