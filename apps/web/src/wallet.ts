@@ -92,26 +92,48 @@ export async function connectWallet(): Promise<{ address: Address; walletClient:
   return { address, walletClient };
 }
 
-/** Adds the chain to the wallet, then switches to it. Does nothing when already there. */
+/** True when the wallet doesn't know the chain yet (EIP-1193 4902, also nested by some wallets). */
+export function isUnknownChain(err: unknown): boolean {
+  for (let e = err as { code?: unknown; cause?: unknown; data?: unknown } | undefined, i = 0; e && i < 8; i++) {
+    if (e.code === 4902) return true;
+    const inner = (e.data as { originalError?: { code?: unknown } } | undefined)?.originalError;
+    if (inner?.code === 4902) return true;
+    e = e.cause as typeof e;
+  }
+  return false;
+}
+
+/**
+ * Switches the wallet to the chain, adding it first only when the wallet doesn't know it. Adding a
+ * chain the wallet already has makes MetaMask ask to "update" the network (an extra prompt every
+ * time), so the switch comes first. Does nothing when already there.
+ */
 export async function ensureChain(id: ChainId): Promise<void> {
   const provider = requireProvider();
   const current = hexToNumber((await provider.request({ method: 'eth_chainId' })) as `0x${string}`);
   if (current === id) return;
-  const chain = chainFor(id);
-  const explorer = chain.blockExplorers?.default.url;
-  await provider.request({
-    method: 'wallet_addEthereumChain',
-    params: [
-      {
-        chainId: numberToHex(id),
-        chainName: chain.name,
-        nativeCurrency: chain.nativeCurrency,
-        rpcUrls: chain.rpcUrls.default.http,
-        ...(explorer ? { blockExplorerUrls: [explorer] } : {}),
-      },
-    ],
-  });
-  await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: numberToHex(id) }] });
+  try {
+    await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: numberToHex(id) }] });
+  } catch (err) {
+    if (!isUnknownChain(err)) throw err;
+    const chain = chainFor(id);
+    const explorer = chain.blockExplorers?.default.url;
+    await provider.request({
+      method: 'wallet_addEthereumChain',
+      params: [
+        {
+          chainId: numberToHex(id),
+          chainName: chain.name,
+          nativeCurrency: chain.nativeCurrency,
+          rpcUrls: chain.rpcUrls.default.http,
+          ...(explorer ? { blockExplorerUrls: [explorer] } : {}),
+        },
+      ],
+    });
+    // MetaMask offers to switch right after adding; switch only if the wallet isn't there yet.
+    const now = hexToNumber((await provider.request({ method: 'eth_chainId' })) as `0x${string}`);
+    if (now !== id) await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: numberToHex(id) }] });
+  }
   void refreshWallet();
 }
 
