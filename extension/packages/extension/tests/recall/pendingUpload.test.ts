@@ -108,9 +108,22 @@ describe('a pending capture is uploaded only when the publish tab asks (R44)', (
     expect(uploads()[0][0]).toMatchObject({ mode: 'stamped', candidates: [{ batchId: id(1) }] });
     expect(sentId()).toMatch(new RegExp(`^${CID}\\.[0-9a-f]{12}$`));
     expect(await uploadPending(CID, 'stamped')).toEqual({ status: 'uploading', mode: 'stamped' });
-    expect(await uploadPending(CID, 'free')).toMatchObject({ error: expect.stringMatching(/free storage is turned off/) });
+    // Free storage is a choice made on the publish page, whatever the settings say; but while an
+    // upload runs, it only reports that one.
+    expect(await uploadPending(CID, 'free')).toEqual({ status: 'uploading', mode: 'stamped' });
     expect(uploads()).toHaveLength(1);
     expect(await pendingAnswer(CID)).toMatchObject({ upload: { status: 'uploading', mode: 'stamped' } });
+  });
+
+  it('free storage is always allowed, even with the default setting "stamped" and an empty pool', async () => {
+    settings.uploadMode = 'stamped';
+    pool.value = [];
+    expect(await uploadPending(CID, 'free')).toEqual({ status: 'uploading', mode: 'free' });
+    expect(uploads()).toHaveLength(1);
+    expect(uploads()[0][0]).toMatchObject({ mode: 'free', candidates: [] });
+    expect(uploads()[0][0]).not.toHaveProperty('stampKey');
+    // getPending still reports the setting, only as the default suggestion.
+    expect(await pendingAnswer(CID)).toMatchObject({ uploadMode: 'stamped', upload: { status: 'uploading', mode: 'free' } });
   });
 
   it('after success it reports the reference and never uploads again', async () => {

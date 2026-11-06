@@ -231,13 +231,11 @@ test.describe('@p2 extension api', () => {
     const pending = await api<Pending>({ type: 'recall.getPending', captureId: kept });
     expect(pending).toMatchObject({ kind: 'capture', upload: { status: 'none' }, storage: 'empty', uploadMode: 'stamped' });
     expect(pending.evidenceRef).toBeUndefined();
-    // An upload needs a batch (or free storage the settings allow); nothing starts without one.
+    // A stamped upload needs a batch; nothing starts without one. (Free storage is always a choice
+    // the publish page may make, whatever the settings say, so it is not refused here.)
     expect(await api({ type: 'recall.uploadPending', captureId: kept, mode: 'stamped' })).toEqual({
       error: 'the extension has no storage batch to upload with',
     });
-    expect((await api<{ error?: string }>({ type: 'recall.uploadPending', captureId: kept, mode: 'free' })).error).toMatch(
-      /free storage is turned off/,
-    );
     expect((await api<Pending>({ type: 'recall.getPending', captureId: kept })).upload).toEqual({ status: 'none' });
 
     const { tab, popup } = await openPopup();

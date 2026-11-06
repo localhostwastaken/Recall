@@ -76,8 +76,8 @@ import './approve.css';
  * (a) the same bytes as the verified earlier capture: confirm it (no upload), keep the earlier
  *     capture alive, or discard;
  * (b) a new or changed page: upload with a batch the extension has, or buy one batch first
- *     (MetaMask on Gnosis, never twice), or use the gateway's free storage when the extension's
- *     settings allow it; then publish;
+ *     (MetaMask on Gnosis, never twice), or use the gateway's free storage (always a choice here;
+ *     the primary one when the wallet holds no xBZZ for a batch); then publish;
  * (c) published.
  * The page never takes the extension's word for anything: it runs checks A to C on the evidence
  * itself (A and B must pass, C must not fail), checks that the uploaded evidence reference really
@@ -110,7 +110,7 @@ type PendingRecord = {
   upload?: UploadInfo;
   /** Whether a batch in the extension's pool can take the upload now. */
   storage?: 'ok' | 'empty';
-  /** `free`: the extension's settings allow the gateway's free storage. */
+  /** The extension's settings: only the default suggestion (free storage is always allowed). */
   uploadMode?: 'stamped' | 'free';
   /** R46: the repository snapshot the extension checked and holds (no bytes here). */
   attachment?: RepoSummary;
@@ -602,6 +602,10 @@ type Save =
 /** The ?ext= rule (as on Storage): an extension only the link names owns nothing bought until the person says so. */
 type ExtAsk = { state: 'none' } | { state: 'ask'; address: Address | null | 'error' } | { state: 'ok'; address: Address };
 type Price = { kind: 'loading' } | { kind: 'error' } | { kind: 'ready'; perBatch: bigint };
+/** The connected wallet's xBZZ on Gnosis; `unknown`: no wallet connected yet, or the read failed. */
+type Funds = { kind: 'loading' } | { kind: 'unknown' } | { kind: 'ready'; have: bigint };
+
+const FREE_NOTE = "Free: stored by the public Swarm gateway, no xBZZ needed. Less durable, and it can't be extended.";
 
 const BUY_LABEL: Record<BuyStep, string> = {
   checking: 'Checking the earlier purchase…',
@@ -692,7 +696,10 @@ export function Approve({ captureId }: { captureId: string | null }) {
   const ready = load.phase === 'ready' ? load : null;
   const needsStorage = ready?.pending.kind === 'capture' && !ready.stored;
   const hasBatch = ready?.pending.storage === 'ok';
-  const freeAllowed = ready?.pending.uploadMode === 'free';
+  // Free storage is always offered for a capture that still needs storing (the extension's
+  // uploadMode setting is only a default suggestion).
+  const freeAllowed = needsStorage;
+  const needsBuy = needsStorage && !hasBatch;
   // R46: a capture with a repository snapshot needs a bigger batch (depth 18).
   const buyDepth = ready?.repo ? ATTACHMENT_DEPTH : depthFor(ready?.pending.needsDepth);
 
@@ -710,6 +717,25 @@ export function Approve({ captureId }: { captureId: string | null }) {
       live = false;
     };
   }, [showPrice, gnosisPub, priceTry, buyDepth]);
+
+  // The connected wallet's xBZZ, read only to choose the primary action (no prompt: an account
+  // MetaMask already shares with this page).
+  const [funds, setFunds] = useState<Funds>({ kind: 'unknown' });
+  useEffect(() => {
+    if (!needsBuy || !wallet.address) {
+      setFunds({ kind: 'unknown' });
+      return;
+    }
+    let live = true;
+    setFunds({ kind: 'loading' });
+    gnosisPub.readContract({ address: XBZZ, abi: erc20Abi, functionName: 'balanceOf', args: [wallet.address] }).then(
+      (have) => live && setFunds({ kind: 'ready', have }),
+      () => live && setFunds({ kind: 'unknown' }),
+    );
+    return () => {
+      live = false;
+    };
+  }, [needsBuy, wallet.address, gnosisPub]);
 
   const run = useCallback(
     async (what: 'connect' | 'switch' | 'publish', readyArg?: Ready) => {
@@ -905,8 +931,24 @@ export function Approve({ captureId }: { captureId: string | null }) {
     [captureId, extOpts],
   );
 
+  const codeSize = ready?.repo?.summary.size;
   const uploadFailed = useCallback((how: SaveHow, e: unknown): Save => {
     const why = sentence(reasonOf(e));
+    // The gateway's free storage may refuse a big file (a repository snapshot is up to 25 MB):
+    // say so and point at paid storage. The person decides; nothing retries by itself.
+    if (how === 'free' && (codeSize !== undefined || /\b413\b|too (large|big)|payload|size limit|limit/i.test(why))) {
+      return {
+        state: 'error',
+        how,
+        stage: 'upload',
+        title: 'Free storage did not take this',
+        body:
+          codeSize !== undefined
+            ? `${why}. The public gateway may refuse a free upload as big as this code snapshot (${formatBytes(codeSize)}). Nothing is lost: buy storage to publish it, or try free storage once more.`
+            : `${why}. The public gateway may limit the size of a free upload. Nothing is lost: buy storage to publish it, or try free storage once more.`,
+        retryLabel: 'Try free storage again',
+      };
+    }
     return {
       state: 'error',
       how,
@@ -915,7 +957,7 @@ export function Approve({ captureId }: { captureId: string | null }) {
       body: `${why}. Your capture is kept in the extension, so nothing is lost: try the upload again.`,
       retryLabel: 'Try upload again',
     };
-  }, []);
+  }, [codeSize]);
 
   // Back on this page while an upload runs (a reload), or after one failed: follow it, or say so.
   useEffect(() => {
@@ -1043,7 +1085,7 @@ export function Approve({ captureId }: { captureId: string | null }) {
   /** The storage ran out: back to the choice (buy, or free storage), never an upload loop. */
   const backToOffer = () => {
     setSave({ state: 'idle' });
-    setOfferNote('Your extension has no storage left for this capture. Buy storage, or use free storage if it is on.');
+    setOfferNote('Your extension has no storage left for this capture. Buy storage, or use free storage.');
   };
 
   /** Path (b): store the evidence (buying a batch first when asked), then publish. One tab at a time. */
@@ -1248,21 +1290,33 @@ export function Approve({ captureId }: { captureId: string | null }) {
     },
   );
 
+  // Buying is paused while the price (or the balance of a connected wallet) is being read, or
+  // when the price can't be read.
+  const buyBlocked = !needsBuy
+    ? undefined
+    : price.kind === 'loading'
+      ? 'Reading the storage price…'
+      : price.kind === 'error'
+        ? 'The storage price could not be read, so buying is paused.'
+        : funds.kind === 'loading'
+          ? 'Checking your xBZZ balance…'
+          : undefined;
+  // No xBZZ for a batch (or no way to tell: no price, no wallet account to read): free storage
+  // is the primary action and buying the secondary one.
+  const noXbzz = needsBuy && price.kind === 'ready' && funds.kind === 'ready' && funds.have < price.perBatch;
+  const freeFirst = needsBuy && (price.kind === 'error' || (price.kind === 'ready' && (funds.kind === 'unknown' || noXbzz)));
   // One primary action at a time: after a rejection or failure the notice's "Try again" is it.
   let primary: { label: string; onClick: () => void; blocked?: string } | null = null;
   if (!published && publish.state !== 'rejected' && publish.state !== 'failed' && save.state !== 'error' && extAsk.state !== 'ask') {
     if (isConfirmation) primary = { label: "Confirm it's still the same", onClick: publishNow };
     else if (!needsStorage) primary = { label: 'Publish record', onClick: publishNow };
     else if (hasBatch) primary = { label: 'Upload and publish', onClick: () => void saveAndPublish('stamped') };
+    else if (freeFirst) primary = { label: 'Publish with free storage', onClick: () => void saveAndPublish('free') };
     else {
       primary = {
         label: 'Buy storage and publish',
         onClick: startBuy,
-        ...(price.kind === 'loading'
-          ? { blocked: 'Reading the storage price…' }
-          : price.kind === 'error'
-            ? { blocked: 'The storage price could not be read, so buying is paused.' }
-            : {}),
+        ...(buyBlocked ? { blocked: buyBlocked } : {}),
       };
     }
   }
@@ -1292,7 +1346,15 @@ export function Approve({ captureId }: { captureId: string | null }) {
                     : '';
   const helper = primary?.blocked
     ? primary.blocked
-    : isConfirmation
+    : freeFirst && !hasBatch
+      ? `${
+          noXbzz
+            ? 'You have no xBZZ for paid storage.'
+            : price.kind === 'error'
+              ? "The storage price couldn't be read, so paid storage is paused."
+              : "Your xBZZ balance isn't known yet (connect MetaMask to check it)."
+        } ${FREE_NOTE}`
+      : isConfirmation
       ? `No upload is needed. MetaMask will show the network fee. The record lasts ${RECORD_DAYS} days; anyone can extend it.`
       : needsStorage && hasBatch
         ? 'The extension uploads the evidence with your storage, then MetaMask publishes the record.'
@@ -1389,11 +1451,6 @@ export function Approve({ captureId }: { captureId: string | null }) {
               ? 'Your extension has storage for this capture. The evidence goes to Swarm, then its record is published on Arkiv.'
               : 'Your extension has no storage left. Buy one storage batch, then the evidence goes to Swarm and its record is published on Arkiv.'}
           </p>
-          {freeAllowed ? (
-            <p className="muted">
-              Free storage (the gateway&apos;s own) needs no batch, but has no known end date and can&apos;t be kept alive.
-            </p>
-          ) : null}
           {offerNote ? (
             <Notice kind="info" title="Choose the storage again" focus>
               {offerNote}
@@ -1496,6 +1553,11 @@ export function Approve({ captureId }: { captureId: string | null }) {
                   Use free storage
                 </button>
               ) : null}
+              {save.how === 'free' && hasBatch ? (
+                <button type="button" className="btn btn-secondary" onClick={() => void saveAndPublish('stamped')}>
+                  Use my storage
+                </button>
+              ) : null}
               {discardButton}
             </>
           }
@@ -1564,9 +1626,14 @@ export function Approve({ captureId }: { captureId: string | null }) {
                   Keep the earlier capture alive…
                 </a>
               ) : null}
-              {needsStorage && freeAllowed ? (
+              {needsStorage && freeAllowed && !freeFirst ? (
                 <button type="button" className="btn btn-secondary" onClick={() => void saveAndPublish('free')}>
                   Use free storage instead
+                </button>
+              ) : null}
+              {freeFirst && !hasBatch ? (
+                <button type="button" className="btn btn-secondary" disabled={buyBlocked !== undefined || !getProvider()} onClick={startBuy}>
+                  Buy storage and publish
                 </button>
               ) : null}
               {isConfirmation || needsStorage ? (
@@ -1576,6 +1643,7 @@ export function Approve({ captureId }: { captureId: string | null }) {
               ) : null}
             </div>
           ) : null}
+          {!busy && needsStorage && freeAllowed && !freeFirst ? <p className="field-helper">{FREE_NOTE}</p> : null}
         </div>
       ) : null}
       {discardDialog(pending.kind)}

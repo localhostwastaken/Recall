@@ -112,10 +112,11 @@ export async function uploadPending(captureId: unknown, mode: unknown): Promise<
   if (typeof captureId !== 'string' || !CAPTURE_ID.test(captureId)) {
     return { error: 'no pending capture with this id' };
   }
+  // Free storage is always a choice the person may make on the publish page; the settings'
+  // uploadMode is only the default suggestion (reported by getPending). Every safety rule of a
+  // free upload lives elsewhere: the gateway-copy compare and the code's tree-hash check run on
+  // the page, and only the all-zero batch is exempt from the Swarm root check.
   const settings = await loadSettings();
-  if (mode === 'free' && settings.uploadMode !== 'free') {
-    return { error: 'free storage is turned off in the extension settings' };
-  }
 
   let msg: OffscreenUpload | null = null;
   const answer = await pendingLocked(async (): Promise<UploadAnswer> => {
@@ -257,7 +258,7 @@ export async function pendingAnswer(captureId: unknown): Promise<Record<string, 
     // Whether a batch in the pool, with at least 2 days left (and deep enough for a repository
     // snapshot), can take the upload now (stamped).
     storage: (await usableBatches(settings)).some((b) => b.depth >= depthNeeded(rec)) ? 'ok' : 'empty',
-    // `free`: the settings allow the gateway's free storage (the demo fallback).
+    // The settings' upload mode: only the default suggestion. Free storage is always allowed.
     uploadMode: settings.uploadMode,
   };
 }
