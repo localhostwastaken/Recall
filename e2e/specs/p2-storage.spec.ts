@@ -55,6 +55,9 @@ test('@p2 storage buys batches for the extension stamp key', async ({ page }) =>
   // No extension in this browser, so the owner (stamp address) is pasted by hand.
   await expect(page.getByText('Recall extension not found. Install it, or set its ID in Settings.')).toBeVisible();
   await page.getByLabel('Owner address').fill(owner);
+  // Repositories (depth 18) by default; this case buys web-page batches (depth 17).
+  await expect(page.getByLabel('Web pages and GitHub repos')).toBeChecked();
+  await page.getByLabel('Web pages', { exact: true }).check();
   await page.getByLabel('Number of batches').fill('2');
   await expect(page.getByText(/2 × [\d.]+ xBZZ = [\d.]+ xBZZ \+ network fees ~[\d.]+ xDAI/)).toBeVisible();
 
@@ -265,6 +268,7 @@ test('@p2 storage shows the xBZZ it needs rounded up', async ({ page }) => {
   });
   await page.goto(`${APP}/#/storage`);
   await page.getByLabel('Owner address').fill(privateKeyToAddress(generatePrivateKey()));
+  await page.getByLabel('Web pages', { exact: true }).check(); // depth 17, as `need` below
   await page.getByLabel('Number of batches').fill('3');
   await page.getByRole('button', { name: 'Buy 3 batches' }).click();
 
@@ -584,13 +588,30 @@ test('@p2 storage hands the bought batches to the real extension pool', async ()
     await expect(page.locator('.owner-row')).toContainText('Owner (extension):');
     await expect(page.locator('.owner-row .mono-value')).toHaveAttribute('title', stamp);
 
+    // The pool line reads the extension's (empty) pool before anything is bought.
+    await expect(page.locator('.pool-status')).toHaveText('No storage yet.');
+
+    // The default size: web pages and GitHub repos (depth 18).
+    await expect(page.getByLabel('Web pages and GitHub repos')).toBeChecked();
     await page.getByLabel('Number of batches').fill('1');
     await page.getByRole('button', { name: 'Buy 1 batch' }).click();
     await expect(page.getByText('You can make 1 more capture.')).toBeVisible({ timeout: 240_000 });
+    // The purchase's last step moved MetaMask to Arkiv, so a capture needs one confirmation.
+    await expect(page.getByRole('heading', { name: 'Storage ready.' })).toBeVisible();
+    await expect(page.getByText('MetaMask is on Arkiv, so your next capture needs one confirmation.')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Switch MetaMask to Arkiv now' })).toHaveCount(0);
+    const chainId = await page.evaluate(() =>
+      (window as unknown as { ethereum: { request(a: { method: string }): Promise<string> } }).ethereum.request({
+        method: 'eth_chainId',
+      }),
+    );
+    expect(chainId).toBe('0x539'); // the local Arkiv devnet (1337)
+    await expect(page.locator('.pool-status')).toContainText('Your extension has storage: 1 batch, ends');
 
     const ids = (await page.locator('li[data-batch-id]').evaluateAll((els) => els.map((e) => e.getAttribute('data-batch-id')))) as Hex[];
     expect(ids).toHaveLength(1);
     expect(await pub.readContract({ address: POSTAGE_STAMP, abi: postageAbi, functionName: 'batchOwner', args: [ids[0]] })).toBe(stamp);
+    expect(await pub.readContract({ address: POSTAGE_STAMP, abi: postageAbi, functionName: 'batchDepth', args: [ids[0]] })).toBe(18);
 
     // The extension's pool now holds exactly that batch, unused.
     const sw = ext.context.serviceWorkers().filter((w) => w.url().includes(ext.extensionId)).pop() ?? ext.serviceWorker;
