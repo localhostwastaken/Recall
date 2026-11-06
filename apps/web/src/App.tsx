@@ -94,7 +94,7 @@ export function App() {
             Recall
           </a>
           <nav aria-label="Main" className="nav">
-            {link('#/', 'home', 'Home')}
+            {link('#/', 'home', 'Find captures')}
             {link('#/settings', 'settings', 'Settings')}
           </nav>
           <div className="header-tools">
@@ -108,7 +108,7 @@ export function App() {
       </main>
       <footer className="site-footer">
         <div className="container">
-          <p className="muted">No trackers. Verification runs in your browser. TLSNotary alpha (unaudited) · testnet.</p>
+          <p className="muted">Evidence checks run in your browser. Arkiv uses a test network. Source authenticity depends on the witness.</p>
         </div>
       </footer>
     </ToastProvider>
