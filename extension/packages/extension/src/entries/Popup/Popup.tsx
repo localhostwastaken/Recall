@@ -3,6 +3,7 @@ import { LoaderCircle, Settings as SettingsIcon } from 'lucide-react';
 import { StatusBadge } from '../../recall/ui/StatusBadge';
 import { WitnessChip, type WitnessState } from '../../recall/ui/WitnessChip';
 import { Notice } from '../../recall/ui/Notice';
+import { TechDetails } from '../../recall/ui/TechDetails';
 import { Steps, type StepState } from '../../recall/ui/Steps';
 import { CheckRow } from '../../recall/ui/CheckRow';
 import { CheckDetails } from '../../recall/ui/CheckDetails';
@@ -13,6 +14,7 @@ import { SettingsPanel } from './SettingsPanel';
 import { Onboarding } from './Onboarding';
 import { parseRepoPage, type RepoTarget } from '../../recall/gitRepo';
 import { CAPTURE_STATE_KEY, isLiveRunning, type CaptureState } from '../../recall/jobState';
+import type { WitnessWhy } from '../../recall/witness';
 import type { PopupRequest } from '../../recall/messages';
 import {
   CAPTURE_HELPER,
@@ -30,6 +32,7 @@ import {
   uploadCopy,
   verdict,
   pageBlockedReason,
+  witnessOfflineCopy,
 } from '../../recall/captureView';
 
 /** The page the popup acts on. `?tab=<id>` picks a tab explicitly (used by tests). */
@@ -194,6 +197,8 @@ function useNow(on: boolean): number {
 export function Popup() {
   const [page, setPage] = useState<PageInfo | null | undefined>(undefined);
   const [witness, setWitness] = useState<WitnessState>('checking');
+  // Why the witness is not online (a timeout reads as the network, a wrong signer as security).
+  const [witnessWhy, setWitnessWhy] = useState<WitnessWhy | undefined>(undefined);
   const [copied, setCopied] = useState(false);
   const [view, setView] = useState<'main' | 'settings'>('main');
   const job = useCaptureState();
@@ -211,10 +216,15 @@ export function Popup() {
   // settings URL; online needs /info within 2 s from a pinned signer.
   const probeWitness = useCallback(() => {
     send({ type: 'recall.witnessStatus' })
-      .then((r) =>
-        setWitness((r as { online?: boolean } | undefined)?.online ? 'online' : 'offline'),
-      )
-      .catch(() => setWitness('offline'));
+      .then((r) => {
+        const status = r as { online?: boolean; why?: WitnessWhy } | undefined;
+        setWitness(status?.online ? 'online' : 'offline');
+        setWitnessWhy(status?.online ? undefined : status?.why);
+      })
+      .catch(() => {
+        setWitness('offline');
+        setWitnessWhy(undefined);
+      });
   }, []);
   const checkWitness = useCallback(() => {
     setWitness('checking');
@@ -269,8 +279,7 @@ export function Popup() {
   else if (repo?.status === 'error')
     disabledReason = `Couldn't read this repository from GitHub: ${repo.error.replace(/\.+$/, '')}.`;
   else if (witness === 'checking') disabledReason = 'Checking the witness…';
-  else if (witness === 'offline')
-    disabledReason = 'The witness is offline, so new captures are paused.';
+  else if (witness === 'offline') disabledReason = witnessOfflineCopy(witnessWhy).helper;
   const busy = Boolean(running && mine);
   const helper =
     disabledReason ?? (repo?.status === 'ok' ? repoSubline(repo.target.branch) : CAPTURE_HELPER);
@@ -413,8 +422,7 @@ export function Popup() {
                     </>
                   }
                 >
-                  New captures are paused until the witness is back. Existing captures can still be
-                  verified by anyone.
+                  {witnessOfflineCopy(witnessWhy).body}
                 </Notice>
               </section>
             ) : capturable ? (
@@ -624,6 +632,7 @@ function CaptureError({
       actions={copy.actions.length ? copy.actions.map((a) => buttons[a]) : undefined}
     >
       {copy.body}
+      {copy.detail ? <TechDetails text={copy.detail} /> : null}
     </Notice>
   );
 }

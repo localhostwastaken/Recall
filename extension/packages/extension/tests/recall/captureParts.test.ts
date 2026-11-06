@@ -199,13 +199,46 @@ describe('failure classification', () => {
     );
   });
 
-  it('maps an unreachable witness and a too-large page', () => {
-    expect(classifyFailure(new Error('WebSocket connection failed'), null).code).toBe(
-      'witness_offline',
-    );
+  it('maps a too-large page', () => {
     expect(classifyFailure(null, 'recall: maxRecvData too large (limit 65536)').code).toBe(
       'too_large',
     );
+  });
+
+  it('maps a connection that failed under a capture to network, keeping the raw reason', () => {
+    // The witness answered /info moments before, so this is the connection, not a gone witness.
+    expect(classifyFailure(new Error('WebSocket connection failed'), null)).toEqual({
+      error: 'WebSocket connection failed',
+      code: 'network',
+    });
+    expect(classifyFailure(new Error('the witness closed the session before registering it'), null).code).toBe(
+      'network',
+    );
+    // The MPC setup timeout of the worker (90 s), and the later request and response timeouts.
+    for (const raw of [
+      'setupProver timed out after 90000ms for prover-1',
+      'sendRequest timed out after 60000ms for prover-1',
+      'Verification response timed out after 60000ms for prover: prover-1',
+      'the witness closed the session without a result',
+    ]) {
+      expect(classifyFailure(new Error(raw), null)).toEqual({ error: raw, code: 'network' });
+    }
+    expect(classifyFailure(new Error('reveal failed'), 'the witness closed the session without a result')).toEqual({
+      error: 'the witness closed the session without a result (reveal failed)',
+      code: 'network',
+    });
+  });
+
+  it('never calls a verdict, a size problem or a failed check a network problem', () => {
+    // A witness verdict wins, even when the prover's text also says it timed out.
+    expect(
+      classifyFailure(new Error('setupProver timed out after 90000ms'), 'recall: cookies/auth not allowed'),
+    ).toEqual({ error: 'recall: cookies/auth not allowed', code: 'failed' });
+    expect(classifyFailure(new Error('the witness signed a different nonce'), null).code).toBe('failed');
+    expect(classifyFailure(new Error('the witness returned no signature'), null).code).toBe('failed');
+    expect(classifyFailure(new Error('Prover not found: prover-1'), null).code).toBe('failed');
+    // tls and too-large keep their own codes.
+    expect(classifyFailure(new Error('peer sent an alert: handshake failure'), null).code).toBe('tls');
   });
 
   it("maps tlsn's receive-limit overflow to too large (no pre-check without host access)", () => {

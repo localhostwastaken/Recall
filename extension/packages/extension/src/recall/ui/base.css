@@ -440,6 +440,24 @@ progress {
   font-size: var(--text-xs);
 }
 
+/* A raw error text behind a small "Details" disclosure (a network failure's notice). */
+.tech-details {
+  margin-top: var(--space-2);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+  color: var(--text-muted);
+}
+
+.tech-details > summary {
+  cursor: pointer;
+  color: var(--accent);
+}
+
+.tech-details > p {
+  margin-top: var(--space-1);
+  overflow-wrap: anywhere;
+}
+
 /* Checks summary: one line with a badge per check; the rows open below it ("Show details"). */
 .checks-summary-row {
   display: flex;

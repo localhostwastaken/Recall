@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { WITNESS_CHECK_TIMEOUT_MS, witnessOnline } from '../../src/recall/witness';
+import { WITNESS_CHECK_TIMEOUT_MS, probeWitness, witnessOnline } from '../../src/recall/witness';
 
 // The live witness sits behind a Cloudflare quick tunnel: its first /info from a browser took
 // ~2 s (DNS, TLS, the tunnel hop), which a 2 s probe called "offline". The probe allows longer.
@@ -46,5 +46,37 @@ describe('witnessOnline', () => {
         '0x0000000000000000000000000000000000000001',
       ]),
     ).resolves.toBe(false);
+  });
+});
+
+describe('probeWitness: why a witness is not online', () => {
+  it('a /info that does not answer in time is a timeout (the network)', async () => {
+    vi.stubGlobal('fetch', slowWitness(1_000));
+    await expect(probeWitness('https://w.trycloudflare.com', 200, [SIGNER])).resolves.toEqual({
+      ok: false,
+      why: 'timeout',
+    });
+  });
+
+  it('an answer for a key that is not pinned is a wrong signer, never a timeout', async () => {
+    vi.stubGlobal('fetch', slowWitness(0));
+    await expect(
+      probeWitness('https://w.trycloudflare.com', undefined, ['0x0000000000000000000000000000000000000001']),
+    ).resolves.toEqual({ ok: false, why: 'wrong_signer' });
+  });
+
+  it('a refused connection, a bad answer and no URL are unreachable', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch'); }));
+    await expect(probeWitness('https://w.trycloudflare.com', undefined, [SIGNER])).resolves.toEqual({ ok: false, why: 'unreachable' });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('bad gateway', { status: 502 })));
+    await expect(probeWitness('https://w.trycloudflare.com', undefined, [SIGNER])).resolves.toEqual({ ok: false, why: 'unreachable' });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ signer: 'nope' }), { status: 200 })));
+    await expect(probeWitness('https://w.trycloudflare.com', undefined, [SIGNER])).resolves.toEqual({ ok: false, why: 'unreachable' });
+    await expect(probeWitness(undefined)).resolves.toEqual({ ok: false, why: 'unreachable' });
+  });
+
+  it('an online witness', async () => {
+    vi.stubGlobal('fetch', slowWitness(0));
+    await expect(probeWitness('https://w.trycloudflare.com', undefined, [SIGNER])).resolves.toEqual({ ok: true });
   });
 });

@@ -13,6 +13,10 @@ import {
   plainReason,
   uploadCopy,
   verdict,
+  witnessOfflineCopy,
+  NETWORK_BODY,
+  NETWORK_TITLE,
+  WITNESS_TIMEOUT_HINT,
 } from '../../src/recall/captureView';
 import type { CheckSummary } from '../../src/recall/jobState';
 
@@ -119,6 +123,63 @@ describe('capture view copy', () => {
     expect(plainReason('the witness returned no signature')).toBe(
       'The witness returned no signature',
     );
+  });
+
+  it('a network failure says so, with the real reason behind Details and one way forward', () => {
+    expect(NETWORK_TITLE).toBe('Your connection is too slow or unstable for a capture');
+    expect(NETWORK_BODY).toBe(
+      "A capture sends about 80 MB to the witness and has to finish within about a minute. This network couldn't keep up. Nothing was saved or charged. Try again on a stronger connection (a phone hotspot usually works).",
+    );
+    const raw = 'setupProver timed out after 90000ms for prover-1';
+    expect(errorCopy('network', raw, 'a.example')).toEqual({
+      kind: 'warn',
+      title: NETWORK_TITLE,
+      body: NETWORK_BODY,
+      detail: raw,
+      actions: ['retry'],
+    });
+    // A job-level failure whose text says the network failed gets the same copy.
+    expect(errorCopy('failed', 'the code did not download within 60 s', 'github.com')).toMatchObject({
+      title: NETWORK_TITLE,
+      detail: 'the code did not download within 60 s',
+    });
+  });
+
+  it('real verification failures are never relabelled as network problems', () => {
+    for (const [code, error] of [
+      ['failed', 'recall: cookies/auth not allowed'],
+      ['failed', 'recall: prover did not connect in time'],
+      ['failed', 'the witness signed a different nonce'],
+      ['failed', 'the evidence could not be checked: the checks did not finish within 15 s'],
+      ['failed', "The repository snapshot doesn't match the commit GitHub reported"],
+      ['failed', "GitHub's answer couldn't be read"],
+      ['too_large', 'page too large (98.2 KB > 64 KB)'],
+      ['tls', 'peer sent an alert: handshake failure'],
+      ['busy', 'recall: witness busy, try again shortly'],
+    ] as const) {
+      const c = errorCopy(code, error, 'a.example');
+      expect(c.title, `${code}: ${error}`).not.toBe(NETWORK_TITLE);
+      expect(c.detail).toBeUndefined();
+    }
+    expect(errorCopy('failed', 'recall: host mismatch', 'a.example').body).toBe(
+      'The witness refused this capture: host mismatch. Nothing was published.',
+    );
+  });
+
+  it('the witness hint: a timeout reads as the network, a wrong signer stays a security message', () => {
+    expect(WITNESS_TIMEOUT_HINT).toBe("Can't reach the witness from this network. Check your connection or try a hotspot.");
+    expect(witnessOfflineCopy('timeout')).toEqual({ helper: WITNESS_TIMEOUT_HINT, body: WITNESS_TIMEOUT_HINT });
+    const security = witnessOfflineCopy('wrong_signer');
+    expect(security.helper).toMatch(/isn't one you trust/);
+    expect(security.body).toMatch(/signs with a key that isn't in your trusted list/);
+    expect(security.helper + security.body).not.toMatch(/network|connection|hotspot/i);
+    // Anything else keeps the existing text.
+    for (const why of [undefined, 'unreachable'] as const) {
+      expect(witnessOfflineCopy(why)).toEqual({
+        helper: 'The witness is offline, so new captures are paused.',
+        body: 'New captures are paused until the witness is back. Existing captures can still be verified by anyone.',
+      });
+    }
   });
 
   it('busy witness: retry, not a failure', () => {

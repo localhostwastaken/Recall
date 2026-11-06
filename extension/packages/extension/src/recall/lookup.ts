@@ -5,7 +5,7 @@ import type { Hex } from 'viem';
 import { canonicalUrl, urlHash } from '@recall/evidence';
 import { ensureOffscreen } from './offscreen';
 import { isWitnessUrl, loadSettings, netConfigFor } from './settings';
-import { witnessOnline } from './witness';
+import { probeWitness, witnessOnline, type WitnessWhy } from './witness';
 import { captureTarget, withTimeout } from './captureParts';
 import { approveUrl, timelineUrl, type EarlierCaptures } from './captureView';
 import { focusOrOpenApproveTab } from './appTabs';
@@ -42,7 +42,8 @@ async function askOffscreen<T>(msg: Ask): Promise<T> {
   }
 }
 
-export type WitnessStatus = { url?: string; online: boolean };
+/** `why`: for a witness that is not online, the reason the popup words its hint by. */
+export type WitnessStatus = { url?: string; online: boolean; why?: WitnessWhy };
 
 /**
  * Whether an announced witness URL may be used: https, or plain http only for this machine
@@ -88,15 +89,24 @@ export async function resolveWitness(opts: { fresh?: boolean } = {}): Promise<Wi
     if (res && 'url' in res && announcedUrlAllowed(res.url)) candidates.push(res.url);
   }
   if (s.witnessUrl && !candidates.includes(s.witnessUrl)) candidates.push(s.witnessUrl);
+  const whys: WitnessWhy[] = [];
   for (const url of candidates) {
-    if (await witnessOnline(url, undefined, s.pinnedWitnesses)) {
+    const probe = await probeWitness(url, undefined, s.pinnedWitnesses);
+    if (probe.ok) {
       const status = { url, online: true };
       cached = { key, at: Date.now(), status };
       return status;
     }
+    whys.push(probe.why);
   }
   cached = null;
-  return { ...(candidates[0] ? { url: candidates[0] } : {}), online: false };
+  // A wrong signer is a security matter and wins over a timeout, which only hints at the network.
+  const why: WitnessWhy = whys.includes('wrong_signer')
+    ? 'wrong_signer'
+    : whys.includes('timeout')
+      ? 'timeout'
+      : 'unreachable';
+  return { ...(candidates[0] ? { url: candidates[0] } : {}), online: false, why };
 }
 
 /**

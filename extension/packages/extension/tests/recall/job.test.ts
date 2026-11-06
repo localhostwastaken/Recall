@@ -56,6 +56,18 @@ describe('starting a capture (fail closed on the witness)', () => {
     expect(offscreenCaptures()).toHaveLength(0);
   });
 
+  it('a witness whose /info timed out ends as a network failure, not "witness offline"', async () => {
+    witnessForCapture.mockResolvedValue({ url: 'http://localhost:7047', online: false, why: 'timeout' });
+    await startCapture('https://notice.recall.test/notice');
+    expect(await readCaptureState()).toMatchObject({ status: 'error', code: 'network' });
+    expect(offscreenCaptures()).toHaveLength(0);
+    // A wrong signer stays "witness offline": it is never worded as a connection problem.
+    session.clear();
+    witnessForCapture.mockResolvedValue({ url: 'http://localhost:7047', online: false, why: 'wrong_signer' });
+    await startCapture('https://notice.recall.test/notice');
+    expect(await readCaptureState()).toMatchObject({ status: 'error', code: 'witness_offline' });
+  });
+
   it('no witness URL at all: witness offline too', async () => {
     witnessForCapture.mockResolvedValue({ online: false });
     await startCapture('https://notice.recall.test/notice');

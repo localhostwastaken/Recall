@@ -13,6 +13,7 @@ import {
   arkivWallet,
   costFor,
   isFreeBatch,
+  isLikelyNetworkFailure,
   listAttachments,
   listByUrl,
   swarmRootOf,
@@ -41,6 +42,7 @@ import { ExhibitCard } from '../components/ExhibitCard';
 import { CommitId } from '../components/RepoSnapshot';
 import { downloadEvidence } from '../download';
 import { errorText, shortErrorText } from '../errors';
+import { UPLOAD_NETWORK_COPY, publishNetworkCopy } from '../networkCopy';
 import { ExtError, addBatches, ext, extensionIdFromLink, getStampAddress } from '../ext';
 import { formatBytes, formatBzzCeil, formatDay, formatUtc } from '../format';
 import { saveSettingsChecked } from '../settings';
@@ -174,7 +176,8 @@ type Publish =
   | { state: 'signing' }
   | { state: 'publishing' }
   | { state: 'rejected' }
-  | { state: 'failed'; reason: string; technical?: string }
+  /** `network`: the failure came from the network; `sent`: the wallet had already sent the transaction. */
+  | { state: 'failed'; reason: string; technical?: string; network?: { sent: boolean } }
   | { state: 'published'; entityKey: Hex; attachmentKey?: Hex; until: Date | null; markError?: string };
 
 const reasonOf = (e: unknown) => shortErrorText(e).split('\n')[0];
@@ -640,6 +643,9 @@ export function Approve({ captureId }: { captureId: string | null }) {
   /** Another tab of this app holds this capture's publish lock. */
   const [otherTab, setOtherTab] = useState(false);
   const followed = useRef(false);
+  // The wallet sent a publish transaction at some point: a network failure since then may have
+  // written the record, so the page never says "nothing was written" after that.
+  const txSent = useRef(false);
   const dialog = useRef<HTMLDialogElement>(null);
   const opener = useRef<HTMLElement | null>(null);
   const openDiscard = useCallback((e: MouseEvent<HTMLElement>) => {
@@ -763,7 +769,10 @@ export function Approve({ captureId }: { captureId: string | null }) {
         const watched = custom({
           async request(args: { method: string; params?: unknown }) {
             const res = await provider.request(args);
-            if (args.method === 'eth_sendTransaction') setPublish({ state: 'publishing' });
+            if (args.method === 'eth_sendTransaction') {
+              txSent.current = true;
+              setPublish({ state: 'publishing' });
+            }
             return res;
           },
         });
@@ -833,6 +842,9 @@ export function Approve({ captureId }: { captureId: string | null }) {
             reason: 'Another record from this account was written at the same moment, so the code record must be written again. Try again: the capture is kept',
             technical: errorText(e),
           });
+        } else if (isLikelyNetworkFailure(e)) {
+          // A timeout or a dropped connection, not a refusal: say so, and say what is true about the record.
+          setPublish({ state: 'failed', reason: sentence(reasonOf(e)), technical: errorText(e), network: { sent: txSent.current } });
         } else setPublish({ state: 'failed', reason: sentence(reasonOf(e)), technical: errorText(e) });
       }
     },
@@ -934,6 +946,10 @@ export function Approve({ captureId }: { captureId: string | null }) {
   const codeSize = ready?.repo?.summary.size;
   const uploadFailed = useCallback((how: SaveHow, e: unknown): Save => {
     const why = sentence(reasonOf(e));
+    // A slow or dropped connection comes first: whatever the storage, the way forward is the same.
+    if (isLikelyNetworkFailure(e)) {
+      return { state: 'error', how, stage: 'upload', ...UPLOAD_NETWORK_COPY, technical: errorText(e) };
+    }
     // The gateway's free storage may refuse a big file (a repository snapshot is up to 25 MB):
     // say so and point at paid storage. The person decides; nothing retries by itself.
     if (how === 'free' && (codeSize !== undefined || /\b413\b|too (large|big)|payload|size limit|limit/i.test(why))) {
@@ -1585,8 +1601,8 @@ export function Approve({ captureId }: { captureId: string | null }) {
       ) : null}
       {publish.state === 'failed' ? (
         <Notice
-          kind="error"
-          title="Publishing failed"
+          kind={publish.network ? 'warn' : 'error'}
+          title={publish.network ? publishNetworkCopy(publish.network.sent).title : 'Publishing failed'}
           focus
           actions={
             <button type="button" className="btn btn-secondary" onClick={publishNow}>
@@ -1594,7 +1610,7 @@ export function Approve({ captureId }: { captureId: string | null }) {
             </button>
           }
         >
-          {publish.reason}. Your capture is still pending.
+          {publish.network ? publishNetworkCopy(publish.network.sent).body : `${publish.reason}. Your capture is still pending.`}
           {publish.technical ? <TechnicalDetails text={publish.technical} /> : null}
         </Notice>
       ) : null}

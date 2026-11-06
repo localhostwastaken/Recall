@@ -6,6 +6,8 @@ import type { NoticeKind } from './ui/Notice';
 import { middle } from './ui/MonoValue';
 import { captureTarget, formatSize, type CaptureErrorCode } from './captureParts';
 import type { CheckSummary, UploadState } from './jobState';
+import { isLikelyNetworkFailure } from './errors';
+import type { WitnessWhy } from './witness';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -189,10 +191,43 @@ export type ErrorCopy = {
   kind: NoticeKind;
   title: string;
   body?: string;
+  /** The raw reason, shown behind a small "Details" disclosure. */
+  detail?: string;
   actions: ('ok' | 'retry' | 'witnessSettings' | 'copy')[];
 };
 
 const NOTHING = 'Nothing was published.';
+
+/** A capture that failed because the network was too slow or broke (never a failed check). */
+export const NETWORK_TITLE = 'Your connection is too slow or unstable for a capture';
+export const NETWORK_BODY =
+  "A capture sends about 80 MB to the witness and has to finish within about a minute. This network couldn't keep up. Nothing was saved or charged. Try again on a stronger connection (a phone hotspot usually works).";
+
+/** The witness is not reachable from this network (its /info check timed out). */
+export const WITNESS_TIMEOUT_HINT =
+  "Can't reach the witness from this network. Check your connection or try a hotspot.";
+
+/**
+ * The hint for a witness that is not online, by why: a timeout is the network; a wrong signer
+ * stays a security message (it is never worded as a connection problem); anything else is the
+ * plain "offline" text.
+ */
+export function witnessOfflineCopy(why?: WitnessWhy): { helper: string; body: string } {
+  switch (why) {
+    case 'timeout':
+      return { helper: WITNESS_TIMEOUT_HINT, body: WITNESS_TIMEOUT_HINT };
+    case 'wrong_signer':
+      return {
+        helper: "The witness at this address isn't one you trust, so new captures are paused.",
+        body: "A server answered at the witness address, but it signs with a key that isn't in your trusted list. New captures are paused. Check the witness address and your trusted witnesses in Settings.",
+      };
+    default:
+      return {
+        helper: 'The witness is offline, so new captures are paused.',
+        body: 'New captures are paused until the witness is back. Existing captures can still be verified by anyone.',
+      };
+  }
+}
 
 /** Error notices (design brief 4.1). Every error that stops a capture ends with "Nothing was published." */
 export function errorCopy(
@@ -201,6 +236,17 @@ export function errorCopy(
   host: string,
   size?: number,
 ): ErrorCopy {
+  // A failure the job could not name but whose own text says the network failed. A witness
+  // verdict, a failed check or a mismatch is never relabelled (isLikelyNetworkFailure).
+  if (code === 'network' || (code === 'failed' && isLikelyNetworkFailure(error))) {
+    return {
+      kind: 'warn',
+      title: NETWORK_TITLE,
+      body: NETWORK_BODY,
+      ...(error.trim() ? { detail: error.trim() } : {}),
+      actions: ['retry'],
+    };
+  }
   switch (code) {
     case 'too_large':
       return {

@@ -21,6 +21,7 @@ import { ensureOffscreen } from './offscreen';
 import { newCaptureId, savePending, type PendingRecord } from './pending';
 import { latestVerifiedCapture, openApproveTab, witnessForCapture } from './lookup';
 import { canonicalEvidence, uploadGate } from './uploadParts';
+import { isLikelyNetworkFailure } from './errors';
 import {
   MAX_RECV_DATA,
   withTimeout,
@@ -113,7 +114,9 @@ function failure(base: Base, error: string, code: CaptureErrorCode, size?: numbe
     status: 'error',
     finishedAt: Date.now(),
     error,
-    code,
+    // A plain failure whose own text says the network failed (GitHub unreachable, a code
+    // download that timed out) is a network failure; every other code is kept as it is.
+    code: code === 'failed' && isLikelyNetworkFailure(error) ? 'network' : code,
     ...(size !== undefined ? { size } : {}),
   };
 }
@@ -167,7 +170,13 @@ export async function startCapture(
       return { id: base.id };
     }
     if (!witness.online) {
-      await finish(failure(base, 'the witness is offline', 'witness_offline'));
+      // The witness did not answer /info in time: the network, not the witness (a wrong signer
+      // or a refused connection stays "witness offline").
+      if (witness.why === 'timeout') {
+        await finish(failure(base, 'the witness did not answer in time (its /info check timed out)', 'network'));
+      } else {
+        await finish(failure(base, 'the witness is offline', 'witness_offline'));
+      }
       return { id: base.id };
     }
     // Storage is chosen after the capture, in the publish tab: nothing here depends on the pool.

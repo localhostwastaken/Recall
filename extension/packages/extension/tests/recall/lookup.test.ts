@@ -97,10 +97,28 @@ describe('witness discovery', () => {
   it('offline when no candidate answers as a pinned witness; a bad announced URL is ignored', async () => {
     sendMessage.mockResolvedValue({ url: 'javascript:alert(1)' });
     witnesses({ 'http://localhost:7047': OTHER });
-    expect(await resolveWitness({ fresh: true })).toEqual({ url: 'http://localhost:7047', online: false });
+    expect(await resolveWitness({ fresh: true })).toEqual({ url: 'http://localhost:7047', online: false, why: 'wrong_signer' });
     sendMessage.mockRejectedValue(new Error('offscreen gone'));
     witnesses({});
-    expect(await resolveWitness({ fresh: true })).toEqual({ url: 'http://localhost:7047', online: false });
+    expect(await resolveWitness({ fresh: true })).toEqual({ url: 'http://localhost:7047', online: false, why: 'unreachable' });
+  });
+
+  it('says why a witness is offline: a timeout is the network, a wrong signer is security and wins', async () => {
+    // `/info` of the listed URLs times out (as fetch reports it); the others answer for OTHER.
+    const timesOut = (...urls: string[]) =>
+      vi.fn(async (u: URL | string) => {
+        if (urls.includes(String(u).replace(/\/info$/, ''))) throw new DOMException('signal timed out', 'TimeoutError');
+        return new Response(JSON.stringify({ signer: OTHER }), { status: 200 });
+      });
+    // Nothing answers in time: the network.
+    sendMessage.mockResolvedValue({ url: null });
+    vi.stubGlobal('fetch', timesOut('http://localhost:7047'));
+    expect(await resolveWitness({ fresh: true })).toEqual({ url: 'http://localhost:7047', online: false, why: 'timeout' });
+    // One candidate timed out, the other answered for a key that is not pinned: a security matter.
+    sendMessage.mockResolvedValue({ url: 'https://tunnel.example' });
+    vi.stubGlobal('fetch', timesOut('https://tunnel.example'));
+    expect(await resolveWitness({ fresh: true })).toEqual({ url: 'https://tunnel.example', online: false, why: 'wrong_signer' });
+    vi.unstubAllGlobals();
   });
 
   it('with nothing pinned, the settings URL and any signer (dev default)', async () => {
@@ -129,8 +147,8 @@ describe('the witness for a new capture (fail closed)', () => {
   it('is the resolved one, offline included (an offline result is never cached)', async () => {
     sendMessage.mockResolvedValue({ url: null });
     witnesses({});
-    expect(await resolveWitness({ fresh: true })).toEqual({ url: 'http://localhost:7047', online: false });
-    expect(await witnessForCapture()).toEqual({ url: 'http://localhost:7047', online: false });
+    expect(await resolveWitness({ fresh: true })).toEqual({ url: 'http://localhost:7047', online: false, why: 'unreachable' });
+    expect(await witnessForCapture()).toEqual({ url: 'http://localhost:7047', online: false, why: 'unreachable' });
   });
 
   it('when the lookup itself fails, still checks the settings URL against the pinned list', async () => {

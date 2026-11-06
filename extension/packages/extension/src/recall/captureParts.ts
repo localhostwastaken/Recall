@@ -7,6 +7,7 @@ import {
   pageAddress,
   type EvidenceFile,
 } from '@recall/evidence';
+import { isLikelyNetworkFailure } from './errors';
 
 export { CAPTURE_USER_AGENT };
 
@@ -44,6 +45,8 @@ export type CaptureErrorCode =
   | 'witness_offline'
   | 'busy'
   | 'cancelled'
+  /** The capture failed because the network was too slow or broke (timeout, WebSocket, fetch). */
+  | 'network'
   | 'failed';
 
 export type CaptureFailure = {
@@ -257,8 +260,11 @@ export function classifyFailure(err: unknown, witnessError: string | null): Capt
     return { error: fromWitness, code: 'failed' };
   }
   const text = witnessError ? `${witnessError} (${raw})` : raw;
+  // The witness answered /info moments ago (a capture only starts against an online witness),
+  // so a WebSocket that fails or closes now is the connection, not a witness that is gone. The
+  // raw reason is kept for the popup's "Details".
   if (/WebSocket connection failed|closed the session before registering/i.test(raw)) {
-    return { error: 'the witness is offline or unreachable', code: 'witness_offline' };
+    return { error: text, code: 'network' };
   }
   // tlsn-wasm: "attempted to receive more data than was configured, increase `max_recv`".
   if (
@@ -271,5 +277,7 @@ export function classifyFailure(err: unknown, witnessError: string | null): Capt
   if (/protocol ?version|PeerIncompatible|handshake ?failure|unsupported.*tls/i.test(raw)) {
     return { error: text, code: 'tls' };
   }
+  // The MPC setup timeout (90 s), a request or response timeout, a dropped WebSocket.
+  if (isLikelyNetworkFailure(text)) return { error: text, code: 'network' };
   return { error: text, code: 'failed' };
 }
