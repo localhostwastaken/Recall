@@ -7,6 +7,7 @@ import { sha256, type Hex } from 'viem';
 import vector from './vectors/statement-v1.json';
 import { CAPTURE_TYPES, WITNESS_DOMAIN, type Statement } from '../src/statement';
 import { buildEvidence, type EvidenceFile } from '../src/evidence';
+import { CAPTURE_REQUEST_HEADERS } from '../src/request';
 
 export const FIXTURE_HOST = 'notice.recall.test';
 const CA = fs.readFileSync(
@@ -15,11 +16,10 @@ const CA = fs.readFileSync(
 
 export type Recording = { sent: Uint8Array; recv: Uint8Array };
 
-/** The exact request bytes a Recall capture sends (GET, identity encoding, no cookies). */
+/** The exact request bytes a Recall capture sends: GET, Host and the fixed headers (R20, R26), no cookies. */
 export function requestBytes(target: string, host = FIXTURE_HOST): Uint8Array {
-  return new TextEncoder().encode(
-    `GET ${target} HTTP/1.1\r\nHost: ${host}\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n`,
-  );
+  const fixed = Object.entries(CAPTURE_REQUEST_HEADERS).map(([k, v]) => `${k}: ${v}`);
+  return new TextEncoder().encode([`GET ${target} HTTP/1.1`, `Host: ${host}`, ...fixed, '', ''].join('\r\n'));
 }
 
 /** Sends `sent` to the local notice fixture over TLS 1.2 and collects every byte received. */

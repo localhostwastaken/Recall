@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ALLOWED_REQUEST_HEADERS } from '@recall/evidence';
+import { ALLOWED_REQUEST_HEADERS, CAPTURE_REQUEST_HEADERS } from '@recall/evidence';
 import {
   CAPTURE_HANDLERS,
   CAPTURE_USER_AGENT,
@@ -24,6 +24,9 @@ describe('capture request', () => {
     expect(h['Accept-Encoding']).toBe('identity');
     expect(h.Connection).toBe('close');
     expect(h['Accept-Language']).toBe('en-US,en;q=0.9');
+    // Exactly the values check B pins (one source for both, in @recall/evidence).
+    const { Host: _host, ...fixed } = h;
+    expect(fixed).toEqual(CAPTURE_REQUEST_HEADERS);
   });
 
   it('sends the fixed User-Agent, never the browser one (R26: evidence is public)', () => {
@@ -48,6 +51,16 @@ describe('capture request', () => {
     expect(captureTarget('https://a.example:8443/')).toMatchObject({ code: 'failed' });
     expect(captureTarget('not a url')).toMatchObject({ code: 'failed' });
     expect(captureTarget('https://u:p@a.example/')).toMatchObject({ code: 'failed' });
+    expect(captureTarget('http://a.example/')).toEqual({
+      error: 'only https:// pages can be captured',
+      code: 'failed',
+    });
+  });
+
+  it('drops a bare trailing "?" (the prover sends the path without it)', () => {
+    expect((captureTarget('https://a.example/p?') as URL).href).toBe('https://a.example/p');
+    expect((captureTarget('https://a.example/p?#x') as URL).href).toBe('https://a.example/p');
+    expect((captureTarget('https://a.example/p?q=1') as URL).href).toBe('https://a.example/p?q=1');
   });
 
   it('drops a trailing dot in the host (the witness signs the name without it)', () => {

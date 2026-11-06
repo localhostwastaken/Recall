@@ -1,7 +1,14 @@
 // Pure parts of a capture (no prover, no chrome APIs), so they can be unit tested.
 import type { Commit } from 'tlsn-wasm';
 import type { Handler } from '@tlsn/plugin-sdk';
-import type { EvidenceFile } from '@recall/evidence';
+import {
+  CAPTURE_REQUEST_HEADERS,
+  CAPTURE_USER_AGENT,
+  pageAddress,
+  type EvidenceFile,
+} from '@recall/evidence';
+
+export { CAPTURE_USER_AGENT };
 
 /** Request bytes the prover may send (the witness allows up to 4096). */
 export const MAX_SENT_DATA = 4096;
@@ -50,51 +57,29 @@ export type CaptureOutcome = { evidence: EvidenceFile } | CaptureFailure;
 
 export type CaptureStep = 1 | 2 | 3;
 
-/** The capture target: https only, port 443 (the witness proxy dials only 443). */
+/**
+ * The capture target: https only, port 443 (the witness proxy dials only 443). The same parse as
+ * the app's search and `pnpm arkiv:query` (`pageAddress` in @recall/evidence), so a capture is
+ * found under the address it was made from.
+ */
 export function captureTarget(raw: string): URL | CaptureFailure {
-  let u: URL;
   try {
-    u = new URL(raw);
-  } catch {
-    return { error: 'this is not a web address', code: 'failed' };
+    return pageAddress(raw);
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : 'this is not a web address', code: 'failed' };
   }
-  if (u.protocol !== 'https:')
-    return { error: 'only https:// pages can be captured', code: 'failed' };
-  if (u.port !== '' && u.port !== '443') {
-    return { error: 'only pages on the standard https port (443) can be captured', code: 'failed' };
-  }
-  if (u.username || u.password)
-    return { error: 'addresses with a user name or password cannot be captured', code: 'failed' };
-  // "example.org." is the same name as "example.org"; the witness signs the name
-  // without the trailing dot, so the request and the statement use that form.
-  if (u.hostname.endsWith('.')) u.hostname = u.hostname.replace(/\.+$/, '');
-  if (!u.hostname || u.hostname.endsWith('.'))
-    return { error: 'this is not a web address', code: 'failed' };
-  u.hash = '';
-  return u;
 }
 
 /**
- * The User-Agent every capture sends (ruling R26). Evidence is public and permanent,
- * so it must not carry the capturer's real browser and OS version; one fixed,
- * common desktop string also keeps captures by different people comparable.
- */
-export const CAPTURE_USER_AGENT =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
-
-/**
- * The request headers (ruling R20): only Host, Accept, Accept-Encoding: identity,
- * Accept-Language, User-Agent and Connection. No cookies, no auth, no Range. All
- * values are fixed, so nothing about the capturer's browser leaks into the evidence.
+ * The request headers (ruling R20): Host plus the fixed CAPTURE_REQUEST_HEADERS from
+ * @recall/evidence (Accept, Accept-Encoding: identity, Accept-Language, the R26 User-Agent,
+ * Connection), the exact values check B demands. No cookies, no auth, no Range, nothing about
+ * the capturer's browser.
  */
 export function requestHeaders(target: URL, overrides?: CaptureOverrides): Record<string, string> {
   return {
     Host: overrides?.hostHeader ?? target.hostname,
-    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf;q=0.9,*/*;q=0.8',
-    'Accept-Encoding': 'identity',
-    'Accept-Language': 'en-US,en;q=0.9',
-    'User-Agent': CAPTURE_USER_AGENT,
-    Connection: 'close',
+    ...CAPTURE_REQUEST_HEADERS,
     ...overrides?.extraHeaders,
   };
 }

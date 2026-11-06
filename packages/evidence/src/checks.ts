@@ -2,6 +2,7 @@ import { sha256, type Address, type Hex } from 'viem';
 import { recoverWitness, statementFromJson, type Statement } from './statement';
 import { headerValue, headerValues, parseRequest, parseResponse } from './http';
 import { canonicalUrl, urlHash } from './url';
+import { CAPTURE_REQUEST_HEADERS } from './request';
 import { base64ToBytes, type EvidenceFile } from './evidence';
 
 export type CheckResult = { status: 'pass' | 'fail' | 'warn' | 'unavailable'; detail: string };
@@ -37,7 +38,7 @@ export type CheckReport = {
  * Request headers a capture may send (ruling R20). Anything else could change
  * WHAT the server returns (Range, If-*, X-Original-URL, X-HTTP-Method-Override,
  * Forwarded, cookies, auth ...) while the evidence claims the plain URL.
- * `Accept-Encoding`, when present, must be exactly `identity`.
+ * Each one but Host must be sent once, with exactly its CAPTURE_REQUEST_HEADERS value.
  */
 export const ALLOWED_REQUEST_HEADERS = [
   'Host',
@@ -48,6 +49,27 @@ export const ALLOWED_REQUEST_HEADERS = [
   'Connection',
 ] as const;
 const ALLOWED_LOWER = new Set(ALLOWED_REQUEST_HEADERS.map((h) => h.toLowerCase()));
+/** lower-case name -> [name as written in the constant, the one allowed value] */
+const FIXED = new Map(
+  Object.entries(CAPTURE_REQUEST_HEADERS).map(([name, value]) => [name.toLowerCase(), [name, value] as const]),
+);
+
+/** Why the request's fixed headers are not exactly the ones a capture sends, or null. */
+function fixedHeaderProblem(headers: [string, string][]): string | null {
+  const seen = new Map<string, number>();
+  for (const [n, v] of headers) {
+    const fixed = FIXED.get(n.toLowerCase());
+    if (!fixed) continue;
+    if (v !== fixed[1]) return `the request ${fixed[0]} is "${v}"; a capture sends exactly "${fixed[1]}"`;
+    seen.set(fixed[0], (seen.get(fixed[0]) ?? 0) + 1);
+  }
+  for (const [name] of FIXED.values()) {
+    const n = seen.get(name) ?? 0;
+    if (n === 0) return `the request has no ${name} header; a capture always sends it`;
+    if (n > 1) return `the request sends ${name} ${n} times; a capture sends it once`;
+  }
+  return null;
+}
 
 const ok = (detail: string): CheckResult => ({ status: 'pass', detail });
 const no = (detail: string): CheckResult => ({ status: 'fail', detail });
@@ -89,8 +111,8 @@ function checkB(s: Statement, sent: Uint8Array, recv: Uint8Array): { result: Che
       ),
     };
   }
-  const enc = req.headers.find(([n, v]) => n.toLowerCase() === 'accept-encoding' && v.toLowerCase() !== 'identity');
-  if (enc) return { result: no(`the request Accept-Encoding is ${enc[1]}, it must be identity`) };
+  const fixed = fixedHeaderProblem(req.headers);
+  if (fixed) return { result: no(fixed) };
   if (req.host.toLowerCase() !== s.serverName.toLowerCase()) {
     return { result: no(`Host ${req.host} does not match the signed server name ${s.serverName}`) };
   }
@@ -155,8 +177,8 @@ async function checkC(
 /**
  * Runs the offline checks on an evidence file.
  * A: transcript hashes and lengths match the statement. B: the request (only
- * allowlisted headers) and response (whole, not 206) are well-formed and
- * consistent with the signed server name.
+ * allowlisted headers, each fixed one with its one value) and response (whole,
+ * not 206) are well-formed and consistent with the signed server name.
  * C: the EIP-712 signature recovers to the stated signer, who is pinned (else
  * `warn`). D: a user-held file's hash equals the captured body's.
  * `facts` is present only if A and B pass and C is not a failure.

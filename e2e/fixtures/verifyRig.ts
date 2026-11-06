@@ -7,6 +7,7 @@ import { createWalletClient, http, parseEther, sha256, type Address, type Hex } 
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { gnosis } from 'viem/chains';
 import {
+  CAPTURE_REQUEST_HEADERS,
   CAPTURE_TYPES,
   WITNESS_DOMAIN,
   buildEvidence,
@@ -42,11 +43,10 @@ const CA = readFileSync(
 
 export type Recording = { sent: Uint8Array; recv: Uint8Array };
 
-/** The exact request bytes a Recall capture sends (GET, identity encoding, no cookies). */
+/** The exact request bytes a Recall capture sends: GET, Host and the fixed headers check B pins, no cookies. */
 export function requestBytes(target: string): Uint8Array {
-  return new TextEncoder().encode(
-    `GET ${target} HTTP/1.1\r\nHost: ${NOTICE_HOST}\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n`,
-  );
+  const fixed = Object.entries(CAPTURE_REQUEST_HEADERS).map(([k, v]) => `${k}: ${v}\r\n`).join('');
+  return new TextEncoder().encode(`GET ${target} HTTP/1.1\r\nHost: ${NOTICE_HOST}\r\n${fixed}\r\n`);
 }
 
 /** Sends the request to the notice fixture over TLS 1.2 and collects every response byte. */

@@ -32,3 +32,52 @@ export function canonicalUrl(raw: string): string {
 }
 
 export const urlHash = (canonical: string): Hex => keccak256(toBytes(canonical));
+
+export type PageAddressProblem = 'invalid' | 'not-https' | 'port' | 'userinfo';
+
+/** A typed or tab address that cannot be captured; `message` is a lower-case sentence for the UI. */
+export class PageAddressError extends Error {
+  constructor(
+    readonly problem: PageAddressProblem,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'PageAddressError';
+  }
+}
+
+/**
+ * A page address as a capture of it requests it: parsed by the WHATWG URL parser (as the browser
+ * and the prover parse it, so dot segments are resolved and spaces percent-encoded), https only on
+ * port 443, without user name or password, a trailing dot in the host, a fragment or a bare
+ * trailing `?` (the prover sends the path without it). Throws PageAddressError.
+ */
+export function pageAddress(raw: string): URL {
+  let u: URL;
+  try {
+    u = new URL(raw.trim());
+  } catch {
+    throw new PageAddressError('invalid', 'this is not a web address');
+  }
+  if (u.protocol !== 'https:') throw new PageAddressError('not-https', 'only https:// pages can be captured');
+  if (u.port !== '' && u.port !== '443') {
+    throw new PageAddressError('port', 'only pages on the standard https port (443) can be captured');
+  }
+  if (u.username || u.password) {
+    throw new PageAddressError('userinfo', 'addresses with a user name or password cannot be captured');
+  }
+  // "example.org." is the same name as "example.org"; the witness signs the name without the
+  // trailing dot, so the request and the statement use that form.
+  if (u.hostname.endsWith('.')) u.hostname = u.hostname.replace(/\.+$/, '');
+  if (!u.hostname || u.hostname.endsWith('.')) throw new PageAddressError('invalid', 'this is not a web address');
+  u.hash = '';
+  if (u.search === '') u.search = ''; // drops a bare "?"
+  return u;
+}
+
+/**
+ * The canonical URL a capture of `raw` records: `canonicalUrl(pageAddress(raw).href)`. Searches
+ * use it, so a typed address finds the captures made of it. Throws on an address that cannot be
+ * captured.
+ */
+export const canonicalPageUrl = (raw: string): string => canonicalUrl(pageAddress(raw).href);

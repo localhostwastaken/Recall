@@ -3,6 +3,7 @@ import { sha256, type Hex } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { runChecks } from '../src/checks';
 import { urlHash } from '../src/url';
+import { CAPTURE_REQUEST_HEADERS, CAPTURE_USER_AGENT } from '../src/request';
 import type { EvidenceFile } from '../src/evidence';
 import {
   FIXTURE_HOST,
@@ -281,25 +282,70 @@ describe('check B request-header allowlist and partial content (R20)', () => {
     }
   });
 
-  it('allowlisted headers accepted', async () => {
-    const r = await checkB(
-      enc.encode(
-        [
-          'GET /notice HTTP/1.1',
-          `Host: ${FIXTURE_HOST}`,
-          'Accept: text/html,*/*;q=0.8',
-          'accept-language: en-US,en;q=0.9',
-          'User-Agent: Mozilla/5.0 (Recall test)',
-          'Accept-Encoding: identity',
-          'Connection: close',
-          '',
-          '',
-        ].join('\r\n'),
-      ),
+  /** A capture's request with the fixed headers, `change` applied (a value, or null to leave one out). */
+  const capture = (change: Record<string, string | null> = {}, extra: string[] = []): Uint8Array => {
+    const fixed = { ...CAPTURE_REQUEST_HEADERS, ...change } as Record<string, string | null>;
+    return enc.encode(
+      [
+        'GET /notice HTTP/1.1',
+        `Host: ${FIXTURE_HOST}`,
+        ...Object.entries(fixed).flatMap(([k, v]) => (v === null ? [] : [`${k}: ${v}`])),
+        ...extra,
+        '',
+        '',
+      ].join('\r\n'),
     );
-    expect(r.B.status).toBe('pass');
+  };
+
+  it('the exact capture headers are accepted, in any order and with lower-case names', async () => {
+    const r = await checkB(capture());
+    expect(r.B.status, r.B.detail).toBe('pass');
     expect(r.facts).toBeDefined();
     expect(r.facts!.canonicalUrl).toBe('https://notice.recall.test/notice');
+    // hyper (the prover's HTTP client) writes lower-case names in its own order.
+    const lower = enc.encode(
+      [
+        'GET /notice HTTP/1.1',
+        `connection: ${CAPTURE_REQUEST_HEADERS.Connection}`,
+        `user-agent: ${CAPTURE_USER_AGENT}`,
+        `accept: ${CAPTURE_REQUEST_HEADERS.Accept}`,
+        `host: ${FIXTURE_HOST}`,
+        `accept-language: ${CAPTURE_REQUEST_HEADERS['Accept-Language']}`,
+        'accept-encoding: identity',
+        '',
+        '',
+      ].join('\r\n'),
+    );
+    expect((await checkB(lower)).B.status).toBe('pass');
+  });
+
+  it('a different User-Agent, Accept-Language or Accept fails: it can pick another variant of the page', async () => {
+    for (const [name, value] of [
+      ['User-Agent', 'Mozilla/5.0 (Recall test)'],
+      ['User-Agent', `${CAPTURE_USER_AGENT} Mobile`],
+      ['Accept-Language', 'fr-FR,fr;q=0.9'],
+      ['Accept', 'application/json'],
+      ['Accept', 'text/html,*/*;q=0.8'],
+      ['Connection', 'keep-alive'],
+      ['Accept-Encoding', 'IDENTITY'],
+    ] as const) {
+      const r = await checkB(capture({ [name]: value }));
+      expect(r.A.status).toBe('pass');
+      expect(r.B.status, `${name}: ${value}`).toBe('fail');
+      expect(r.B.detail, `${name}: ${value}`).toContain(name);
+      expect(r.facts).toBeUndefined();
+    }
+  });
+
+  it('a fixed header that is missing or sent twice fails', async () => {
+    for (const name of Object.keys(CAPTURE_REQUEST_HEADERS)) {
+      const r = await checkB(capture({ [name]: null }));
+      expect(r.B.status, `without ${name}`).toBe('fail');
+      expect(r.B.detail, `without ${name}`).toContain(name);
+    }
+    const twice = await checkB(capture({}, [`Accept-Language: ${CAPTURE_REQUEST_HEADERS['Accept-Language']}`]));
+    expect(twice.B.status).toBe('fail');
+    expect(twice.B.detail).toContain('Accept-Language');
   });
 
   it('206 response fails B', async () => {

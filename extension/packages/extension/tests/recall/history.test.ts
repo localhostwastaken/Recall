@@ -3,6 +3,7 @@ import { sha256, toBytes, type Address, type Hex } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import {
   buildEvidence,
+  CAPTURE_REQUEST_HEADERS,
   CAPTURE_TYPES,
   canonicalUrl,
   encodeEvidence,
@@ -29,7 +30,8 @@ const HASH = urlHash(canonicalUrl(URL_));
 const T0 = 1_793_800_000n;
 
 async function evidence(body: string, signedAt: bigint, key: Hex = WITNESS_KEY, path = '/notice'): Promise<EvidenceFile> {
-  const sent = toBytes(`GET ${path} HTTP/1.1\r\nHost: ${HOST}\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n`);
+  const fixed = Object.entries(CAPTURE_REQUEST_HEADERS).map(([k, v]) => `${k}: ${v}\r\n`).join('');
+  const sent = toBytes(`GET ${path} HTTP/1.1\r\nHost: ${HOST}\r\n${fixed}\r\n`);
   const recv = toBytes(
     `HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: ${toBytes(body).length}\r\nConnection: close\r\n\r\n${body}`,
   );

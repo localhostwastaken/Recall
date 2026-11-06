@@ -1,4 +1,4 @@
-import { canonicalUrl, decodeEvidence, urlHash } from '@recall/evidence';
+import { canonicalPageUrl, decodeEvidence, urlHash } from '@recall/evidence';
 import { arkivPublic, listByUrl } from '@recall/net';
 import { useEffect, useState } from 'react';
 import { sha256 } from 'viem';
@@ -15,10 +15,13 @@ import { verdictOf } from '../verify/verify';
 
 const ADDRESS_ERROR = 'Enter a full address starting with https://';
 
-/** The canonical form of what the person typed, or null when it is not a usable https address. */
+/**
+ * The canonical form of what the person typed, or null when it is not a usable https address. It
+ * is parsed the way the extension parses the address it captures, so a search finds the capture.
+ */
 function parseAddress(raw: string): { canonical: string; hash: ReturnType<typeof urlHash> } | null {
   try {
-    const canonical = canonicalUrl(raw.trim());
+    const canonical = canonicalPageUrl(raw);
     return { canonical, hash: urlHash(canonical) };
   } catch {
     return null;

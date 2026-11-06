@@ -425,6 +425,13 @@ test('@p3 verify home search goes to the timeline of the canonical address', asy
   await page.getByRole('button', { name: 'Show captures' }).click();
   const expected = urlHash(canonicalUrl('https://notice.recall.test/notice?run=7'));
   await expect(page).toHaveURL(`${APP}/#/u/${expected}`);
+
+  // Parsed the way the extension parses the page it captures: dot segments, a trailing dot in
+  // the host and a bare "?" all lead to the same capture.
+  await page.goto(`${APP}/#/`);
+  await page.getByLabel('Page address').fill('https://Notice.Recall.test./a/../notice?');
+  await page.getByRole('button', { name: 'Show captures' }).click();
+  await expect(page).toHaveURL(`${APP}/#/u/${urlHash(canonicalUrl('https://notice.recall.test/notice'))}`);
 });
 
 test('@p3 verify a raw file plus its address finds the matching capture', async ({ page }) => {

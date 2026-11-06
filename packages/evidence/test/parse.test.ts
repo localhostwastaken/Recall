@@ -1,8 +1,9 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { keccak256, sha256, toBytes } from 'viem';
 import { parseRequest, parseResponse } from '../src/http';
-import { canonicalUrl, urlHash } from '../src/url';
+import { canonicalPageUrl, canonicalUrl, pageAddress, PageAddressError, urlHash } from '../src/url';
 import { decodeEvidence, encodeEvidence } from '../src/evidence';
+import { CAPTURE_REQUEST_HEADERS } from '../src/request';
 import {
   bytesEqual,
   fixtureFile,
@@ -38,11 +39,7 @@ describe('parseRequest', () => {
     expect(r.method).toBe('GET');
     expect(r.target).toBe('/notice');
     expect(r.host).toBe('notice.recall.test');
-    expect(r.headers).toEqual([
-      ['Host', 'notice.recall.test'],
-      ['Accept-Encoding', 'identity'],
-      ['Connection', 'close'],
-    ]);
+    expect(r.headers).toEqual([['Host', 'notice.recall.test'], ...Object.entries(CAPTURE_REQUEST_HEADERS)]);
   });
 
   it('accepts an optional :443 suffix and keeps the target verbatim', () => {
@@ -289,6 +286,46 @@ describe('canonicalUrl and urlHash', () => {
     ]) {
       expect(() => canonicalUrl(raw), JSON.stringify(raw)).toThrow();
     }
+  });
+
+  it('pageAddress parses like the browser and the prover: what a capture of the address would request', () => {
+    expect(pageAddress('https://a.example/x#frag').href).toBe('https://a.example/x');
+    expect(pageAddress('https://a.example:443/').href).toBe('https://a.example/');
+    // A bare trailing "?" is not sent by the prover, so it is not part of the address either.
+    expect(pageAddress('https://a.example/p?').href).toBe('https://a.example/p');
+    expect(pageAddress('https://a.example/p?#x').href).toBe('https://a.example/p');
+    expect(pageAddress('https://a.example/p?a=1').href).toBe('https://a.example/p?a=1');
+    expect(pageAddress('https://Notice.Recall.Test./notice').href).toBe('https://notice.recall.test/notice');
+    expect(pageAddress('  https://a.example/a/../b c  ').href).toBe('https://a.example/b%20c');
+    for (const [raw, problem] of [
+      ['http://a.example/', 'not-https'],
+      ['https://a.example:8443/', 'port'],
+      ['not a url', 'invalid'],
+      ['https://u:p@a.example/', 'userinfo'],
+    ] as const) {
+      let err: unknown;
+      try {
+        pageAddress(raw);
+      } catch (e) {
+        err = e;
+      }
+      expect(err, raw).toBeInstanceOf(PageAddressError);
+      expect((err as PageAddressError).problem, raw).toBe(problem);
+    }
+  });
+
+  it('canonicalPageUrl is the canonical URL of what a capture of the typed address records', () => {
+    for (const [typed, canonical] of [
+      ['https://Notice.Recall.Test/notice?', 'https://notice.recall.test/notice'],
+      ['https://notice.recall.test/a/../notice', 'https://notice.recall.test/notice'],
+      ['https://notice.recall.test/no tice', 'https://notice.recall.test/no%20tice'],
+      ['https://notice.recall.test', 'https://notice.recall.test/'],
+      [' https://localhostwastaken.github.io/Recall/notice/?run=xbvmqf0p#top ', 'https://localhostwastaken.github.io/Recall/notice/?run=xbvmqf0p'],
+    ]) {
+      expect(canonicalPageUrl(typed), typed).toBe(canonical);
+    }
+    expect(() => canonicalPageUrl('http://notice.recall.test/')).toThrow();
+    expect(() => canonicalPageUrl('https://notice.recall.test:8443/')).toThrow();
   });
 
   it('urlHash is keccak256 of the canonical URL bytes', () => {

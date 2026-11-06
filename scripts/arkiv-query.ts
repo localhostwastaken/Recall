@@ -13,9 +13,9 @@
 // Exit code: 0 when at least one capture verified (or, with --no-verify, at least one row was
 // found); 1 on an error; 2 when no capture of the page verified (or none exists).
 //
-// How it works: the URL is canonicalised and hashed (keccak256), and `listByUrl` from
-// @recall/net asks Rabdi for every `recall.v1.capture` entity whose indexed `urlHash` attribute
-// equals it (keyset paging on $key). Anyone can write rows with our schema, so a row by itself
+// How it works: the URL is parsed as the extension parses the page it captures, canonicalised and
+// hashed (keccak256), and `listByUrl` from @recall/net asks Rabdi for every `recall.v1.capture`
+// entity whose indexed `urlHash` attribute equals it (keyset paging on $key). Anyone can write rows with our schema, so a row by itself
 // proves nothing: for each one the evidence file is downloaded from Swarm by its `evidenceRef`
 // (the Swarm root hash is recomputed locally, so the gateway is not trusted), checks A to C run
 // on it, and the verified facts must match the row (urlHash, bodySha256, witness, signedAt).
@@ -29,7 +29,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { getAddress, isAddress, type Address } from 'viem';
-import { canonicalUrl, decodeEvidence, runChecks, urlHash } from '../packages/evidence/src/index';
+import { canonicalPageUrl, decodeEvidence, runChecks, urlHash, type VerifiedFacts } from '../packages/evidence/src/index';
 import {
   arkivPublic,
   downloadBytes,
@@ -70,8 +70,14 @@ function fail(msg: string): never {
 
 type Capture = Extract<Listed, { kind: 'capture' }>;
 
-/** Downloads the evidence, runs A to C and compares the verified facts with the row. */
-async function verify(row: Capture, pinned: Address[], downloadUrls: string[]): Promise<string> {
+type Verdict = { verdict: string; facts?: VerifiedFacts };
+
+/**
+ * Downloads the evidence, runs A to C and compares the verified facts with the row. Only a
+ * verified row comes back with `facts`: what is printed about the page comes from them.
+ */
+async function verify(row: Capture, pinned: Address[], downloadUrls: string[]): Promise<Verdict> {
+  const no = (verdict: string): Verdict => ({ verdict: `not verified: ${verdict}` });
   let bytes: Uint8Array;
   let from: string;
   try {
@@ -80,16 +86,16 @@ async function verify(row: Capture, pinned: Address[], downloadUrls: string[]): 
       signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
     }));
   } catch (e) {
-    return `not verified: evidence not downloaded (${(e as Error).message})`;
+    return no(`evidence not downloaded (${(e as Error).message})`);
   }
   let report;
   try {
     report = await runChecks(decodeEvidence(bytes), { pinnedWitnesses: pinned });
   } catch (e) {
-    return `not verified: the evidence file does not parse (${(e as Error).message})`;
+    return no(`the evidence file does not parse (${(e as Error).message})`);
   }
   const failed = (['A', 'B', 'C'] as const).filter((k) => report[k].status !== 'pass');
-  if (failed.length > 0) return `not verified: ${failed.map((k) => `${k} ${report[k].status} (${report[k].detail})`).join('; ')}`;
+  if (failed.length > 0) return no(failed.map((k) => `${k} ${report[k].status} (${report[k].detail})`).join('; '));
   const f = report.facts!;
   const mismatch = [
     f.urlHash.toLowerCase() !== row.urlHash.toLowerCase() && 'urlHash',
@@ -97,8 +103,11 @@ async function verify(row: Capture, pinned: Address[], downloadUrls: string[]): 
     getAddress(f.witness) !== getAddress(row.witness) && 'witness',
     f.signedAt !== row.signedAt && 'signedAt',
   ].filter(Boolean);
-  if (mismatch.length > 0) return `not verified: the row does not match its evidence (${mismatch.join(', ')})`;
-  return `verified A-C (evidence ${bytes.length} B from ${from}, Swarm root checked: ${!isFreeBatch(row.batchId)})`;
+  if (mismatch.length > 0) return no(`the row does not match its evidence (${mismatch.join(', ')})`);
+  return {
+    verdict: `verified A-C (evidence ${bytes.length} B from ${from}, Swarm root checked: ${!isFreeBatch(row.batchId)})`,
+    facts: f,
+  };
 }
 
 async function main(): Promise<void> {
@@ -120,7 +129,7 @@ async function main(): Promise<void> {
 
   let canonical: string;
   try {
-    canonical = canonicalUrl(values.url!);
+    canonical = canonicalPageUrl(values.url!);
   } catch (e) {
     fail((e as Error).message);
   }
@@ -150,18 +159,20 @@ async function main(): Promise<void> {
     `\n${captures.length} capture row(s) and ${confirmations} confirmation row(s) for this page${result.truncated ? ' (truncated: more rows exist)' : ''}.`,
   );
 
-  const print = (n: number, row: Capture, verdict?: string) => {
+  const print = (n: number, row: Capture, checked?: Verdict) => {
     console.log(`\n${n}. entity ${row.entityKey}`);
     console.log(`   owner        ${row.owner}`);
     console.log(`   signer       ${row.witness}`);
     console.log(`   signedAt     ${row.signedAt} (${new Date(Number(row.signedAt) * 1000).toISOString()})`);
-    console.log(`   serverName   ${row.serverName}  HTTP ${row.httpStatus}`);
+    // From the verified evidence when there is one; a bare row only claims these.
+    if (checked?.facts) console.log(`   serverName   ${checked.facts.serverName}  HTTP ${checked.facts.httpStatus} (from the evidence)`);
+    else console.log(`   serverName   ${row.serverName}  HTTP ${row.httpStatus} (as the row claims; not verified)`);
     console.log(`   bodySha256   ${row.bodySha256}`);
     console.log(`   evidenceRef  ${row.evidenceRef}`);
     console.log(`   batchId      ${row.batchId}`);
     console.log(`   expires at   block ${row.expiresAtBlock}`);
     console.log(`   open         https://bzz.link/bytes/${row.evidenceRef.replace(/^0x/, '')}`);
-    if (verdict) console.log(`   ${safe(verdict)}`);
+    if (checked) console.log(`   ${safe(checked.verdict)}`);
   };
 
   if (values['no-verify']) {
@@ -177,12 +188,12 @@ async function main(): Promise<void> {
   const rejected: { row: Capture; why: string }[] = [];
   for (const row of captures) {
     if (verified.length >= limit) break;
-    const verdict = await verify(row, pinned, cfg.swarm.downloadUrls);
-    if (verdict.startsWith('verified')) {
+    const checked = await verify(row, pinned, cfg.swarm.downloadUrls);
+    if (checked.facts) {
       verified.push(row);
-      print(verified.length, row, verdict);
+      print(verified.length, row, checked);
     } else {
-      rejected.push({ row, why: verdict });
+      rejected.push({ row, why: checked.verdict });
     }
   }
   const checked = verified.length + rejected.length;
