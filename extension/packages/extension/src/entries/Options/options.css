@@ -11,7 +11,7 @@ body {
 }
 
 .options h1 {
-  font-family: var(--font-serif);
+  font-family: var(--font-display);
   font-size: var(--text-2xl);
   line-height: var(--lh-2xl);
 }

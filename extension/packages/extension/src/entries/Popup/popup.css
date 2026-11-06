@@ -1,14 +1,11 @@
-/* Extension popup, 360x560: header 48px, scrolling body, sticky footer 72px. */
-:root {
-  --control-h: 40px;
-}
-
+/* Extension popup, 380x580: header 56px, scrolling body, sticky footer with the one primary action.
+   Same tokens and fonts as the web app (the bright living archive), light only. */
 body {
-  width: 360px;
-  height: 560px;
+  width: 380px;
+  height: 580px;
   overflow: hidden;
-  font-size: var(--text-sm);
-  line-height: var(--lh-sm);
+  font-size: var(--text-md);
+  line-height: var(--lh-md);
 }
 
 #root {
@@ -27,19 +24,33 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  height: 48px;
-  padding: 0 var(--space-4);
-  background: var(--surface);
+  height: 56px;
+  padding: 0 var(--space-2) 0 var(--space-4);
+  background: var(--bg);
   border-bottom: 1px solid var(--border);
-  box-shadow: var(--shadow-1);
   z-index: var(--z-header);
 }
 
 .popup-title {
-  font-family: var(--font-serif);
-  font-size: var(--text-md);
-  line-height: var(--lh-md);
-  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: -0.045em;
+}
+
+/* The brand mark before the title: a filed page with a citrus corner. */
+.popup-title::before {
+  content: '';
+  flex: none;
+  width: 18px;
+  height: 22px;
+  border: 2px solid var(--accent);
+  border-radius: 2px;
+  background: linear-gradient(225deg, var(--citrus) 0 6px, var(--accent-soft) 6px);
 }
 
 .popup-body {
@@ -48,7 +59,19 @@ body {
   padding: var(--space-4);
 }
 
+.popup-body > section + section,
+.popup-body > section + .rule + section {
+  margin-top: var(--space-4);
+}
+
+.popup-body .rule {
+  margin: var(--space-4) 0;
+}
+
 .page-host {
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  line-height: var(--lh-lg);
   font-weight: 600;
   overflow-wrap: anywhere;
 }
@@ -68,20 +91,21 @@ body {
 
 .popup-footer {
   flex: none;
-  min-height: 72px;
-  padding: var(--space-3) var(--space-4);
-  background: var(--surface);
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  background: var(--bg);
   border-top: 1px solid var(--border);
 }
 
 .popup-helper {
-  margin-top: var(--space-1);
+  margin-top: var(--space-2);
   font-size: var(--text-xs);
   line-height: var(--lh-xs);
+  text-align: center;
 }
 
 .popup-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-2);
   margin-top: var(--space-3);
 }
@@ -101,10 +125,16 @@ body {
   margin-top: var(--space-1);
 }
 
-/* Earlier captures: counts of verified records, the newest date and a timeline link. */
+/* Earlier captures: a small card with the counts, the newest date and a timeline link. */
 .earlier {
   display: grid;
   gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
 }
 
 .earlier-counts {
@@ -112,15 +142,24 @@ body {
 }
 
 .link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 32px;
   color: var(--accent);
+  font-weight: 600;
   text-decoration: underline;
-  text-underline-offset: 2px;
+  text-underline-offset: 0.18em;
+}
+
+.link:hover {
+  color: var(--accent-hover);
 }
 
 .popup-header-tools {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-1);
 }
 
 .icon-btn {
@@ -139,4 +178,48 @@ body {
 
 .icon-btn:hover {
   background: var(--surface-sunken);
+}
+
+/* The popup's check list stays compact: one line per check. */
+.popup .checks {
+  gap: var(--space-2);
+}
+
+.popup .check-row {
+  padding-bottom: var(--space-2);
+}
+
+.popup .notice {
+  padding: var(--space-3);
+}
+
+.popup .btn {
+  font-size: var(--text-md);
+}
+
+/* Checks: one summary line under the verdict; rows open below it. */
+.checks-disclosure {
+  margin-top: var(--space-3);
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+}
+
+.checks-disclosure .checks {
+  margin: 0 var(--space-2) var(--space-2) 0;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.popup .upload-result + .notice {
+  margin-top: var(--space-3);
+}
+
+/* A running action stays readable: a quiet surface, not a faded button. */
+.btn[aria-busy='true']:disabled {
+  opacity: 1;
+  background: var(--surface-sunken);
+  color: var(--text);
+  border-color: var(--border-strong);
 }

@@ -5,6 +5,7 @@ import { WitnessChip, type WitnessState } from '../../recall/ui/WitnessChip';
 import { Notice } from '../../recall/ui/Notice';
 import { Steps, type StepState } from '../../recall/ui/Steps';
 import { CheckRow } from '../../recall/ui/CheckRow';
+import { CheckDetails } from '../../recall/ui/CheckDetails';
 import { MonoValue } from '../../recall/ui/MonoValue';
 import { loadSettings } from '../../recall/settings';
 import { SettingsPanel } from './SettingsPanel';
@@ -378,7 +379,8 @@ export function Popup() {
           <footer className="popup-footer">
             <button
               type="button"
-              className="btn btn-primary btn-block"
+              // One primary action per screen: after a capture the result's own action leads.
+              className={`btn ${mine?.status === 'done' ? 'btn-secondary' : 'btn-primary'} btn-block`}
               disabled={busy || disabledReason !== null}
               aria-busy={busy}
               aria-describedby="capture-helper"
@@ -466,7 +468,7 @@ function CaptureResult({
       >
         {v.body}
       </Notice>
-      <ul className="checks" aria-label="Checks">
+      <CheckDetails checks={lines}>
         {lines.map((l) => (
           <CheckRow
             key={l.letter}
@@ -481,7 +483,7 @@ function CaptureResult({
             ))}
           />
         ))}
-      </ul>
+      </CheckDetails>
     </section>
   );
 }
