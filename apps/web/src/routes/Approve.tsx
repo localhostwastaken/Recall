@@ -13,22 +13,38 @@ import {
   arkivWallet,
   costFor,
   isFreeBatch,
+  listAttachments,
   listByUrl,
   swarmRootOf,
   waitBatchUsable,
+  writeAttachment,
   writeCapture,
+  writeCaptureWithAttachment,
   writeConfirmation,
+  type AttachmentRow,
 } from '@recall/net';
 import { LoaderCircle } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type RefObject } from 'react';
 import { createPublicClient, custom, erc20Abi, http, type Account, type Address, type Hex, type PublicClient } from 'viem';
+import {
+  GIT_CONTENT_TYPE,
+  computeCode,
+  downloadCode,
+  repoOf,
+  repoUrlHash,
+  summaryDisagrees,
+  type CodeComputed,
+  type GitHubBranch,
+  type RepoSummary,
+} from '../attachments/git';
 import { ExhibitCard } from '../components/ExhibitCard';
+import { CommitId } from '../components/RepoSnapshot';
 import { downloadEvidence } from '../download';
 import { errorText, shortErrorText } from '../errors';
 import { ExtError, addBatches, ext, extensionIdFromLink, getStampAddress } from '../ext';
-import { formatBzzCeil, formatDay, formatUtc } from '../format';
+import { formatBytes, formatBzzCeil, formatDay, formatUtc } from '../format';
 import { saveSettingsChecked } from '../settings';
-import { DEPTH, USABLE_TIMEOUT_MS, buyOneBatch, forgetSent, linkNeedsConfirm, reason as buyReason, recallSent, settlePurchase } from '../storage/buy';
+import { ATTACHMENT_DEPTH, USABLE_TIMEOUT_MS, buyOneBatch, depthFor, forgetSent, linkNeedsConfirm, reason as buyReason, recallSent, settlePurchase } from '../storage/buy';
 import { getNetConfig } from '../net';
 import { MonoValue } from '../ui/MonoValue';
 import { Notice } from '../ui/Notice';
@@ -75,7 +91,8 @@ import './approve.css';
 type UploadInfo =
   | { status: 'none' }
   | { status: 'uploading'; mode?: 'stamped' | 'free' }
-  | { status: 'uploaded'; evidenceRef: Hex; batchId: Hex }
+  /** `attachmentRef`: the repository tarball's Swarm reference (R46), same batch. */
+  | { status: 'uploaded'; evidenceRef: Hex; batchId: Hex; attachmentRef?: Hex }
   /** `mode`: the storage the person chose; "Try upload again" uses it again. */
   | { status: 'failed'; reason: string; mode?: 'stamped' | 'free' };
 
@@ -95,6 +112,10 @@ type PendingRecord = {
   storage?: 'ok' | 'empty';
   /** `free`: the extension's settings allow the gateway's free storage. */
   uploadMode?: 'stamped' | 'free';
+  /** R46: the repository snapshot the extension checked and holds (no bytes here). */
+  attachment?: RepoSummary;
+  /** R46: the batch depth the upload needs (18 with a repository snapshot). */
+  needsDepth?: number;
 };
 
 /** One batch of this many days is bought for a capture that has no storage. */
@@ -114,7 +135,12 @@ type Stored = {
   batchId: Hex;
   /** Free-mode captures: whether the download gateways hold these very bytes under the reference. */
   gatewayCopy?: GatewayCopy;
+  /** R46: the uploaded code, downloaded and recomputed here (set only when it matched). */
+  code?: { ref: Hex; computed: CodeComputed };
 };
+
+/** R46: the repository this capture proves (from the page's own facts) and the extension's summary, which agree. */
+type Repo = { branch: GitHubBranch; summary: RepoSummary };
 
 type Ready = {
   pending: PendingRecord;
@@ -125,13 +151,16 @@ type Ready = {
   earlier?: { key: Hex; signedAt: bigint };
   /** Captures: set only once the uploaded reference passed its check here. */
   stored?: Stored;
+  /** R46: set when the capture comes with a repository snapshot. */
+  repo?: Repo;
 };
 
 type Load =
   | { phase: 'loading'; step: string }
   | { phase: 'none' }
   | { phase: 'unreachable'; message: string }
-  | { phase: 'offline'; message: string }
+  /** `what: 'code'`: the uploaded code could not be downloaded to check it (else: the earlier capture). */
+  | { phase: 'offline'; message: string; what?: 'code' }
   | { phase: 'refused'; reason: string; report?: CheckReport; kind?: 'capture' | 'confirmation' }
   | ({ phase: 'ready' } & Ready);
 
@@ -144,7 +173,7 @@ type Publish =
   | { state: 'publishing' }
   | { state: 'rejected' }
   | { state: 'failed'; reason: string; technical?: string }
-  | { state: 'published'; entityKey: Hex; until: Date | null; markError?: string };
+  | { state: 'published'; entityKey: Hex; attachmentKey?: Hex; until: Date | null; markError?: string };
 
 const reasonOf = (e: unknown) => shortErrorText(e).split('\n')[0];
 const sentence = (s: string) => {
@@ -162,6 +191,64 @@ const sentence = (s: string) => {
  * the publish, no answer is only a warning. Every other batch id keeps the root check.
  */
 async function checkStored(
+  up: { evidenceRef?: Hex; batchId?: Hex; attachmentRef?: Hex },
+  bytes: Uint8Array,
+  onStep: (s: string) => void,
+  repo?: Repo,
+  onProgress?: (received: number, total: number | null) => void,
+): Promise<Stored | { reason: string; retry?: boolean }> {
+  const evidence = await checkStoredEvidence(up, bytes, onStep);
+  if ('reason' in evidence || !repo) return evidence;
+  const code = await checkUploadedCode(up, repo, onStep, onProgress);
+  if ('reason' in code) return code;
+  return { ...evidence, code };
+}
+
+const CODE_STEP = 'Checking the uploaded code…';
+
+/**
+ * R46: downloads the uploaded tarball (25 MB cap; the Swarm root is checked for a stamped
+ * upload) and recomputes it here: its git tree must be the one GitHub reported for the commit
+ * (the page's own facts) and its hash and size the ones the extension checked. A download that
+ * fails is retryable; bytes that don't match are not.
+ */
+async function checkUploadedCode(
+  up: { batchId?: Hex; attachmentRef?: Hex },
+  repo: Repo,
+  onStep: (s: string) => void,
+  onProgress?: (received: number, total: number | null) => void,
+): Promise<{ ref: Hex; computed: CodeComputed } | { reason: string; retry?: boolean }> {
+  const ref = up.attachmentRef;
+  if (!ref || !KEY.test(ref) || !up.batchId) return { reason: "The extension didn't report where it uploaded the code." };
+  onStep(CODE_STEP);
+  let bytes: Uint8Array | null = null;
+  let last: unknown;
+  // A gateway can take a moment to serve a file just uploaded.
+  for (let attempt = 0; attempt < 3 && !bytes; attempt++) {
+    if (attempt > 0) await sleep(4_000);
+    try {
+      bytes = (await downloadCode(ref, up.batchId, getNetConfig().swarm.downloadUrls, onProgress ? { onProgress } : {})).bytes;
+    } catch (e) {
+      last = e;
+    }
+  }
+  if (!bytes) return { reason: `The uploaded code couldn't be downloaded to check it: ${reasonOf(last)}.`, retry: true };
+  // Let the step paint before the (synchronous) tree recomputation.
+  await sleep(30);
+  let computed: CodeComputed;
+  try {
+    computed = await computeCode(bytes);
+  } catch (e) {
+    return { reason: `The uploaded code can't be read as a git snapshot: ${reasonOf(e)}.` };
+  }
+  if (computed.treeSha !== repo.branch.treeSha) return { reason: "The uploaded code doesn't match the commit GitHub reported." };
+  if (computed.sha256.toLowerCase() !== repo.summary.sha256.toLowerCase() || computed.size !== repo.summary.size) {
+    return { reason: "The uploaded code isn't the file the extension checked." };
+  }
+  return { ref, computed };
+}
+
+async function checkStoredEvidence(
   up: { evidenceRef?: Hex; batchId?: Hex },
   bytes: Uint8Array,
   onStep: (s: string) => void,
@@ -224,6 +311,18 @@ async function loadPending(captureId: string, extensionId: string | undefined, o
     return { phase: 'refused', kind: pending.kind, reason: "The extension's details of this capture don't match its evidence.", report };
   }
 
+  // R46: a repository snapshot is described by the page's own facts (the notarized GitHub
+  // answer); the extension's summary must agree with them, or nothing is published.
+  let repo: Repo | undefined;
+  if (pending.attachment !== undefined && pending.attachment !== null) {
+    const branch = pending.kind === 'capture' ? repoOf(facts) : null;
+    const why = summaryDisagrees(pending.attachment, branch);
+    if (why || !branch) {
+      return { phase: 'refused', kind: pending.kind, reason: `The repository snapshot doesn't match the commit GitHub reported: ${why ?? 'unknown'}.`, report };
+    }
+    repo = { branch, summary: pending.attachment };
+  }
+
   const cfg = getNetConfig();
   if (pending.kind === 'capture') {
     // Not uploaded yet (R44): the person chooses the storage here. An older extension that
@@ -234,10 +333,13 @@ async function loadPending(captureId: string, extensionId: string | undefined, o
         : !pending.upload && pending.evidenceRef && pending.batchId
           ? { evidenceRef: pending.evidenceRef, batchId: pending.batchId }
           : null;
-    if (!uploaded) return { phase: 'ready', pending, bytes, report, facts };
-    const stored = await checkStored(uploaded, bytes, onStep);
-    if ('reason' in stored) return { phase: 'refused', kind: pending.kind, reason: stored.reason, report };
-    return { phase: 'ready', pending, bytes, report, facts, stored };
+    if (!uploaded) return { phase: 'ready', pending, bytes, report, facts, ...(repo ? { repo } : {}) };
+    const stored = await checkStored(uploaded, bytes, onStep, repo);
+    if ('reason' in stored) {
+      if (stored.retry) return { phase: 'offline', message: stored.reason, what: 'code' };
+      return { phase: 'refused', kind: pending.kind, reason: stored.reason, report };
+    }
+    return { phase: 'ready', pending, bytes, report, facts, stored, ...(repo ? { repo } : {}) };
   }
 
   // A confirmation: the evidence goes inline, and the capture it confirms must verify too.
@@ -311,6 +413,44 @@ async function existingRecord(ready: Ready, owner: Address): Promise<Hex | null>
         sameHex(r.bodySha256, ready.facts.bodySha256) &&
         r.signedAt === ready.facts.signedAt &&
         (r.kind === 'capture' ? sameHex(r.evidenceRef, ready.stored?.evidenceRef) : sameHex(r.captureKey, ready.earlier?.key)),
+    );
+    return hit?.entityKey ?? null;
+  } catch {
+    return null; // unknown: write (a duplicate is better than never publishing)
+  }
+}
+
+/** R46: the attachment record of a ready capture with checked code (without its parent key). */
+function attachmentRowOf(r: Ready): Omit<AttachmentRow, 'parentCaptureKey'> | null {
+  const code = r.stored?.code;
+  if (!r.repo || !code || !r.stored) return null;
+  return {
+    urlHash: repoUrlHash(r.repo.branch),
+    sha256: code.computed.sha256,
+    kind: 'git',
+    commitSha: r.repo.branch.commitSha,
+    treeSha: code.computed.treeSha,
+    proofLevel: 1,
+    evidenceRef: code.ref,
+    batchId: r.stored.batchId,
+    size: BigInt(code.computed.size),
+    contentType: GIT_CONTENT_TYPE,
+  };
+}
+
+/** An attachment record this account already wrote for this capture and these bytes (a retry), if any. */
+async function existingAttachment(parentKey: Hex, owner: Address, row: Omit<AttachmentRow, 'parentCaptureKey'>): Promise<Hex | null> {
+  try {
+    const { rows } = await listAttachments(arkivPublic(getNetConfig()), parentKey);
+    const hit = rows.find(
+      (a) =>
+        sameHex(a.creator, owner) &&
+        a.kind === 'git' &&
+        sameHex(a.sha256, row.sha256) &&
+        sameHex(a.evidenceRef, row.evidenceRef) &&
+        sameHex(a.urlHash, row.urlHash) &&
+        a.commitSha === row.commitSha &&
+        a.treeSha === row.treeSha,
     );
     return hit?.entityKey ?? null;
   } catch {
@@ -440,7 +580,8 @@ type Save =
   | { state: 'idle' }
   | { state: 'buying'; how: 'buy'; step: BuyStep }
   | { state: 'uploading'; how: SaveHow }
-  | { state: 'checking'; how: SaveHow }
+  /** `code`: downloading and recomputing the uploaded repository snapshot (R46). */
+  | { state: 'checking'; how: SaveHow; code?: { received: number; total: number | null } }
   | { state: 'error'; how: SaveHow; stage: 'buy' | 'upload'; title: string; body: string; retryLabel: string; technical?: string };
 /** The ?ext= rule (as on Storage): an extension only the link names owns nothing bought until the person says so. */
 type ExtAsk = { state: 'none' } | { state: 'ask'; address: Address | null | 'error' } | { state: 'ok'; address: Address };
@@ -536,6 +677,8 @@ export function Approve({ captureId }: { captureId: string | null }) {
   const needsStorage = ready?.pending.kind === 'capture' && !ready.stored;
   const hasBatch = ready?.pending.storage === 'ok';
   const freeAllowed = ready?.pending.uploadMode === 'free';
+  // R46: a capture with a repository snapshot needs a bigger batch (depth 18).
+  const buyDepth = ready?.repo ? ATTACHMENT_DEPTH : depthFor(ready?.pending.needsDepth);
 
   // The price of one batch, read before any buying is offered (no wallet needed to read it).
   const showPrice = needsStorage;
@@ -543,21 +686,22 @@ export function Approve({ captureId }: { captureId: string | null }) {
     if (!showPrice) return;
     let live = true;
     setPrice({ kind: 'loading' });
-    costFor(gnosisPub, DEPTH, BUY_DAYS).then(
+    costFor(gnosisPub, buyDepth, BUY_DAYS).then(
       (perBatch) => live && setPrice({ kind: 'ready', perBatch }),
       () => live && setPrice({ kind: 'error' }),
     );
     return () => {
       live = false;
     };
-  }, [showPrice, gnosisPub, priceTry]);
+  }, [showPrice, gnosisPub, priceTry, buyDepth]);
 
   const run = useCallback(
     async (what: 'connect' | 'switch' | 'publish', readyArg?: Ready) => {
       const r = readyArg ?? (load.phase === 'ready' ? load : null);
       if (!r || !captureId) return;
-      // A capture is published only with an uploaded reference that passed its check here.
-      if (what === 'publish' && r.pending.kind === 'capture' && !r.stored) return;
+      // A capture is published only with an uploaded reference that passed its check here,
+      // and one with a repository snapshot only once the uploaded code passed its check too.
+      if (what === 'publish' && r.pending.kind === 'capture' && (!r.stored || (r.repo && !r.stored.code))) return;
       try {
         if (what === 'connect' || !connected) {
           setPublish({ state: 'connecting' });
@@ -587,20 +731,44 @@ export function Approve({ captureId }: { captureId: string | null }) {
         const existing = await existingRecord(r, address);
         if (!existing) setPublish({ state: 'signing' });
         const { pending, facts, bytes, stored } = r;
+        const captureRow = () => ({
+          urlHash: facts.urlHash,
+          bodySha256: facts.bodySha256,
+          serverName: facts.serverName,
+          witness: facts.witness,
+          signedAt: facts.signedAt,
+          httpStatus: facts.httpStatus,
+          batchId: stored!.batchId,
+          evidenceRef: stored!.evidenceRef,
+          canonicalUrl: facts.canonicalUrl,
+        });
+        // R46: the capture and its code record in one transaction (one MetaMask prompt). After a
+        // partial failure the capture exists already: only the code record is written then.
+        const attachment = pending.kind === 'capture' ? attachmentRowOf(r) : null;
+        let attachmentKey: Hex | undefined;
+        if (attachment) {
+          let captureKey: Hex;
+          if (existing) {
+            captureKey = existing;
+            const had = await existingAttachment(existing, address, attachment);
+            if (had) attachmentKey = had;
+            else {
+              setPublish({ state: 'signing' });
+              attachmentKey = (await writeAttachment(w, { ...attachment, parentCaptureKey: existing })).entityKey;
+            }
+          } else {
+            const both = await writeCaptureWithAttachment(w, cfg, captureRow(), attachment);
+            captureKey = both.captureKey;
+            attachmentKey = both.attachmentKey;
+          }
+          const [markError, until] = await Promise.all([markPublished(captureId, captureKey, extensionId), recordUntil(captureKey)]);
+          setPublish({ state: 'published', entityKey: captureKey, attachmentKey, until, ...(markError ? { markError } : {}) });
+          return;
+        }
         const { entityKey } = existing
           ? { entityKey: existing }
           : pending.kind === 'capture'
-            ? await writeCapture(w, {
-                urlHash: facts.urlHash,
-                bodySha256: facts.bodySha256,
-                serverName: facts.serverName,
-                witness: facts.witness,
-                signedAt: facts.signedAt,
-                httpStatus: facts.httpStatus,
-                batchId: stored!.batchId,
-                evidenceRef: stored!.evidenceRef,
-                canonicalUrl: facts.canonicalUrl,
-              })
+            ? await writeCapture(w, captureRow())
             : await writeConfirmation(w, {
                 captureKey: r.earlier!.key,
                 urlHash: facts.urlHash,
@@ -615,7 +783,15 @@ export function Approve({ captureId }: { captureId: string | null }) {
       } catch (e) {
         if (isUserRejection(e)) setPublish({ state: 'rejected' });
         else if (e instanceof WalletError) setPublish({ state: 'failed', reason: e.message });
-        else setPublish({ state: 'failed', reason: sentence(reasonOf(e)), technical: errorText(e) });
+        else if (/another key than predicted/i.test(String((e as Error)?.message ?? e))) {
+          // R46: another record from this account landed in the same moment, so the code record
+          // names no capture. Retrying reuses the capture and writes only the code record.
+          setPublish({
+            state: 'failed',
+            reason: 'Another record from this account was written at the same moment, so the code record must be written again. Try again: the capture is kept',
+            technical: errorText(e),
+          });
+        } else setPublish({ state: 'failed', reason: sentence(reasonOf(e)), technical: errorText(e) });
       }
     },
     [load, captureId, connected, arkivId, cfg, extensionId],
@@ -661,7 +837,7 @@ export function Approve({ captureId }: { captureId: string | null }) {
     async (r: Ready, how: SaveHow): Promise<Ready | null> => {
       setSave({ state: 'uploading', how });
       const deadline = Date.now() + UPLOAD_WAIT_MS;
-      let up: { evidenceRef: Hex; batchId: Hex } | null = null;
+      let up: { evidenceRef: Hex; batchId: Hex; attachmentRef?: Hex } | null = null;
       while (!up) {
         const a = await ext.send<PendingRecord>({ type: 'recall.getPending', captureId }, extOpts);
         const u = a.upload;
@@ -672,7 +848,20 @@ export function Approve({ captureId }: { captureId: string | null }) {
         else await sleep(1_500);
       }
       setSave({ state: 'checking', how });
-      const stored = await checkStored(up, r.bytes, () => undefined);
+      let lastPaint = 0;
+      const stored = await checkStored(
+        up,
+        r.bytes,
+        (step) => step === CODE_STEP && setSave({ state: 'checking', how, code: { received: 0, total: r.repo?.summary.size ?? null } }),
+        r.repo,
+        (received, total) => {
+          if (received - lastPaint < 256 * 1024 && received !== total) return;
+          lastPaint = received;
+          setSave({ state: 'checking', how, code: { received, total: total ?? r.repo?.summary.size ?? null } });
+        },
+      );
+      // A download that failed is "try again" (the upload is idempotent), not a refusal.
+      if ('reason' in stored && stored.retry) throw new Error(stored.reason);
       if ('reason' in stored) {
         setSave({ state: 'idle' });
         setLoad({ phase: 'refused', kind: 'capture', reason: stored.reason, report: r.report });
@@ -750,7 +939,7 @@ export function Approve({ captureId }: { captureId: string | null }) {
     const earlier = recallSent(key, true);
     if (earlier) {
       setSave({ state: 'buying', how: 'buy', step: 'checking' });
-      const found = await settlePurchase(gnosisPub, earlier, owner);
+      const found = await settlePurchase(gnosisPub, earlier, owner, buyDepth);
       if (found.kind === 'unknown') return mayHaveGone(earlier);
       if (found.kind === 'bought') batchId = found.batchId;
       else forgetSent(key); // it bought nothing: buy below
@@ -766,7 +955,7 @@ export function Approve({ captureId }: { captureId: string | null }) {
       try {
         const { address } = await connectWallet();
         await ensureChain(100);
-        const need = await costFor(gnosisPub, DEPTH, BUY_DAYS);
+        const need = await costFor(gnosisPub, buyDepth, BUY_DAYS);
         const have = await gnosisPub.readContract({ address: XBZZ, abi: erc20Abi, functionName: 'balanceOf', args: [address] });
         if (have < need) {
           return stop('Not enough xBZZ', `One storage batch costs about ${formatBzzCeil(need)} xBZZ on Gnosis. Add xBZZ to this account, then try again. Nothing was bought.`);
@@ -780,6 +969,7 @@ export function Approve({ captureId }: { captureId: string | null }) {
       const r = await buyOneBatch(w, gnosisPub, {
         owner,
         days: BUY_DAYS,
+        depth: buyDepth,
         quotedTotal: price.perBatch,
         sentKey: key,
         durable: true,
@@ -892,7 +1082,9 @@ export function Approve({ captureId }: { captureId: string | null }) {
       : load.phase === 'refused'
         ? (load.kind ?? 'capture')
         : load.phase === 'offline'
-          ? 'confirmation'
+          ? load.what === 'code'
+            ? 'capture'
+            : 'confirmation'
           : load.phase === 'unreachable'
             ? 'unknown'
             : 'capture';
@@ -950,7 +1142,9 @@ export function Approve({ captureId }: { captureId: string | null }) {
         >
           {load.phase === 'unreachable'
             ? 'Open this page from the link the extension opened, or check the extension ID in Settings. Your capture is still pending in the extension.'
-            : 'The earlier capture could not be read, so the confirmation was not checked yet. Your capture is still pending in the extension.'}
+            : load.what === 'code'
+              ? 'The uploaded code could not be downloaded, so it was not checked yet and nothing was published. Your capture is still pending in the extension.'
+              : 'The earlier capture could not be read, so the confirmation was not checked yet. Your capture is still pending in the extension.'}
           <TechnicalDetails text={load.message} />
         </Notice>
         {discardDialog(itemKind)}
@@ -990,10 +1184,14 @@ export function Approve({ captureId }: { captureId: string | null }) {
       );
     }
     const upFailed = save.state === 'error' && save.stage === 'upload';
+    const checkingCode = save.state === 'checking' && save.code !== undefined;
     steps.push({
-      label: how === 'free' ? 'Upload to free storage' : 'Upload the evidence',
-      state: load.stored ? 'done' : save.state === 'uploading' || save.state === 'checking' ? 'active' : upFailed ? 'failed' : 'waiting',
+      label: how === 'free' ? 'Upload to free storage' : load.repo ? 'Upload the evidence and the code' : 'Upload the evidence',
+      state: load.stored ? 'done' : (save.state === 'uploading' || save.state === 'checking') && !checkingCode ? 'active' : upFailed ? 'failed' : checkingCode ? 'done' : 'waiting',
     });
+    if (load.repo) {
+      steps.push({ label: 'Check the uploaded code', state: load.stored?.code ? 'done' : checkingCode ? 'active' : 'waiting' });
+    }
   }
   const atPublish = !needsStorage;
   steps.push(
@@ -1009,7 +1207,7 @@ export function Approve({ captureId }: { captureId: string | null }) {
     },
     { label: `Switch to ${arkivName}`, state: !connected || !atPublish ? 'waiting' : onArkiv ? 'done' : 'active' },
     {
-      label: isConfirmation ? 'Publish the confirmation' : 'Publish the record',
+      label: isConfirmation ? 'Publish the confirmation' : load.repo ? 'Publish the capture and code records' : 'Publish the record',
       state: published
         ? 'done'
         : !atPublish || !onArkiv
@@ -1046,7 +1244,9 @@ export function Approve({ captureId }: { captureId: string | null }) {
           ? 'Uploading to free storage…'
           : 'Uploading the evidence…'
         : save.state === 'checking'
-          ? 'Checking the upload…'
+          ? save.code
+            ? `Checking the uploaded code${save.code.received > 0 ? ` (${(save.code.received / 1024 / 1024).toFixed(1)}${save.code.total ? ` of ${(save.code.total / 1024 / 1024).toFixed(1)}` : ''} MB)` : ''}…`
+            : 'Checking the upload…'
           : publish.state === 'connecting'
             ? 'Connecting…'
             : publish.state === 'switching'
@@ -1064,6 +1264,8 @@ export function Approve({ captureId }: { captureId: string | null }) {
       ? `No upload is needed. MetaMask will show the network fee. The record lasts ${RECORD_DAYS} days; anyone can extend it.`
       : needsStorage && hasBatch
         ? 'The extension uploads the evidence with your storage, then MetaMask publishes the record.'
+        : needsStorage && load.repo
+          ? `One storage batch for ${BUY_DAYS} days, big enough for the code (depth ${buyDepth})${price.kind === 'ready' ? `: about ${formatBzzCeil(price.perBatch)} xBZZ` : ''}, paid in MetaMask on Gnosis. Then the extension uploads the evidence and the code, this page checks the code, and MetaMask publishes both records.`
         : needsStorage
           ? `One storage batch for ${BUY_DAYS} days${price.kind === 'ready' ? `: about ${formatBzzCeil(price.perBatch)} xBZZ` : ''}, paid in MetaMask on Gnosis. Then the extension uploads the evidence and MetaMask publishes the record.`
           : `MetaMask will show the network fee. The record lasts ${RECORD_DAYS} days; anyone can extend it.`;
@@ -1089,8 +1291,13 @@ export function Approve({ captureId }: { captureId: string | null }) {
         >
           {publish.until ? `Record on Arkiv until ${formatDay(publish.until)}.` : `Record on Arkiv for ${RECORD_DAYS} days.`}{' '}
           <span className="approve-record">
-            Record <MonoValue value={publish.entityKey} />
+            {publish.attachmentKey ? 'Capture record' : 'Record'} <MonoValue value={publish.entityKey} />
           </span>
+          {publish.attachmentKey ? (
+            <span className="approve-record">
+              Code record <MonoValue value={publish.attachmentKey} />
+            </span>
+          ) : null}
           {publish.markError ? (
             <span className="approve-record">
               The extension could not be told, so it still lists this capture as pending.
@@ -1117,6 +1324,27 @@ export function Approve({ captureId }: { captureId: string | null }) {
         {/* The witness itself is in the exhibit below, and whether you trust it is check C. */}
         <WhyWitness />
       </section>
+
+      {load.repo ? (
+        <section className="approve-repo" aria-labelledby="repo-title" data-checked={load.stored?.code ? 'true' : 'false'}>
+          <h2 id="repo-title" className="section-title">
+            Repository {load.repo.branch.owner}/{load.repo.branch.repo} @ <CommitId sha={load.repo.branch.commitSha} />: the code matches the
+            commit GitHub reported
+          </h2>
+          <p>
+            Recall notarized GitHub&apos;s answer for branch <span className="mono">{load.repo.branch.branch}</span>. The code is that
+            commit&apos;s snapshot ({load.repo.summary.files.toLocaleString('en')} files, {formatBytes(load.repo.summary.size)}); it is stored
+            next to the evidence and checked by its git tree hash.
+          </p>
+          <p>
+            {load.stored?.code ? (
+              <StatusBadge status="pass" label="Uploaded code checked in this browser" />
+            ) : (
+              <StatusBadge status="unavailable" label="Checked by the extension; checked again here after the upload" />
+            )}
+          </p>
+        </section>
+      ) : null}
 
       {needsStorage && !published ? (
         <section className="approve-save" aria-labelledby="save-title">
