@@ -241,7 +241,15 @@ export type UploadCopy = {
   kind: NoticeKind;
   title: string;
   body: string;
-  actions: ('buyStorage' | 'uploadNow' | 'retryUpload' | 'copy')[];
+  actions: (
+    | 'buyStorage'
+    | 'uploadNow'
+    | 'retryUpload'
+    | 'copy'
+    | 'openApprove'
+    | 'publishConfirmation'
+    | 'keepAlive'
+  )[];
 };
 
 const sentence = (s: string) => {
@@ -259,9 +267,21 @@ export function uploadCopy(upload: UploadState, storage: StorageState): UploadCo
       return {
         kind: 'success',
         title: 'Uploaded. Ready to publish',
-        body: 'The evidence file is on Swarm. Publishing its record on Arkiv comes next.',
-        actions: [],
+        body: 'The evidence file is on Swarm. Finish in the approval tab to publish its record on Arkiv.',
+        actions: ['openApprove'],
       };
+    case 'confirmation': {
+      // "the capture", not "your capture": the earlier one may be anyone's.
+      const since = formatUtc(Number(upload.since));
+      return {
+        kind: 'info',
+        title: `Unchanged since ${since}`,
+        body:
+          `This page is byte-for-byte the same as the capture from ${since}. You can publish a ` +
+          'confirmation that it was still unchanged today. No new upload is needed.',
+        actions: ['publishConfirmation', 'keepAlive'],
+      };
+    }
     case 'no_storage':
       if (storage === 'expired') {
         return {
@@ -316,4 +336,75 @@ export function pageBlockedReason(url: string): string | null {
   const t = captureTarget(url);
   if (t instanceof URL) return null;
   return t.error.charAt(0).toUpperCase() + t.error.slice(1) + '.';
+}
+
+/** The web app's approval tab for a pending capture; `ext` tells the page which extension to ask. */
+export function approveUrl(appUrl: string, captureId: string, extensionId: string): string {
+  return new URL(`#/approve/${captureId}?ext=${extensionId}`, appUrl).href;
+}
+
+/** The web app's timeline of a page. */
+export function timelineUrl(appUrl: string, urlHash: string): string {
+  return new URL(`#/u/${urlHash}`, appUrl).href;
+}
+
+/** A capture record's page in the web app (where it can be kept alive). */
+export function captureUrl(appUrl: string, entityKey: string): string {
+  return new URL(`#/c/${entityKey}`, appUrl).href;
+}
+
+/**
+ * The checked history of a page for the popup (service worker answer). Counts are of
+ * verified records only; `trusted: false` means no witness is pinned, so none can verify.
+ */
+export type EarlierCaptures =
+  | {
+      urlHash: string;
+      timelineUrl: string;
+      trusted: boolean;
+      versions: number;
+      confirmations: number;
+      /** Unix seconds (decimal) of the newest verified record. */
+      latest?: string;
+      incomplete: boolean;
+    }
+  | { error: string };
+
+export type EarlierView =
+  | { kind: 'loading'; text: string }
+  | { kind: 'error' | 'none'; text: string }
+  | { kind: 'unchecked'; text: string; timelineUrl: string }
+  | { kind: 'some'; counts: string; latest: string; note?: string; timelineUrl: string };
+
+const count = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+/** "Earlier captures" (design brief 4.1). Unverified records are never counted. */
+export function earlierCopy(r: EarlierCaptures | undefined): EarlierView {
+  if (!r) return { kind: 'loading', text: 'Checking earlier captures…' };
+  if ('error' in r) {
+    return { kind: 'error', text: "Couldn't load earlier captures. You can still capture this page." };
+  }
+  if (!r.trusted) {
+    return {
+      kind: 'unchecked',
+      text: "No trusted witness is set, so earlier captures can't be checked here.",
+      timelineUrl: r.timelineUrl,
+    };
+  }
+  if (r.versions === 0) {
+    return r.incomplete
+      ? {
+          kind: 'unchecked',
+          text: 'No verified captures among the records checked here. The timeline checks them all.',
+          timelineUrl: r.timelineUrl,
+        }
+      : { kind: 'none', text: 'No captures of this page yet.' };
+  }
+  return {
+    kind: 'some',
+    counts: `${count(r.versions, 'version')} · ${count(r.confirmations, 'confirmation')}`,
+    latest: `Latest: ${r.latest ? formatUtc(Number(r.latest)) : 'unknown'}`,
+    ...(r.incomplete ? { note: 'Some records were not checked here. The timeline checks them all.' } : {}),
+    timelineUrl: r.timelineUrl,
+  };
 }

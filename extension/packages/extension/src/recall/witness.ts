@@ -1,11 +1,19 @@
+import type { Address } from 'viem';
+
 /** How long the popup waits for `GET {witness}/info` before calling the witness offline. */
 export const WITNESS_CHECK_TIMEOUT_MS = 2_000;
 
 /**
  * Health check: the witness is online when `GET {witnessUrl}/info` answers 200 with a
- * `signer` address within the timeout. No URL configured counts as offline.
+ * `signer` address within the timeout. When witnesses are pinned, the signer must be one
+ * of them: a URL that answers for another key (a stale or hostile announcement) is not
+ * our witness. No URL configured counts as offline.
  */
-export async function witnessOnline(witnessUrl: string | undefined, timeoutMs = WITNESS_CHECK_TIMEOUT_MS): Promise<boolean> {
+export async function witnessOnline(
+  witnessUrl: string | undefined,
+  timeoutMs = WITNESS_CHECK_TIMEOUT_MS,
+  pinned: readonly Address[] = [],
+): Promise<boolean> {
   if (!witnessUrl) return false;
   try {
     const res = await fetch(new URL('info', witnessUrl.endsWith('/') ? witnessUrl : `${witnessUrl}/`), {
@@ -15,7 +23,9 @@ export async function witnessOnline(witnessUrl: string | undefined, timeoutMs = 
     });
     if (!res.ok) return false;
     const info = (await res.json()) as { signer?: unknown };
-    return typeof info.signer === 'string' && /^0x[0-9a-fA-F]{40}$/.test(info.signer);
+    if (typeof info.signer !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(info.signer)) return false;
+    const signer = info.signer.toLowerCase();
+    return pinned.length === 0 || pinned.some((p) => p.toLowerCase() === signer);
   } catch {
     return false;
   }

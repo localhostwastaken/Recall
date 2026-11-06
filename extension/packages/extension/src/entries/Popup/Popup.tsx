@@ -7,13 +7,16 @@ import { Steps, type StepState } from '../../recall/ui/Steps';
 import { CheckRow } from '../../recall/ui/CheckRow';
 import { MonoValue } from '../../recall/ui/MonoValue';
 import { loadSettings } from '../../recall/settings';
-import { witnessOnline } from '../../recall/witness';
 import { CAPTURE_STATE_KEY, isLiveRunning, type CaptureState } from '../../recall/jobState';
 import { POOL_KEY, parsePool, storageState, type StorageState } from '../../recall/poolState';
 import type { PopupRequest } from '../../recall/messages';
 import {
+  approveUrl,
   captureHelper,
+  captureUrl,
+  earlierCopy,
   storageNotice,
+  type EarlierCaptures,
   checkLines,
   errorCopy,
   formatElapsed,
@@ -96,6 +99,67 @@ async function openBuyStorage(): Promise<void> {
   await chrome.tabs.create({ url: new URL('#/storage', appUrl).href });
 }
 
+/** Opens a page of the web app (built from the app URL in settings) in a new tab. */
+async function openApp(build: (appUrl: string) => string): Promise<void> {
+  const { appUrl } = await loadSettings();
+  await chrome.tabs.create({ url: build(appUrl) });
+}
+
+/** The verified history of the page, from the service worker (undefined while loading). */
+function useEarlierCaptures(url: string | undefined): EarlierCaptures | undefined {
+  const [state, setState] = useState<{ url: string; value: EarlierCaptures } | undefined>(undefined);
+  useEffect(() => {
+    if (!url) return;
+    let live = true;
+    send({ type: 'recall.earlierCaptures', url })
+      .then((r) => r as EarlierCaptures | undefined)
+      .catch((err: unknown) => ({ error: String(err) }))
+      .then((value) => {
+        if (live) setState({ url, value: value ?? { error: 'no answer' } });
+      });
+    return () => {
+      live = false;
+    };
+  }, [url]);
+  return state && state.url === url ? state.value : undefined;
+}
+
+/** "Earlier captures": counts of verified records only (unverified ones are never counted). */
+function EarlierCapturesView({ value }: { value: EarlierCaptures | undefined }) {
+  const v = earlierCopy(value);
+  const timeline = (href: string) => (
+    <a className="link" href={href} target="_blank" rel="noreferrer">
+      View timeline
+    </a>
+  );
+  return (
+    <section aria-labelledby="earlier-captures" aria-busy={v.kind === 'loading'}>
+      <h2 id="earlier-captures" className="section-label">
+        Earlier captures
+      </h2>
+      {v.kind === 'loading' ? (
+        <p className="muted earlier-loading">
+          <StatusBadge status="pending" label={v.text} />
+        </p>
+      ) : v.kind === 'some' ? (
+        <div className="earlier">
+          <p className="earlier-counts tabular">{v.counts}</p>
+          <p className="muted tabular">{v.latest}</p>
+          {v.note ? <p className="muted">{v.note}</p> : null}
+          <p>{timeline(v.timelineUrl)}</p>
+        </div>
+      ) : v.kind === 'unchecked' ? (
+        <div className="earlier">
+          <p className="muted">{v.text}</p>
+          <p>{timeline(v.timelineUrl)}</p>
+        </div>
+      ) : (
+        <p className="muted">{v.text}</p>
+      )}
+    </section>
+  );
+}
+
 /** Re-renders every second while `on`, for the elapsed-time text. */
 function useNow(on: boolean): number {
   const [now, setNow] = useState(() => Date.now());
@@ -114,11 +178,15 @@ export function Popup() {
   const job = useCaptureState();
   const storage = useStorageState();
   const noStorage = storageNotice(storage);
+  // Only pages the extension can capture have a history to look up.
+  const capturable = page && !pageBlockedReason(page.url) ? page.url : undefined;
+  const earlier = useEarlierCaptures(capturable);
 
+  // The service worker tries the URL the pinned witness announced on Arkiv, then the
+  // settings URL; online needs /info within 2 s from a pinned signer.
   const probeWitness = useCallback(() => {
-    loadSettings()
-      .then((s) => witnessOnline(s.witnessUrl))
-      .then((ok) => setWitness(ok ? 'online' : 'offline'))
+    send({ type: 'recall.witnessStatus' })
+      .then((r) => setWitness((r as { online?: boolean } | undefined)?.online ? 'online' : 'offline'))
       .catch(() => setWitness('offline'));
   }, []);
   const checkWitness = useCallback(() => {
@@ -308,15 +376,9 @@ export function Popup() {
               {noStorage.body}
             </Notice>
           </section>
-        ) : (
-          // Task 13 loads the earlier captures from Arkiv.
-          <section aria-labelledby="earlier-captures">
-            <h2 id="earlier-captures" className="section-label">
-              Earlier captures
-            </h2>
-            <StatusBadge status="unavailable" />
-          </section>
-        )}
+        ) : capturable ? (
+          <EarlierCapturesView value={earlier} />
+        ) : null}
       </main>
 
       <footer className="popup-footer">
@@ -365,7 +427,31 @@ function CaptureResult({
   const lines = checkLines(job.checks, job.evidence);
   const v = verdict(lines, job.checks);
   const up = job.upload ? uploadCopy(job.upload, storage) : null;
+  const u = job.upload;
+  const openApprove = () => {
+    if (u?.status === 'uploaded' || u?.status === 'confirmation') {
+      void openApp((app) => approveUrl(app, u.captureId, chrome.runtime.id));
+    }
+  };
+  const keepAlive = () => {
+    if (u?.status === 'confirmation') void openApp((app) => captureUrl(app, u.captureKey));
+  };
   const upActions = {
+    openApprove: (
+      <button key="approve" type="button" className="btn btn-secondary" onClick={openApprove}>
+        Open approval tab
+      </button>
+    ),
+    publishConfirmation: (
+      <button key="confirm" type="button" className="btn btn-secondary" onClick={openApprove}>
+        Publish confirmation
+      </button>
+    ),
+    keepAlive: (
+      <button key="keep" type="button" className="btn btn-ghost" onClick={keepAlive}>
+        Keep earlier capture alive
+      </button>
+    ),
     buyStorage: (
       <button key="buy" type="button" className="btn btn-secondary" onClick={onBuyStorage}>
         Buy storage
@@ -418,6 +504,9 @@ function CaptureResult({
               <span className="upload-ref">
                 Evidence <MonoValue value={job.upload.evidenceRef} />
               </span>
+            ) : null}
+            {job.upload?.status === 'confirmation' ? (
+              <span className="upload-ref">Finish in the approval tab to publish the confirmation.</span>
             ) : null}
           </Notice>
         </div>

@@ -33,6 +33,12 @@ export type JobStep = CaptureStep | 4;
 /** What happened to the evidence after the checks. */
 export type UploadState =
   | { status: 'uploaded'; captureId: string; evidenceRef: Hex; batchId: Hex }
+  /**
+   * The newest verified capture of the page has the same bytes: a confirmation (evidence
+   * inline, no Swarm upload) waits in the approval tab. `since`: that capture's signed time
+   * (Unix seconds, decimal).
+   */
+  | { status: 'confirmation'; captureId: string; captureKey: Hex; since: string }
   /** The pool had no unused batch. */
   | { status: 'no_storage' }
   /** The checks did not allow an upload. */
@@ -50,7 +56,7 @@ export type CaptureState =
       stepAt?: number;
       /** The pool had a batch at the start, so the steps include the upload. */
       uploadPlanned?: boolean;
-      /** Step 4 only: the checked capture being uploaded. */
+      /** Step 3 (same-page check) and step 4 (upload): the checked capture. */
       evidence?: EvidenceFile;
       checks?: CheckSummary;
     })

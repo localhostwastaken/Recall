@@ -1,0 +1,61 @@
+/* Approve (#/approve): exhibit, what it proves, checks, steps, and a sticky action bar. Tokens only. */
+.approve > * + * {
+  margin-top: var(--space-5);
+}
+
+.approve-proves {
+  display: grid;
+  gap: var(--space-2);
+  max-width: var(--measure);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  background: var(--surface);
+}
+
+.approve-witness {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.approve-check-list {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+  max-width: var(--measure);
+}
+
+.approve-check-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.approve-check-list li > :nth-child(2) {
+  flex: 1 1 12rem;
+}
+
+.approve-record {
+  display: block;
+  margin-top: var(--space-1);
+}
+
+.approve-loading {
+  margin-top: var(--space-4);
+}
+
+/* The one primary action stays in reach while the page scrolls. */
+.approve-bar {
+  position: sticky;
+  bottom: 0;
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}

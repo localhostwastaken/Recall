@@ -41,6 +41,8 @@ describe('settings', () => {
     expect(s.net).toBe('live');
     expect(s.appUrl).toBe('https://localhostwastaken.github.io/Recall/app/');
     expect(s.witnessUrl).toBeUndefined();
+    // The live witness is pinned, so its announced URL can be found on Arkiv.
+    expect(s.pinnedWitnesses).toEqual(['0xC9319e18e86cd7EB653c0Ed0693c0cf5B63db37D']);
   });
 
   it('loads defaults when nothing is stored', async () => {

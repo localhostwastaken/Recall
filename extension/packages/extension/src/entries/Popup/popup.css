@@ -100,3 +100,19 @@ body {
   display: block;
   margin-top: var(--space-1);
 }
+
+/* Earlier captures: counts of verified records, the newest date and a timeline link. */
+.earlier {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.earlier-counts {
+  font-weight: 600;
+}
+
+.link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}

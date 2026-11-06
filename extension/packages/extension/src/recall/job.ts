@@ -1,8 +1,12 @@
 // The capture job (service worker side): one capture at a time, run by the offscreen
 // document. Its state lives in chrome.storage.session, so the popup can close and
 // reopen while the capture keeps running. After the checks, a capture that may be
-// uploaded is stamped with one pool batch and uploaded to Swarm (also in offscreen).
-import { runChecks, type CheckReport, type EvidenceFile } from '@recall/evidence';
+// uploaded is compared with the page's newest verified capture: the same bytes become a
+// confirmation (evidence inline in the Arkiv record, no upload); anything else is stamped
+// with one pool batch and uploaded to Swarm (also in offscreen). Either way the web app's
+// approval tab then opens, where MetaMask publishes the Arkiv record.
+import { encodeEvidence, runChecks, urlHash, type CheckReport, type EvidenceFile } from '@recall/evidence';
+import type { Hex } from 'viem';
 import { RECALL_DEV } from './build';
 import { loadSettings, netConfigFor } from './settings';
 import { ensureOffscreen } from './offscreen';
@@ -10,6 +14,7 @@ import { applyBatchUpdates, loadPool } from './pool';
 import { unusedBatches } from './poolState';
 import { stampKey } from './stamp';
 import { newCaptureId, savePending } from './pending';
+import { latestVerifiedCapture, openApproveTab, resolveWitness } from './lookup';
 import {
   USABLE_WAIT_MS,
   canonicalEvidence,
@@ -116,16 +121,21 @@ async function sendToOffscreen(
   }
 }
 
-/** Starts a capture of `url`. Overrides are honoured by dev builds only. */
-export function startCapture(
+/**
+ * Starts a capture of `url`. Overrides are honoured by dev builds only. The witness URL is
+ * the one the popup found online (announced on Arkiv by the pinned witness, else settings).
+ */
+export async function startCapture(
   url: string,
   overrides?: CaptureOverrides,
 ): Promise<{ id: string } | { error: string }> {
+  // A failed lookup (offscreen document or Arkiv down) falls back to the settings URL.
+  const witness = await resolveWitness().catch(async () => ({ url: (await loadSettings()).witnessUrl }));
   return update(async () => {
     if (isLive(await readCaptureState())) return { error: 'A capture is already running.' };
-    const settings = await loadSettings();
     const base: Base = { id: crypto.randomUUID(), url, startedAt: Date.now() };
-    if (!settings.witnessUrl) {
+    const witnessUrl = witness?.url;
+    if (!witnessUrl) {
       await finish(failure(base, 'no witness address is set', 'witness_offline'));
       return { id: base.id };
     }
@@ -145,7 +155,7 @@ export function startCapture(
         type: 'recall.offscreen.capture',
         id: base.id,
         url,
-        witnessUrl: settings.witnessUrl,
+        witnessUrl,
         maxRecvData: MAX_RECV_DATA,
         ...(RECALL_DEV && overrides ? { overrides } : {}),
       };
@@ -170,11 +180,23 @@ export function onCaptureStep(id: string, step: CaptureStep): Promise<void> {
   });
 }
 
-/** Offscreen result: run checks A-C on fresh evidence, then upload it or store the final state. */
-export function onCaptureResult(id: string, outcome: CaptureOutcome): Promise<void> {
+/**
+ * Offscreen result: run checks A-C on fresh evidence; then (outside the state chain, so a
+ * cancel is never held up by the network) the same-page check, which ends in a confirmation
+ * or an upload. A capture the checks refused is stored as final at once.
+ */
+export async function onCaptureResult(id: string, outcome: CaptureOutcome): Promise<void> {
+  const next = await checkCapture(id, outcome);
+  if (next) await afterChecks(id, next.evidence, next.checks);
+}
+
+function checkCapture(
+  id: string,
+  outcome: CaptureOutcome,
+): Promise<{ evidence: EvidenceFile; checks: CheckSummary } | undefined> {
   return update(async () => {
     const s = await readCaptureState();
-    if (s?.status !== 'running' || s.id !== id || s.step > 3) return; // cancelled or superseded
+    if (s?.status !== 'running' || s.id !== id || s.step > 3 || s.evidence) return; // cancelled or superseded
     const base: Base = { id: s.id, url: s.url, startedAt: s.startedAt };
     if ('evidence' in outcome) {
       await area().set({
@@ -201,15 +223,76 @@ export function onCaptureResult(id: string, outcome: CaptureOutcome): Promise<vo
       const gate = uploadGate(checks, base.url);
       if (!gate.ok) {
         await finishDone(base, evidence, checks, { status: 'skipped', reason: gate.reason });
-      } else {
-        await beginUpload(base, evidence, checks);
+        return undefined;
       }
+      // Still step 3: the same-page check runs next. Storing the checked capture marks it.
+      await area().set({
+        [CAPTURE_STATE_KEY]: { ...s, step: 3, stepAt: Date.now(), evidence, checks } satisfies CaptureState,
+      });
+      return { evidence, checks };
     } else if (outcome.code === 'cancelled') {
       await finish({ ...base, status: 'cancelled', finishedAt: Date.now() });
     } else {
       await finish(failure(base, outcome.error, outcome.code, outcome.size));
     }
+    return undefined;
   });
+}
+
+/** Evidence inline in an Arkiv record must stay within this size (spec 3.2). */
+export const INLINE_EVIDENCE_MAX = 128 * 1024;
+
+/**
+ * The same-page check (security, R10). The newest VERIFIED capture of this page (its
+ * evidence downloaded and checked A-C with a pinned witness, its record matching the
+ * evidence) with the same bytes makes this capture a confirmation; a record that merely
+ * claims the same bytes counts for nothing. Anything unknown (no pinned witness, a listing
+ * cut short, Arkiv or Swarm unreachable) leads to an upload.
+ */
+async function sameAsLatest(evidence: EvidenceFile, checks: CheckSummary): Promise<{ captureKey: Hex; since: string } | null> {
+  const f = checks.facts;
+  if (!f || encodeEvidence(evidence).length > INLINE_EVIDENCE_MAX) return null;
+  const latest = await latestVerifiedCapture(urlHash(f.canonicalUrl));
+  if (!latest || latest.bodySha256.toLowerCase() !== f.bodySha256.toLowerCase()) return null;
+  if (BigInt(latest.signedAt) >= BigInt(f.signedAt)) return null;
+  return { captureKey: latest.entityKey, since: latest.signedAt };
+}
+
+async function afterChecks(id: string, evidence: EvidenceFile, checks: CheckSummary): Promise<void> {
+  const same = await sameAsLatest(evidence, checks).catch(() => null);
+  let opened: string | undefined;
+  await update(async () => {
+    const s = await readCaptureState();
+    if (s?.status !== 'running' || s.id !== id || s.step !== 3 || !s.evidence) return; // cancelled
+    const base: Base = { id: s.id, url: s.url, startedAt: s.startedAt };
+    if (!same || !checks.facts) {
+      await beginUpload(base, evidence, checks);
+      return;
+    }
+    try {
+      const captureId = newCaptureId();
+      await savePending({
+        captureId,
+        kind: 'confirmation',
+        evidence: canonicalEvidence(evidence),
+        captureKey: same.captureKey,
+        bodySha256: checks.facts.bodySha256,
+        createdAt: Date.now(),
+      });
+      await finishDone(base, evidence, checks, {
+        status: 'confirmation',
+        captureId,
+        captureKey: same.captureKey,
+        since: same.since,
+      });
+      opened = captureId;
+    } catch (err) {
+      // Could not keep the confirmation: upload as a new capture instead.
+      console.error('[recall] confirmation could not be kept', errorText(err));
+      await beginUpload(base, evidence, checks);
+    }
+  });
+  if (opened) await openApproveTab(opened);
 }
 
 function finishDone(
@@ -281,8 +364,9 @@ async function beginUpload(
  * became of the job (a stamped slot must never be stamped again); the job finishes only
  * if it is still this upload. Nothing here may leave the job stuck at step 4.
  */
-export function onUploadResult(id: string, outcome: UploadOutcome): Promise<void> {
-  return update(async () => {
+export async function onUploadResult(id: string, outcome: UploadOutcome): Promise<void> {
+  let opened: string | undefined;
+  await update(async () => {
     try {
       await applyBatchUpdates(outcome.updates ?? []);
     } catch (err) {
@@ -325,6 +409,7 @@ export function onUploadResult(id: string, outcome: UploadOutcome): Promise<void
         evidenceRef: outcome.evidenceRef,
         batchId: outcome.batchId,
       });
+      opened = captureId;
     } catch (err) {
       await finishDone(base, s.evidence, s.checks, {
         status: 'failed',
@@ -332,6 +417,7 @@ export function onUploadResult(id: string, outcome: UploadOutcome): Promise<void
       });
     }
   });
+  if (opened) await openApproveTab(opened);
 }
 
 /** The popup's "Try again" after a failed upload (or once storage was bought): upload the same capture. */

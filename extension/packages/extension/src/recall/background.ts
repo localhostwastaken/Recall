@@ -12,6 +12,7 @@ import {
   startCapture,
 } from './job';
 import { initExternalApi } from './external';
+import { earlierCaptures, resolveWitness } from './lookup';
 import { stampKey } from './stamp';
 import type { RecallMessage } from './messages';
 
@@ -53,6 +54,10 @@ export function initRecallBackground(): void {
         return reply(dismissCapture().then(() => ({ ok: true })));
       case 'recall.retryUpload':
         return reply(retryUpload());
+      case 'recall.witnessStatus':
+        return reply(resolveWitness({ fresh: true }));
+      case 'recall.earlierCaptures':
+        return reply(earlierCaptures(msg.url));
       case 'recall.capture.step':
         void onCaptureStep(msg.id, msg.step);
         return;

@@ -1,6 +1,6 @@
 // Offscreen document: owns the tlsn-wasm prover (a worker) and runs captures for the
 // service worker; then stamps and uploads the evidence to Swarm, and reads Arkiv
-// records for the service worker. Recall fork: the upstream plugin host
+// records (and checks the evidence of earlier captures) for the service worker. Recall fork: the upstream plugin host
 // (SessionManager, plugin execution, reveal approval overlays, page relay) was removed;
 // captures start only from the popup, through the service worker.
 import { logger } from '@tlsn/common';
@@ -9,6 +9,7 @@ import { captureUrl, proveManager } from '../../recall/capture';
 import type { CaptureOutcome } from '../../recall/captureParts';
 import { uploadEvidence } from '../../recall/swarmUpload';
 import { readEntitySummary } from '../../recall/arkivRead';
+import { readHistory, readWitnessUrl } from '../../recall/historyRead';
 import type { UploadOutcome } from '../../recall/uploadParts';
 import type {
   CaptureResultMessage,
@@ -97,6 +98,12 @@ chrome.runtime.onMessage.addListener((raw: unknown, sender, sendResponse) => {
     readEntitySummary(msg.net, msg.entityKey).then(sendResponse, (err) =>
       sendResponse({ error: err instanceof Error ? err.message : String(err) }),
     );
+    return true; // async response
+  } else if (msg?.type === 'recall.offscreen.history') {
+    readHistory(msg).then(sendResponse);
+    return true; // async response
+  } else if (msg?.type === 'recall.offscreen.witnessUrl') {
+    readWitnessUrl(msg).then(sendResponse);
     return true; // async response
   } else if (msg?.type === 'recall.offscreen.cancel') {
     running.get(msg.id)?.abort();

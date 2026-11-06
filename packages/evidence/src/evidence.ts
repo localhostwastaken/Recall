@@ -58,12 +58,28 @@ export function buildEvidence(i: BuildEvidenceInput): EvidenceFile {
   };
 }
 
-/** JSON that starts with `{"schema"`: the public gateway blocks content that looks like HTML. */
+/**
+ * JSON that starts with `{"schema"`: the public gateway blocks content that looks like HTML.
+ * Every object is written in one fixed key order (the statement's too), and unknown keys are
+ * dropped, so the bytes never depend on the key order of the input. chrome.storage, for one,
+ * hands objects back with sorted keys.
+ */
 export function encodeEvidence(e: EvidenceFile): Uint8Array {
+  const s = e.statement;
   return new TextEncoder().encode(
     JSON.stringify({
       schema: e.schema,
-      statement: e.statement,
+      statement: {
+        serverName: s.serverName,
+        connTime: s.connTime,
+        signedAt: s.signedAt,
+        sentSha256: s.sentSha256,
+        recvSha256: s.recvSha256,
+        sentLen: s.sentLen,
+        recvLen: s.recvLen,
+        tlsVersion: s.tlsVersion,
+        nonce: s.nonce,
+      } satisfies StatementJson,
       signature: e.signature,
       signer: e.signer,
       transcript: { sent: e.transcript.sent, recv: e.transcript.recv },

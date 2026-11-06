@@ -37,9 +37,9 @@ export function uploadGate(
 
 /**
  * The evidence file in its canonical form (the shape decodeEvidence returns: fixed key
- * order, lower-case signature). encodeEvidence keeps the statement's key order, and
- * chrome.storage hands objects back with sorted keys. So the extension uploads and keeps
- * (as JSON text) only this form, and encodeEvidence of a pending record's evidence, or of
+ * order, lower-case signature, checksummed signer). encodeEvidence itself now writes one
+ * fixed key order whatever the input's (chrome.storage hands objects back with sorted keys);
+ * this also normalises the values, so encodeEvidence of a pending record's evidence, or of
  * the downloaded file decoded again, gives exactly the uploaded bytes.
  */
 export function canonicalEvidence(e: EvidenceFile): EvidenceFile {

@@ -654,7 +654,8 @@ describe('upload gate', () => {
           : v,
       ),
     ) as EvidenceFile;
-    expect(encodeEvidence(sorted)).not.toEqual(encodeEvidence(evidence));
+    // encodeEvidence itself writes one fixed key order now (packages/evidence).
+    expect(encodeEvidence(sorted)).toEqual(encodeEvidence(evidence));
     expect(encodeEvidence(canonicalEvidence(sorted))).toEqual(
       encodeEvidence(canonicalEvidence(evidence)),
     );

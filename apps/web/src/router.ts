@@ -9,6 +9,7 @@ export type Route =
   | { name: 'file' }
   | { name: 'storage' }
   | { name: 'settings' }
+  | { name: 'approve'; captureId: string | null }
   | { name: 'not-found'; path: string };
 
 const KEY = /^0x[0-9a-fA-F]{64}$/;
@@ -24,7 +25,12 @@ export function parseHash(hash: string): Route {
       return { name: 'storage' };
     case '/settings':
       return { name: 'settings' };
+    case '/approve':
+      return { name: 'approve', captureId: null };
   }
+  // `#/approve/:captureId` (the extension's 128-bit id; `?ext=` names the extension).
+  const approve = /^\/approve\/([0-9a-f]{32})$/.exec(path);
+  if (approve) return { name: 'approve', captureId: approve[1] };
   // `#/c/:entityKey` (also `#/capture/:key`) and `#/u/:urlHash` (also `#/url/:urlHash`).
   const m = /^\/(c|capture|u|url)\/([^/]+)$/.exec(path);
   if (m && KEY.test(m[2])) {
@@ -41,6 +47,8 @@ export function routeId(route: Route): string {
       return `capture:${route.key}`;
     case 'url':
       return `url:${route.urlHash}`;
+    case 'approve':
+      return `approve:${route.captureId ?? ''}`;
     default:
       return route.name;
   }

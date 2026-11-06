@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import type { EvidenceFile } from '@recall/evidence';
 import {
+  approveUrl,
   checkLines,
+  earlierCopy,
   errorCopy,
   formatElapsed,
   formatUtc,
   pageBlockedReason,
   plainReason,
+  uploadCopy,
   verdict,
 } from '../../src/recall/captureView';
 import type { CheckSummary } from '../../src/recall/jobState';
@@ -136,5 +139,76 @@ describe('capture view copy', () => {
       'Addresses with a user name or password cannot be captured.',
     );
     expect(pageBlockedReason('chrome://extensions')).toBe('Only https:// pages can be captured.');
+  });
+
+  it('opens the approval tab of the web app with the capture id and this extension', () => {
+    const id = 'a'.repeat(32);
+    const ext = 'b'.repeat(32);
+    expect(approveUrl('http://localhost:5173', id, ext)).toBe(`http://localhost:5173/#/approve/${id}?ext=${ext}`);
+    expect(approveUrl('https://localhostwastaken.github.io/Recall/app/', id, ext)).toBe(
+      `https://localhostwastaken.github.io/Recall/app/#/approve/${id}?ext=${ext}`,
+    );
+  });
+
+  it('an uploaded capture points to the approval tab', () => {
+    const k = ('0x' + '1'.repeat(64)) as `0x${string}`;
+    expect(uploadCopy({ status: 'uploaded', captureId: 'x', evidenceRef: k, batchId: k }, 'ok')).toEqual({
+      kind: 'success',
+      title: 'Uploaded. Ready to publish',
+      body: 'The evidence file is on Swarm. Finish in the approval tab to publish its record on Arkiv.',
+      actions: ['openApprove'],
+    });
+  });
+
+  it('an unchanged page offers a confirmation, with no new upload', () => {
+    const k = ('0x' + '1'.repeat(64)) as `0x${string}`;
+    expect(uploadCopy({ status: 'confirmation', captureId: 'x', captureKey: k, since: '1793800920' }, 'empty')).toEqual({
+      kind: 'info',
+      title: 'Unchanged since 4 Nov 2026, 14:02 UTC',
+      body:
+        'This page is byte-for-byte the same as the capture from 4 Nov 2026, 14:02 UTC. You can publish a ' +
+        'confirmation that it was still unchanged today. No new upload is needed.',
+      actions: ['publishConfirmation', 'keepAlive'],
+    });
+  });
+
+  it('earlier captures: counts of verified records only, never green', () => {
+    const base = { urlHash: ('0x' + '2'.repeat(64)) as `0x${string}`, timelineUrl: 'http://app/#/u/x' };
+    expect(earlierCopy(undefined)).toEqual({ kind: 'loading', text: 'Checking earlier captures…' });
+    expect(earlierCopy({ error: 'rpc down' })).toEqual({
+      kind: 'error',
+      text: "Couldn't load earlier captures. You can still capture this page.",
+    });
+    expect(earlierCopy({ ...base, trusted: true, versions: 0, confirmations: 0, incomplete: false })).toEqual({
+      kind: 'none',
+      text: 'No captures of this page yet.',
+    });
+    expect(earlierCopy({ ...base, trusted: true, versions: 0, confirmations: 0, incomplete: true })).toEqual({
+      kind: 'unchecked',
+      text: 'No verified captures among the records checked here. The timeline checks them all.',
+      timelineUrl: base.timelineUrl,
+    });
+    expect(earlierCopy({ ...base, trusted: false, versions: 0, confirmations: 0, incomplete: false })).toEqual({
+      kind: 'unchecked',
+      text: "No trusted witness is set, so earlier captures can't be checked here.",
+      timelineUrl: base.timelineUrl,
+    });
+    expect(
+      earlierCopy({ ...base, trusted: true, versions: 1, confirmations: 1, latest: '1793800920', incomplete: false }),
+    ).toEqual({
+      kind: 'some',
+      counts: '1 version · 1 confirmation',
+      latest: 'Latest: 4 Nov 2026, 14:02 UTC',
+      timelineUrl: base.timelineUrl,
+    });
+    expect(
+      earlierCopy({ ...base, trusted: true, versions: 2, confirmations: 0, latest: '1793800920', incomplete: true }),
+    ).toEqual({
+      kind: 'some',
+      counts: '2 versions · 0 confirmations',
+      latest: 'Latest: 4 Nov 2026, 14:02 UTC',
+      note: 'Some records were not checked here. The timeline checks them all.',
+      timelineUrl: base.timelineUrl,
+    });
   });
 });

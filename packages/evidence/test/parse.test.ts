@@ -313,6 +313,31 @@ describe('evidence file', () => {
     expect(sha256(new Uint8Array(Buffer.from(e.transcript.recv, 'base64')))).toBe(sha256(notice.recv));
   });
 
+  it('encodes the same bytes whatever the key order of the input (statement keys too)', async () => {
+    const e = await makeEvidence(notice);
+    const bytes = encodeEvidence(e);
+    // chrome.storage hands objects back with sorted keys; any other order must not matter.
+    const reverse = <T extends object>(o: T): T =>
+      Object.fromEntries(Object.entries(o).reverse()) as T;
+    const sorted = <T extends object>(o: T): T =>
+      Object.fromEntries(Object.entries(o).sort(([a], [b]) => (a < b ? -1 : 1))) as T;
+    for (const shuffle of [reverse, sorted]) {
+      const shuffled = shuffle({
+        ...e,
+        statement: shuffle(e.statement),
+        transcript: shuffle(e.transcript),
+        meta: shuffle(e.meta),
+      });
+      expect(Object.keys(shuffled.statement)).not.toEqual(Object.keys(e.statement));
+      expect(bytesEqual(encodeEvidence(shuffled), bytes)).toBe(true);
+    }
+    // Extra keys never reach the file.
+    const extra = { ...e, extra: 1, statement: { ...e.statement, extra: 2 } } as unknown as typeof e;
+    expect(bytesEqual(encodeEvidence(extra), bytes)).toBe(true);
+    // The canonical form is a fixed point.
+    expect(bytesEqual(encodeEvidence(decodeEvidence(bytes)), bytes)).toBe(true);
+  });
+
   it('round-trips the 100 KB transcript', async () => {
     const e = await makeEvidence(big);
     expect(decodeEvidence(encodeEvidence(e))).toEqual(e);

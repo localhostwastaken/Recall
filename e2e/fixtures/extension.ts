@@ -44,14 +44,49 @@ export async function launchWithExtension({ dev }: { dev: boolean }): Promise<Ex
     args,
   });
   try {
-    const serviceWorker =
+    const first =
       context.serviceWorkers()[0] ?? (await context.waitForEvent('serviceworker', { timeout: 15_000 }));
-    const extensionId = new URL(serviceWorker.url()).host;
+    const extensionId = new URL(first.url()).host;
+    const serviceWorker = await readyServiceWorker(context, extensionId);
     return { context, extensionId, serviceWorker };
   } catch (err) {
     await context.close();
     throw err;
   }
+}
+
+/**
+ * The extension's service worker once Chrome has installed its extension APIs. Straight
+ * after launch the worker's `chrome` object can still lack `tabs` and `storage` (they appear
+ * a few hundred ms later), and Chrome sometimes replaces the first worker once; both made
+ * tests that evaluate `chrome.tabs` at once flaky. Polls the newest worker until its APIs
+ * answer, then returns it.
+ */
+async function readyServiceWorker(context: BrowserContext, extensionId: string): Promise<Worker> {
+  const deadline = Date.now() + 15_000;
+  let last = 'no service worker';
+  while (Date.now() < deadline) {
+    const workers = context.serviceWorkers().filter((w) => w.url().includes(extensionId));
+    const w = workers[workers.length - 1];
+    if (w) {
+      try {
+        const ready = await w.evaluate(async () => {
+          const c = (globalThis as unknown as {
+            chrome?: { tabs?: { query?: unknown }; storage?: { local?: { get(k: string): Promise<unknown> } } };
+          }).chrome;
+          if (typeof c?.tabs?.query !== 'function' || !c.storage?.local) return false;
+          await c.storage.local.get('recall.settings');
+          return true;
+        });
+        if (ready) return w;
+        last = 'extension APIs not ready yet';
+      } catch (err) {
+        last = String(err); // the worker was replaced while we asked; ask the new one
+      }
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error(`the extension service worker never became ready: ${last}`);
 }
 
 /** The id of the first tab whose URL matches `urlPattern` (a chrome.tabs match pattern). */

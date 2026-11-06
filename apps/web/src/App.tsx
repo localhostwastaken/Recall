@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { WalletChip } from './components/WalletChip';
 import { routeId, useRoute, type Route } from './router';
+import { Approve } from './routes/Approve';
 import { Capture } from './routes/Capture';
 import { FileCheck } from './routes/FileCheck';
 import { Home } from './routes/Home';
@@ -38,6 +39,8 @@ function Page({ route }: { route: Route }) {
       return <Storage />;
     case 'settings':
       return <Settings />;
+    case 'approve':
+      return <Approve key={route.captureId ?? ''} captureId={route.captureId} />;
     case 'not-found':
       return <NotFound path={route.path} />;
   }

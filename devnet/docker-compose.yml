@@ -1,6 +1,28 @@
 services:
   arkiv:
     image: ghcr.io/arkiv-network/arkiv-reth-dev:v1.0.1
+    # The image's own command, plus --http.corsdomain so the web app (another
+    # origin, e.g. Vite on :5173) can read the dev node straight from the browser.
+    command:
+      - node
+      - --dev
+      - --dev.block-time
+      - 250ms
+      - --txpool.enforce-tracked-nonce
+      - --http
+      - --http.addr
+      - 0.0.0.0
+      - --http.api
+      - eth,net,web3,txpool
+      - --http.corsdomain
+      - "*"
+      - --ws
+      - --ws.addr
+      - 0.0.0.0
+      - --ws.api
+      - eth,net,web3,txpool
+      - --datadir
+      - /data
     ports:
       - "8545:8545"
   # bee-compose (started by scripts/devnet-up.sh) publishes its second node on

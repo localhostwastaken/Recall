@@ -17,6 +17,13 @@ export const SETTINGS_KEY = 'recall.settings';
 /** The devnet witness service (devnet/docker-compose.yml). */
 export const LOCAL_WITNESS_URL = 'http://localhost:7047';
 
+/**
+ * The live Recall witness (public address; its key stays with the operator). Pinned by
+ * default in live builds, so check C can pass and its announced URL can be found on Arkiv.
+ * Dev builds pin nothing by default (tests pin the devnet witness when they need it).
+ */
+export const LIVE_WITNESS: Address = '0xC9319e18e86cd7EB653c0Ed0693c0cf5B63db37D';
+
 /** The subset of chrome.storage.StorageArea that settings use (injectable for tests). */
 export type SettingsArea = {
   get(key: string): Promise<Record<string, unknown>>;
@@ -30,7 +37,7 @@ export function defaultSettings(net: Net = RECALL_DEV ? 'local' : 'live'): Setti
   return {
     net,
     witnessUrl: net === 'local' ? LOCAL_WITNESS_URL : undefined,
-    pinnedWitnesses: [...cfg.witness.pinned],
+    pinnedWitnesses: net === 'live' ? [LIVE_WITNESS, ...cfg.witness.pinned] : [...cfg.witness.pinned],
     appUrl: cfg.app.url,
   };
 }
