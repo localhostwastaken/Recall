@@ -4,6 +4,8 @@
 import type { Address, Hex } from 'viem';
 import type { NetConfig } from '@recall/net/config';
 import { arkivPublic, latestWitnessUrl, listByUrl } from '@recall/net/arkiv';
+import { isFreeBatch } from '@recall/net/postage';
+import { redactKey } from '@recall/net/redact';
 import { downloadBytes } from '@recall/net/swarm';
 import { latestVerifiedCapture, summarizeHistory, type HistoryDeps } from './history';
 
@@ -44,7 +46,8 @@ export type OffscreenWitnessUrl = {
   witness: Address;
 };
 
-const message = (e: unknown) => (e instanceof Error ? e.message : String(e)).split('\n')[0];
+/** The first line of an error, with the Arkiv access key removed (it is part of the request URL). */
+const message = (e: unknown, key?: string) => redactKey(e instanceof Error ? e.message : String(e), key).split('\n')[0];
 
 export async function readHistory(
   req: OffscreenHistory,
@@ -62,7 +65,7 @@ export async function readHistory(
         (
           await downloadBytes(ref, req.net.swarm.downloadUrls, {
             signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
-            verifyRoot: !/^0x0{64}$/i.test(batchId),
+            verifyRoot: !isFreeBatch(batchId),
           })
         ).bytes,
     };
@@ -83,7 +86,7 @@ export async function readHistory(
       incomplete: s.incomplete,
     };
   } catch (err) {
-    return { error: message(err) };
+    return { error: message(err, req.net.arkiv.accessKey) };
   }
 }
 
@@ -92,6 +95,6 @@ export async function readWitnessUrl(req: OffscreenWitnessUrl): Promise<{ url: s
   try {
     return { url: await latestWitnessUrl(arkivPublic(req.net), req.witness) };
   } catch (err) {
-    return { error: message(err) };
+    return { error: message(err, req.net.arkiv.accessKey) };
   }
 }

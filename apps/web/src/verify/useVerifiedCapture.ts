@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { createPublicClient, http, type Address, type Hex } from 'viem';
 import { gnosis } from 'viem/chains';
 import { downloadEvidence } from '../download';
+import { errorText } from '../errors';
 import { formatDay } from '../format';
 import { getNetConfig } from '../net';
 import { trustedWitnesses } from '../witness';
@@ -83,7 +84,7 @@ async function fetchCapture(cfg: NetConfig, entityKey: Hex): Promise<CaptureReco
 }
 
 function downloadReason(err: unknown): { reason: string; raw: string } {
-  const raw = err instanceof Error ? err.message : String(err);
+  const raw = errorText(err);
   if (/invalid swarm reference/.test(raw)) return { reason: 'The record has no valid evidence reference.', raw };
   if (/reference mismatch/.test(raw)) {
     return { reason: 'A gateway returned bytes that do not match the Swarm reference, so they were discarded.', raw };
@@ -199,7 +200,7 @@ export async function verifyRecordEvidence(
     return { ...rest, mismatch };
   } catch (e) {
     // Never leave the page on "Checking…": an unexpected failure is "not checked".
-    return unavailableReport('The checks could not run in this browser.', userFileBytes, e instanceof Error ? e.message : String(e));
+    return unavailableReport('The checks could not run in this browser.', userFileBytes, errorText(e));
   }
 }
 
@@ -236,7 +237,7 @@ export function useVerifiedCapture(entityKey: Hex, userFile?: Uint8Array): Verif
           const name = (e as { name?: string })?.name;
           if (name === 'NoEntityFoundError') setLoad({ phase: 'missing' });
           else if (name === 'SchemaMismatchError') setLoad({ phase: 'not-capture' });
-          else setLoad({ phase: 'error', message: e instanceof Error ? e.message : String(e) });
+          else setLoad({ phase: 'error', message: errorText(e) });
           return;
         }
         if (!alive) return;
@@ -253,7 +254,7 @@ export function useVerifiedCapture(entityKey: Hex, userFile?: Uint8Array): Verif
           if (alive) setLoad({ phase: 'record', record, evidence: { state: 'failed', ...downloadReason(e) } });
         }
       } catch (e) {
-        if (alive) setLoad({ phase: 'error', message: e instanceof Error ? e.message : String(e) });
+        if (alive) setLoad({ phase: 'error', message: errorText(e) });
       }
     })();
     return () => {
@@ -315,7 +316,7 @@ export function useVerifiedEvidenceFile(bytes: Uint8Array | null, userFile?: Uin
       ...(userFile ? { userFileBytes: userFile } : {}),
     })
       .catch((e) =>
-        unavailableReport('The checks could not run in this browser.', userFile, e instanceof Error ? e.message : String(e)),
+        unavailableReport('The checks could not run in this browser.', userFile, errorText(e)),
       )
       .then((r) => {
         if (alive) setReport(r);

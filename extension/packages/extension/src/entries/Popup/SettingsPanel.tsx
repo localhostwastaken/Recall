@@ -1,9 +1,11 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import type { Address } from 'viem';
+import { BUILT_IN_ARKIV_KEY } from '../../recall/build';
 import { MonoValue } from '../../recall/ui/MonoValue';
 import {
   ADDRESS_ERROR,
   FREE_MODE_NOTE,
+  keyHelper,
   defaultSettings,
   loadSettings,
   saveSettings,
@@ -21,6 +23,9 @@ import '../../recall/ui/settings.css';
 // and 127.0.0.1; 0x addresses), run on blur and again on Save; the copy is the design brief's.
 
 export const DUPLICATE_ERROR = 'That witness is already in the list.';
+
+/** True when this build has an Arkiv key built in (release builds with ARKIV_ACCESS_KEY set; R30). */
+const builtInKey = BUILT_IN_ARKIV_KEY !== '';
 
 type Draft = SettingsInput & { uploadMode: UploadMode; pinned: Address[] };
 type Errors = Partial<Record<keyof SettingsInput | 'newAddress', string>>;
@@ -154,8 +159,21 @@ export function SettingsPanel({
         setLoaded(s);
         setDraft(draftFrom(s));
       })
-      .catch(() => setStatus("Couldn't read the saved settings. The defaults are shown."));
+      .catch(() => {
+        // Never hang on "Reading your settings…": show (and let the person fix) the defaults.
+        const d = defaultSettings();
+        setLoaded(d);
+        setDraft(draftFrom(d));
+        setStatus("Couldn't read the saved settings. The defaults are shown.");
+      });
   }, []);
+
+  // In the popup the panel is a new view: put the keyboard on its heading.
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const ready = draft !== null;
+  useEffect(() => {
+    if (heading && ready) headingRef.current?.focus();
+  }, [heading, ready]);
 
   useEffect(() => {
     if (focusFirst > 0)
@@ -253,7 +271,7 @@ export function SettingsPanel({
     <div className="sp" ref={root}>
       <div className="sp-head">
         {heading ? (
-          <h2 className="sp-title" tabIndex={-1} id="settings-title">
+          <h2 className="sp-title" tabIndex={-1} id="settings-title" ref={headingRef}>
             Settings
           </h2>
         ) : (
@@ -401,8 +419,8 @@ export function SettingsPanel({
           mono
           value={draft.arkivAccessKey}
           error={errors.arkivAccessKey}
-          placeholder="Optional"
-          helper="Optional. A key can raise the limits of the Arkiv RPC."
+          placeholder={builtInKey ? 'Built-in key (default)' : 'Optional'}
+          helper={keyHelper(builtInKey, draft.arkivAccessKey.trim() !== '')}
           onChange={(v) => set('arkivAccessKey', v)}
           onBlur={(v) => validate('arkivAccessKey', v)}
           right={

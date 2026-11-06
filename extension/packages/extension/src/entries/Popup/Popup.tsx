@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { LoaderCircle, Settings as SettingsIcon } from 'lucide-react';
 import { StatusBadge } from '../../recall/ui/StatusBadge';
 import { WitnessChip, type WitnessState } from '../../recall/ui/WitnessChip';
@@ -96,12 +96,12 @@ function useStorageState(): StorageState | undefined {
 }
 
 /** The upload mode of the settings, kept live (the default until the settings are read). */
-function useUploadMode(): UploadMode {
-  const [mode, setMode] = useState<UploadMode>('stamped');
+function useUploadMode(): UploadMode | undefined {
+  const [mode, setMode] = useState<UploadMode | undefined>(undefined);
   useEffect(() => {
     loadSettings()
       .then((s) => setMode(s.uploadMode))
-      .catch(() => undefined);
+      .catch(() => setMode('stamped'));
     const onChanged = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
       if (area === 'local' && SETTINGS_KEY in changes) {
         loadSettings()
@@ -211,8 +211,11 @@ export function Popup() {
   const job = useCaptureState();
   const poolStorage = useStorageState();
   // Free upload mode takes nothing from the pool, so an empty or expired pool is not a problem.
-  const freeMode = useUploadMode() === 'free';
-  const storage: StorageState | undefined = freeMode ? 'ok' : poolStorage;
+  // Until the mode is read the pool's state is not shown either: no "No storage" flash that
+  // free mode would not have had.
+  const uploadMode = useUploadMode();
+  const storage: StorageState | undefined =
+    uploadMode === undefined ? undefined : uploadMode === 'free' ? 'ok' : poolStorage;
   const noStorage = storageNotice(storage);
   // Only pages the extension can capture have a history to look up.
   const capturable = page && !pageBlockedReason(page.url) ? page.url : undefined;
@@ -258,7 +261,19 @@ export function Popup() {
   const retryUpload = useCallback(() => void send({ type: 'recall.retryUpload' }), []);
   const buyStorage = useCallback(() => void openBuyStorage(), []);
   // The settings are a panel of this popup (the options page has the same form).
-  const openSettings = useCallback(() => setView('settings'), []);
+  const openSettings = useCallback(() => {
+    cameFromSettings.current = true;
+    setView('settings');
+  }, []);
+  // Back puts the keyboard on the Settings button of the header (the control that stays).
+  const settingsButton = useRef<HTMLButtonElement>(null);
+  const cameFromSettings = useRef(false);
+  useEffect(() => {
+    if (view === 'main' && cameFromSettings.current) {
+      cameFromSettings.current = false;
+      settingsButton.current?.focus();
+    }
+  }, [view]);
 
   let disabledReason: string | null = null;
   let blocked: string | null;
@@ -279,7 +294,7 @@ export function Popup() {
         <div className="popup-header-tools">
           <WitnessChip state={witness} />
           {view === 'main' ? (
-            <button type="button" className="icon-btn" aria-label="Settings" onClick={openSettings}>
+            <button type="button" className="icon-btn" aria-label="Settings" ref={settingsButton} onClick={openSettings}>
               <SettingsIcon size={20} strokeWidth={1.75} aria-hidden="true" />
             </button>
           ) : null}

@@ -40,15 +40,62 @@ export const KEY_ERROR = 'Paste only the key, without spaces and not as an addre
 export const LABEL_DEFAULT_ERROR = 'That label can\'t include the word "default". It is kept for the built-in witness.';
 export { ADDRESS_ERROR, URL_ERROR };
 
-/** A label for a witness the person adds: needed, and never imitating the built-in "(default)". */
-export function labelError(label: string): string | undefined {
-  const t = label.trim();
-  if (!t) return LABEL_ERROR;
-  return IMITATES_DEFAULT.test(t) ? LABEL_DEFAULT_ERROR : undefined;
+/** What the Arkiv key field says, by whether the build has a key built in and whether one is typed. */
+export function keyHelper(builtIn: boolean, own: boolean): string {
+  if (builtIn) {
+    return own
+      ? 'Your own key is used instead of the built-in key. Clear this field, or use Reset to default, to go back to the built-in key.'
+      : 'Built-in key (default) is in use. Paste your own key to replace it.';
+  }
+  return own ? 'Your key is used for the Arkiv RPC.' : 'Optional. A key can raise the limits of the Arkiv RPC.';
+}
+
+
+/**
+ * A witness label as it is stored and shown: Unicode-normalised (NFKC, so full-width and
+ * mathematical lookalikes become plain letters), without invisible format characters (zero-width
+ * and bidirectional controls, \p{Cf}) or control characters, spaces collapsed, at most MAX_LABEL
+ * long. A label can then neither hide a word nor reorder the text around it.
+ */
+export function cleanLabel(raw: string): string {
+  return raw
+    .normalize('NFKC')
+    .replace(/[\p{Cf}\p{Cc}]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, MAX_LABEL)
+    .trim();
+}
+
+/** Letters of other alphabets that look like Latin ones, for the "default" check only. */
+const LOOKALIKES: Record<string, string> = {
+  // Cyrillic
+  а: 'a', е: 'e', о: 'o', р: 'p', с: 'c', у: 'y', х: 'x', і: 'i', ј: 'j', ѕ: 's', ԁ: 'd', ӏ: 'l', ԛ: 'q', ԝ: 'w', һ: 'h', ɡ: 'g',
+  // Greek
+  α: 'a', ε: 'e', ο: 'o', ρ: 'p', ι: 'i', ν: 'v', υ: 'u', τ: 't', χ: 'x', κ: 'k', β: 'b', γ: 'y',
+  // Latin look-alikes outside ASCII
+  ı: 'i', ł: 'l', ɑ: 'a', ƒ: 'f', ꜰ: 'f', ᴅ: 'd', ᴇ: 'e', ᴜ: 'u', ʟ: 'l', ᴛ: 't', ᴀ: 'a',
+};
+
+/** The letters of a label as a person would read them: no accents, no look-alike letters, lower case. */
+function skeleton(label: string): string {
+  const base = cleanLabel(label)
+    .normalize('NFKD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase();
+  return Array.from(base, (c) => LOOKALIKES[c] ?? c).join('');
 }
 
 /** The word "default" on its own (not "undefaulted"): only the built-in witness may carry it. */
-const IMITATES_DEFAULT = /\bdefault\b/i;
+const IMITATES_DEFAULT = /\bdefault\b/;
+const imitatesDefault = (label: string): boolean => IMITATES_DEFAULT.test(skeleton(label));
+
+/** A label for a witness the person adds: needed, and never imitating the built-in "(default)". */
+export function labelError(label: string): string | undefined {
+  const t = cleanLabel(label);
+  if (!t) return LABEL_ERROR;
+  return imitatesDefault(t) ? LABEL_DEFAULT_ERROR : undefined;
+}
 
 /**
  * R38. On a shared gateway origin (`https://<gateway>/bzz/<ref>/`) every Swarm site shares one
@@ -133,10 +180,10 @@ function sanitize(p: unknown): Partial<Settings> {
       const item = (w && typeof w === 'object' ? w : {}) as { address?: unknown; label?: unknown };
       const a = checkAddress(item.address);
       if (!a.ok || list.some((x) => sameAddress(x.address, a.value))) continue;
-      const label = typeof item.label === 'string' ? item.label.trim().slice(0, MAX_LABEL) : '';
+      const label = typeof item.label === 'string' ? cleanLabel(item.label) : '';
       // Only the built-in witness may be called "default": a stored label that says so is replaced.
       const isBuiltIn = sameAddress(a.value, defaultWitnessAddress());
-      list.push({ address: a.value, label: !label || (!isBuiltIn && IMITATES_DEFAULT.test(label)) ? DEFAULT_ADDED_LABEL : label });
+      list.push({ address: a.value, label: !label || (!isBuiltIn && imitatesDefault(label)) ? DEFAULT_ADDED_LABEL : label });
     }
     // A list in which nothing survived stays empty: when in doubt, trust nobody.
     out.pinnedWitnesses = list;

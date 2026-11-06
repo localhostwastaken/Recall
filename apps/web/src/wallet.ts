@@ -1,4 +1,5 @@
 import { localhost, rabdi } from '@arkiv-network/sdk/chains';
+import { arkivRpcUrl } from '@recall/net';
 import { useSyncExternalStore } from 'react';
 import { createWalletClient, custom, hexToNumber, numberToHex, type Address, type Chain, type WalletClient } from 'viem';
 import { gnosis } from 'viem/chains';
@@ -51,8 +52,9 @@ export function chainFor(id: ChainId): Chain {
         ? { ...localhost, rpcUrls: { default: { http: [cfg.arkiv.rpcUrl] } } }
         : localhost;
     case 7794095:
-      // The SDK's chain carries the access key in its RPC URLs.
-      return rabdi({ accessKey: cfg.arkiv.accessKey ?? '' });
+      // The same RPC URL the reads use (the access key in its path on the Rabdi host, or the
+      // person's own Arkiv RPC from Settings), so the wallet and the page talk to one node.
+      return { ...rabdi({ accessKey: cfg.arkiv.accessKey ?? '' }), rpcUrls: { default: { http: [arkivRpcUrl(cfg)] } } };
   }
 }
 

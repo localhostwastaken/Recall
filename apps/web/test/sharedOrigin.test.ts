@@ -190,4 +190,50 @@ describe('witness labels (R38)', () => {
       expect(labelError(l) === LABEL_DEFAULT_ERROR, l).toBe(/\bdefault\b/i.test(l));
     }
   });
+
+  it('sees through invisible characters, full-width letters and look-alike letters (the label check is on what a person reads)', async () => {
+    const { labelError, LABEL_DEFAULT_ERROR } = await settings();
+    for (const l of [
+      'defaul\u200bt', // zero-width space inside
+      'de\u00adfault', // soft hyphen
+      'D\u202eEFAULT', // right-to-left override
+      '\u2066default\u2069', // isolates
+      '\uff44\uff45\uff46\uff41\uff55\uff4c\uff54', // full-width
+      '\u{1d41d}\u{1d41e}fault', // mathematical bold d e
+      'd\u0435fault', // Cyrillic e
+      '\u0501efault', // Cyrillic d
+      'def\u0430ult', // Cyrillic a
+      'd\u03b5fault', // Greek epsilon
+      'd\u00e9fault', // accented e
+      'dEfAuLt',
+      'Recall Witness (d\u0435fault)',
+    ]) {
+      expect(labelError(l), JSON.stringify(l)).toBe(LABEL_DEFAULT_ERROR);
+    }
+  });
+
+  it('a stored label is cleaned: no invisible or control characters, one space between words', async () => {
+    const { cleanLabel, getSettings } = await settings();
+    expect(cleanLabel('Op\u200berator\u202e  X\u0007')).toBe('Operator X');
+    expect(cleanLabel('  Neighbour   witness ')).toBe('Neighbour witness');
+    expect(cleanLabel('x'.repeat(100))).toHaveLength(40);
+    data.set(
+      KEY,
+      JSON.stringify({
+        pinnedWitnesses: [
+          { address: ATTACKER, label: 'Neigh\u202ebour' },
+          { address: '0x90F79bf6EB2c4f870365E785982E1f101E93b906', label: 'd\u0435fault' },
+        ],
+      }),
+    );
+    expect(getSettings().pinnedWitnesses.map((w) => w.label)).toEqual(['Neighbour', 'Added witness']);
+  });
+
+  it('ordinary labels in other alphabets are fine', async () => {
+    const { labelError } = await settings();
+    for (const l of ['Operator \u00dcnal', '\u4e2d\u6587\u89c1\u8bc1\u8005', '\u041e\u043f\u0435\u0440\u0430\u0442\u043e\u0440', 'Neighbour (ops)']) {
+      expect(labelError(l), l).toBeUndefined();
+    }
+  });
 });
+

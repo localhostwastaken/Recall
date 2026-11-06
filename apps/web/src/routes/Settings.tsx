@@ -8,11 +8,13 @@ import {
   DUPLICATE_WITNESS_ERROR,
   MAX_LABEL,
   applyTheme,
+  cleanLabel,
   defaultSettings,
   fieldError,
   gatewayLines,
   getSettings,
   isSharedOrigin,
+  keyHelper,
   labelError,
   resetSettings,
   saveSettingsChecked,
@@ -240,7 +242,7 @@ export function Settings() {
 
   const addWitness = () => {
     const a = checkAddress(newAddress);
-    const label = newLabel.trim().slice(0, MAX_LABEL);
+    const label = cleanLabel(newLabel);
     const next: Errors = {};
     if (!a.ok) next.newAddress = ADDRESS_ERROR;
     else if (draft.witnesses.some((w) => w.address.toLowerCase() === a.value.toLowerCase())) {
@@ -417,11 +419,7 @@ export function Settings() {
               shown={showKey}
               onToggle={() => setShowKey((v) => !v)}
               placeholder={builtInKey ? 'Built-in key (default)' : 'Optional'}
-              helper={
-                builtInKey
-                  ? 'Built-in key (default) is in use. Paste your own key to replace it, or leave this empty to use the built-in key.'
-                  : 'Optional. A key can raise the limits of the Arkiv RPC.'
-              }
+              helper={keyHelper(builtInKey, draft.arkivAccessKey.trim() !== '')}
               onChange={(v) => setField('arkivAccessKey', v)}
               onBlur={(v) => validate('arkivAccessKey', v)}
             />

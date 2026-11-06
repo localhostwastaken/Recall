@@ -96,6 +96,16 @@ export function validAddress(v: unknown): Address | undefined {
 const isNet = (v: unknown): v is Net => v === 'local' || v === 'live';
 
 export const KEY_ERROR = 'Paste only the key, without spaces and not as an address.';
+/** The text under the Arkiv key field (the same wording as the web app's Settings). */
+export function keyHelper(builtIn: boolean, own: boolean): string {
+  if (builtIn) {
+    return own
+      ? 'Your own key is used instead of the built-in key. Clear this field, or use Reset endpoints to default, to go back to the built-in key.'
+      : 'Built-in key (default) is in use. Paste your own key to replace it.';
+  }
+  return own ? 'Your key is used for the Arkiv RPC.' : 'Optional. A key can raise the limits of the Arkiv RPC.';
+}
+
 export const APP_URL_ERROR = URL_ERROR;
 /** What free mode means, shown next to the choice. */
 export const FREE_MODE_NOTE =

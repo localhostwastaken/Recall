@@ -587,7 +587,7 @@ test.describe('@p3 settings web', () => {
     await expect(page.getByRole('list', { name: 'Trusted witnesses' }).getByRole('listitem')).toHaveCount(1);
     // Only the built-in witness may be called "default" (R38): a label that says so is refused.
     await address.fill('0x70997970C51812dc3A010C7d01b50e0d17dc79C8');
-    for (const imitation of ['Recall Witness (default)', 'default', 'My DEFAULT witness']) {
+    for (const imitation of ['Recall Witness (default)', 'default', 'My DEFAULT witness', 'd\u0435fault', 'defaul\u200bt', 'ＤＥＦＡＵＬＴ']) {
       await label.fill(imitation);
       await add.click();
       await expect(page.getByText('That label can\'t include the word "default". It is kept for the built-in witness.'), imitation).toBeVisible();
@@ -767,8 +767,10 @@ test.describe('@p3 settings web', () => {
     const key = page.getByLabel('Arkiv access key');
     await expect(key).toHaveAttribute('type', 'password');
     await expect(key).toHaveAttribute('autocomplete', 'new-password');
+    await expect(page.getByText('Optional. A key can raise the limits of the Arkiv RPC.')).toBeVisible();
     await key.fill(KEY);
     await expect(key).toHaveValue(KEY);
+    await expect(page.getByText('Your key is used for the Arkiv RPC.')).toBeVisible();
     // Show / Hide toggles the field (and says what it is doing to assistive tech).
     const toggle = page.getByRole('button', { name: /^Show/ });
     await expect(toggle).toHaveAttribute('aria-pressed', 'false');
@@ -1152,6 +1154,9 @@ test.describe('@p3 settings extension', () => {
       await allowLocalArkiv(approval!);
       await approval!.reload();
       await expect(approval!.getByRole('heading', { level: 1 })).toHaveText('Publish this capture');
+      // The default download gateway does not hold this gateway's reference: the page says it could
+      // not confirm the stored copy, as a warning (publishing stays possible).
+      await expect(approval!.getByRole('heading', { name: 'Stored copy not confirmed' })).toBeVisible();
       for (const k of ['A', 'B', 'C']) {
         await expect(approval!.locator(`.approve-check-list [data-check="${k}"] .badge`)).toHaveAttribute('data-status', 'pass');
       }
@@ -1190,4 +1195,82 @@ test.describe('@p3 settings extension', () => {
       gw.server.close();
     }
   });
+
+  test('@p3 settings extension free-mode approve compares the gateway copy before publishing', async () => {
+    test.setTimeout(240_000);
+    gatewayBatch ??= await buyNodeBatch();
+    const gw = await startGateway(gatewayBatch, { rewriteRefs: true });
+    try {
+      await setLocal('recall.settings', {
+        net: 'local',
+        witnessUrl: 'http://localhost:7047',
+        pinnedWitnesses: [DEVNET_WITNESS_ADDRESS],
+        appUrl: APP,
+        uploadMode: 'free',
+        uploadUrl: gw.url,
+      });
+      const page = `https://${NOTICE_HOST}/notice?run=gwcopy-${Math.random().toString(36).slice(2, 10)}`;
+      const run = () =>
+        sw().evaluate(async (u) => {
+          const g = globalThis as unknown as { recall?: { captureForTest?: (url: string) => Promise<unknown> } };
+          if (!g.recall?.captureForTest) return { error: 'no recall.captureForTest in this build' };
+          return g.recall.captureForTest(u);
+        }, page) as Promise<
+          { evidence: EvidenceFile; upload?: { status: string; captureId?: string; evidenceRef?: Hex; batchId?: Hex; error?: string } } | { error: string }
+        >;
+      let result = await run();
+      if ('error' in result && /witness busy|too many sessions|did not connect in time|timed out/i.test(result.error)) result = await run();
+      if ('error' in result) throw new Error(`capture failed: ${result.error}`);
+      const up = result.upload!;
+      expect(up.status, up.error).toBe('uploaded');
+      expect(up.batchId).toBe(ZERO_BATCH);
+      const ref = up.evidenceRef!;
+
+      let approval: Page | undefined;
+      await expect
+        .poll(() => (approval = ext.context.pages().find((p) => p.url().includes(`#/approve/${up.captureId}`))), { timeout: 15_000 })
+        .toBeTruthy();
+      const tab = approval!;
+      await allowLocalArkiv(tab);
+      // A wallet is present (a mock with a real key), so "Connect MetaMask" is usable when the page is ready.
+      await installMockWallet(tab, {
+        privateKey: SETTINGS_WALLET_KEY,
+        rpcByChainId: { 1337: LOCAL.arkiv.rpcUrl, 100: LOCAL.gnosis.rpcUrl },
+        chainId: 1337,
+      });
+      const CORS = { 'access-control-allow-origin': '*', 'content-type': 'application/octet-stream' };
+      const gatewayRoute = new RegExp(`/bytes/${ref.slice(2)}$`);
+      const publishButton = tab.getByRole('button', { name: /Connect MetaMask|Publish record/ }).first();
+
+      // 1. The gateway holds ANOTHER file under the reference: blocked, nothing could be published.
+      await tab.route(gatewayRoute, (r) => r.fulfill({ status: 200, headers: CORS, body: Buffer.from('this is some other file') }));
+      await tab.reload();
+      await expect(tab.getByRole('heading', { name: "This capture can't be published" })).toBeVisible({ timeout: 30_000 });
+      await expect(tab.getByText(/is not this capture's evidence/)).toBeVisible();
+      await expect(tab.getByText('Nothing was published.')).toBeVisible();
+      await expect(tab.getByRole('button', { name: 'Publish record' })).toHaveCount(0);
+      await tab.unroute(gatewayRoute);
+
+      // 2. The gateway holds exactly these bytes: ready, and no warning.
+      await tab.route(gatewayRoute, (r) => r.fulfill({ status: 200, headers: CORS, body: Buffer.from(encodeEvidence(result.evidence)) }));
+      await tab.reload();
+      await expect(tab.getByRole('heading', { level: 1 })).toHaveText('Publish this capture');
+      await expect(publishButton).toBeVisible();
+      await expect(tab.getByRole('heading', { name: 'Stored copy not confirmed' })).toHaveCount(0);
+      await tab.unroute(gatewayRoute);
+
+      // 3. The gateway does not answer for it: a soft warning, and publishing is still possible.
+      await tab.route(gatewayRoute, (r) => r.fulfill({ status: 404, headers: CORS, body: '' }));
+      await tab.reload();
+      await expect(tab.getByRole('heading', { level: 1 })).toHaveText('Publish this capture');
+      await expect(tab.getByRole('heading', { name: 'Stored copy not confirmed' })).toBeVisible();
+      await expect(publishButton).toBeVisible();
+      await expect(publishButton).toBeEnabled();
+      await tab.close();
+    } finally {
+      gw.server.closeAllConnections();
+      gw.server.close();
+    }
+  });
 });
+

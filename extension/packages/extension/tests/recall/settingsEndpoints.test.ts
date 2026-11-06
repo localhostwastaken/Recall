@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { LOCAL } from '@recall/net/config';
 import {
   defaultSettings,
+  keyHelper,
   loadSettings,
   mergeSettings,
   netConfigFor,
@@ -152,5 +153,14 @@ describe('settingsErrors (what the popup form shows)', () => {
     expect(e.arkivRpcUrl).toBe('Enter a full address starting with https://');
     expect(e.uploadUrl).toBe('Enter a full address starting with https://');
     expect(e.arkivAccessKey).toBe('Paste only the key, without spaces and not as an address.');
+  });
+});
+
+describe('keyHelper (the text under the Arkiv key field)', () => {
+  it('depends on the build having a key and on whether one is typed', () => {
+    expect(keyHelper(true, false)).toBe('Built-in key (default) is in use. Paste your own key to replace it.');
+    expect(keyHelper(true, true)).toMatch(/^Your own key is used instead of the built-in key\./);
+    expect(keyHelper(false, false)).toBe('Optional. A key can raise the limits of the Arkiv RPC.');
+    expect(keyHelper(false, true)).toBe('Your key is used for the Arkiv RPC.');
   });
 });

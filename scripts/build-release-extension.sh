@@ -10,6 +10,28 @@ EXT="$ROOT/extension"
 OUT="$EXT/packages/extension/build-release"
 DEV_CA="$ROOT/fixtures/notice/.certs/ca.der"
 
+# The release build bakes the public Arkiv access key in as the default (R30). It comes from the
+# environment, else from the git-ignored repo-root .env.local; it is read here without printing
+# anything and only handed to the build.
+read_env_value() { # <file> <NAME>: the last NAME=value line, quotes removed, nothing echoed
+  local line v
+  line="$(grep -E "^[[:space:]]*(export[[:space:]]+)?$2=" "$1" 2>/dev/null | tail -n 1 || true)"
+  [ -n "$line" ] || return 1
+  v="${line#*=}"; v="${v%$'\r'}"
+  case "$v" in \"*\") v="${v#\"}"; v="${v%\"}";; \'*\') v="${v#\'}"; v="${v%\'}";; esac
+  [ -n "$v" ] || return 1
+  printf '%s' "$v"
+}
+ENV_FILE="${RECALL_ENV_FILE:-$ROOT/.env.local}"
+if [ -z "${ARKIV_ACCESS_KEY:-}" ] && [ -f "$ENV_FILE" ]; then
+  if key="$(read_env_value "$ENV_FILE" ARKIV_ACCESS_KEY)"; then export ARKIV_ACCESS_KEY="$key"; fi
+  unset key
+fi
+if [ -z "${ARKIV_ACCESS_KEY:-}" ]; then
+  echo "WARNING: release build has NO built-in Arkiv key (ARKIV_ACCESS_KEY is neither in the environment nor in .env.local)." >&2
+  echo "         Reads then use the rate-limited public Arkiv endpoint unless the person sets a key in Settings." >&2
+fi
+
 cd "$EXT"
 [ -d node_modules ] || npm install
 # Dev flags must never leak in from the caller's shell.

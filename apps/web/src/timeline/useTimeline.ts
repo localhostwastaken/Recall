@@ -2,6 +2,7 @@ import { DEFAULT_MAX_DOWNLOAD_BYTES, arkivPublic, listByUrl, type Listed, type N
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Hex } from 'viem';
 import { downloadEvidence } from '../download';
+import { errorText } from '../errors';
 import { checkBatch, listOptions } from '../limits';
 import { getNetConfig } from '../net';
 import { verifyRecordEvidence } from '../verify/useVerifiedCapture';
@@ -123,7 +124,7 @@ export function useTimeline(urlHash: Hex): TimelineData {
       try {
         result = await listByUrl(arkivPublic(cfg), urlHash, listOptions());
       } catch (e) {
-        if (alive) setList({ phase: 'error', error: e instanceof Error ? e.message : String(e) });
+        if (alive) setList({ phase: 'error', error: errorText(e) });
         return;
       }
       if (!alive) return;
@@ -157,7 +158,7 @@ export function useTimeline(urlHash: Hex): TimelineData {
       pump();
       flush();
     })().catch((e) => {
-      if (alive) setList({ phase: 'error', error: e instanceof Error ? e.message : String(e) });
+      if (alive) setList({ phase: 'error', error: errorText(e) });
     });
 
     return () => {

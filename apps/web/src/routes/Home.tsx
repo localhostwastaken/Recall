@@ -3,6 +3,7 @@ import { arkivPublic, listByUrl } from '@recall/net';
 import { useEffect, useState } from 'react';
 import { sha256 } from 'viem';
 import { downloadEvidence } from '../download';
+import { errorText } from '../errors';
 import { getNetConfig } from '../net';
 import { DropZone } from '../ui/DropZone';
 import { Field } from '../ui/Field';
@@ -155,7 +156,7 @@ function CompareFile() {
       }
       setFound({ kind: 'unverified' });
     } catch (e) {
-      setFound({ kind: 'error', message: e instanceof Error ? e.message : String(e) });
+      setFound({ kind: 'error', message: errorText(e) });
     } finally {
       setBusy(false);
     }

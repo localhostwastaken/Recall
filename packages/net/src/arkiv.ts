@@ -4,7 +4,8 @@ import { and, asc, eq, gt } from '@arkiv-network/sdk/query';
 import { addr, bytes, defineSchema, i32, key, str, u64 } from '@arkiv-network/sdk/schema';
 import type { Account, Address, Hex, Transport } from 'viem';
 import { bytesToString, http, stringToBytes } from 'viem';
-import type { NetConfig } from './config';
+import { arkivRpcUrl, type NetConfig } from './config';
+import { redactKey } from './redact';
 
 const DEFAULT_DAYS = 30;
 const FLAGS = { permissionlessExtension: true } as const;
@@ -60,8 +61,56 @@ function chainFor(cfg: NetConfig) {
   return cfg.arkiv.chain === 'rabdi' ? rabdi({ accessKey: cfg.arkiv.accessKey ?? '' }) : localhost;
 }
 
+/** Rewrites an error and its causes so the key is nowhere in them (message, details, URL line, stack). */
+function scrub(err: unknown, key: string | undefined): unknown {
+  const seen = new Set<unknown>();
+  for (let e = err as Record<string, unknown> | undefined; e && typeof e === 'object' && !seen.has(e) && seen.size < 12; e = e.cause as typeof e) {
+    seen.add(e);
+    for (const field of ['message', 'shortMessage', 'details', 'url', 'stack']) {
+      const v = e[field];
+      if (typeof v !== 'string') continue;
+      try {
+        e[field] = redactKey(v, key);
+      } catch {
+        /* a read-only field: nothing more can be done */
+      }
+    }
+    if (Array.isArray(e.metaMessages)) {
+      try {
+        e.metaMessages = e.metaMessages.map((m) => (typeof m === 'string' ? redactKey(m, key) : m));
+      } catch {
+        /* as above */
+      }
+    }
+  }
+  return err;
+}
+
+/**
+ * The reads' transport: an HTTP transport on the effective Arkiv URL (which carries the access
+ * key on the Rabdi host, see `arkivRpcUrl`) whose errors are scrubbed. viem puts the full URL in
+ * an HTTP error's message ("URL: ..."), and these messages end up in the page and the console.
+ */
+function readTransport(cfg: NetConfig): Transport {
+  const inner = http(arkivRpcUrl(cfg));
+  const key = cfg.arkiv.accessKey?.trim();
+  return (opts) => {
+    const t = inner(opts);
+    return {
+      ...t,
+      request: (async (args: Parameters<typeof t.request>[0]) => {
+        try {
+          return await t.request(args);
+        } catch (err) {
+          throw scrub(err, key);
+        }
+      }) as typeof t.request,
+    };
+  };
+}
+
 export function arkivPublic(cfg: NetConfig) {
-  return createPublicClient({ chain: chainFor(cfg), transport: http(cfg.arkiv.rpcUrl) });
+  return createPublicClient({ chain: chainFor(cfg), transport: readTransport(cfg) });
 }
 
 export function arkivWallet(cfg: NetConfig, transport: Transport, account: Account) {

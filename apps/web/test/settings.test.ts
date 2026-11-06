@@ -328,3 +328,16 @@ describe('field validation (the copy of the design brief)', () => {
     expect(fieldError('arkivAccessKey', 'https://rpc.example.org/?key=secret')).toBe(KEY_ERROR);
   });
 });
+
+describe('keyHelper (the text under the Arkiv key field)', () => {
+  it('depends on the build having a key and on whether one is typed', async () => {
+    const { keyHelper } = await settings();
+    expect(keyHelper(true, false)).toBe('Built-in key (default) is in use. Paste your own key to replace it.');
+    expect(keyHelper(true, true)).toMatch(/^Your own key is used instead of the built-in key\./);
+    expect(keyHelper(false, false)).toBe('Optional. A key can raise the limits of the Arkiv RPC.');
+    expect(keyHelper(false, true)).toBe('Your key is used for the Arkiv RPC.');
+    // None of the four says what the key is.
+    for (const a of [true, false]) for (const b of [true, false]) expect(keyHelper(a, b)).not.toMatch(/sk-|[0-9a-f]{16}/i);
+  });
+});
+

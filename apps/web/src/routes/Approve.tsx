@@ -21,6 +21,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, typ
 import { custom, type Account, type Address, type Hex } from 'viem';
 import { ExhibitCard } from '../components/ExhibitCard';
 import { downloadEvidence } from '../download';
+import { errorText, shortErrorText } from '../errors';
 import { ExtError, ext } from '../ext';
 import { formatDay, formatUtc } from '../format';
 import { getNetConfig } from '../net';
@@ -29,6 +30,7 @@ import { Notice } from '../ui/Notice';
 import { StatusBadge, type Status } from '../ui/StatusBadge';
 import { Steps, type StepState } from '../ui/Steps';
 import { TechnicalDetails, WhyWitness } from '../verify/CheckPanel';
+import { GATEWAY_COPY_MS, compareGatewayCopy, type GatewayCopy } from '../verify/gatewayCopy';
 import { verifyRecordEvidence } from '../verify/useVerifiedCapture';
 import { verdictOf } from '../verify/verify';
 import { trustedWitnesses, witnessLabel } from '../witness';
@@ -79,6 +81,8 @@ type Ready = {
   facts: VerifiedFacts;
   /** Confirmations: the verified earlier capture. */
   earlier?: { key: Hex; signedAt: bigint };
+  /** Free-mode captures: whether the download gateways hold these very bytes under the reference. */
+  gatewayCopy?: GatewayCopy;
 };
 
 type Load =
@@ -100,8 +104,7 @@ type Publish =
   | { state: 'failed'; reason: string; technical?: string }
   | { state: 'published'; entityKey: Hex; until: Date | null; markError?: string };
 
-const reasonOf = (e: unknown) =>
-  ((e as { shortMessage?: string }).shortMessage ?? (e instanceof Error ? e.message : String(e))).split('\n')[0];
+const reasonOf = (e: unknown) => shortErrorText(e).split('\n')[0];
 const sentence = (s: string) => {
   const t = s.trim().replace(/\.+$/, '');
   return t.charAt(0).toUpperCase() + t.slice(1);
@@ -121,7 +124,7 @@ async function loadPending(captureId: string, extensionId: string | undefined, o
     pending = await ext.send<PendingRecord>({ type: 'recall.getPending', captureId }, extensionId ? { extensionId } : {});
   } catch (e) {
     if (e instanceof ExtError && e.kind === 'rejected') return { phase: 'none' };
-    return { phase: 'unreachable', message: e instanceof Error ? e.message : String(e) };
+    return { phase: 'unreachable', message: errorText(e) };
   }
   if (!pending || pending.captureId !== captureId || (pending.kind !== 'capture' && pending.kind !== 'confirmation')) {
     return { phase: 'refused', reason: 'The extension sent something that is not a pending capture.' };
@@ -145,6 +148,7 @@ async function loadPending(captureId: string, extensionId: string | undefined, o
     return { phase: 'refused', kind: pending.kind, reason: "The extension's details of this capture don't match its evidence.", report };
   }
 
+  const cfg = getNetConfig();
   if (pending.kind === 'capture') {
     if (!pending.evidenceRef || !KEY.test(pending.evidenceRef) || !pending.batchId || !KEY.test(pending.batchId)) {
       return { phase: 'refused', kind: pending.kind, reason: 'The capture has no valid Swarm reference or storage batch.', report };
@@ -158,7 +162,27 @@ async function loadPending(captureId: string, extensionId: string | undefined, o
     if (!isFreeBatch(pending.batchId) && (await swarmRootOf(bytes)) !== pending.evidenceRef.slice(2).toLowerCase()) {
       return { phase: 'refused', kind: pending.kind, reason: "The uploaded evidence reference doesn't match this capture's evidence.", report };
     }
-    return { phase: 'ready', pending, bytes, report, facts };
+    if (!isFreeBatch(pending.batchId)) return { phase: 'ready', pending, bytes, report, facts };
+
+    // Free mode has no local proof that the reference names these bytes, so ask the gateways:
+    // other bytes under it block the publish; no answer is only a warning.
+    onStep("Checking the gateway's copy of the evidence…");
+    let copy: Uint8Array | null = null;
+    try {
+      copy = (await downloadEvidence(cfg, { evidenceRef: pending.evidenceRef, batchId: pending.batchId }, { signal: AbortSignal.timeout(GATEWAY_COPY_MS) })).bytes;
+    } catch {
+      copy = null;
+    }
+    const gatewayCopy = compareGatewayCopy(copy, bytes);
+    if (gatewayCopy === 'different') {
+      return {
+        phase: 'refused',
+        kind: pending.kind,
+        reason: "The file the gateway holds under this Swarm reference is not this capture's evidence, so a record pointing at it would be wrong.",
+        report,
+      };
+    }
+    return { phase: 'ready', pending, bytes, report, facts, gatewayCopy };
   }
 
   // A confirmation: the evidence goes inline, and the capture it confirms must verify too.
@@ -169,7 +193,6 @@ async function loadPending(captureId: string, extensionId: string | undefined, o
     return { phase: 'refused', kind: pending.kind, reason: 'The evidence is too large to publish inline as a confirmation.', report };
   }
   onStep('Checking the earlier capture…');
-  const cfg = getNetConfig();
   let claims: { urlHash: Hex; bodySha256: Hex; witness: Address; signedAt: bigint; evidenceRef: Hex; batchId: Hex };
   try {
     const e = await arkivPublic(cfg).getEntity(pending.captureKey, CaptureSchema);
@@ -472,7 +495,7 @@ export function Approve({ captureId }: { captureId: string | null }) {
       } catch (e) {
         if (isUserRejection(e)) setPublish({ state: 'rejected' });
         else if (e instanceof WalletError) setPublish({ state: 'failed', reason: e.message });
-        else setPublish({ state: 'failed', reason: sentence(reasonOf(e)), technical: e instanceof Error ? e.message : String(e) });
+        else setPublish({ state: 'failed', reason: sentence(reasonOf(e)), technical: errorText(e) });
       }
     },
     [load, captureId, connected, arkivId, cfg, extensionId],
@@ -616,6 +639,13 @@ export function Approve({ captureId }: { captureId: string | null }) {
       </section>
 
       <CheckSummary report={report} />
+
+      {load.gatewayCopy === 'unavailable' && !published ? (
+        <Notice kind="warn" title="Stored copy not confirmed">
+          The download gateway didn&apos;t return this evidence under its Swarm reference, so Recall couldn&apos;t confirm that the stored
+          copy is the same file. You can still publish. Open the capture afterwards to check it.
+        </Notice>
+      ) : null}
 
       <section aria-labelledby="publish-steps-title">
         <h2 id="publish-steps-title" className="section-title">

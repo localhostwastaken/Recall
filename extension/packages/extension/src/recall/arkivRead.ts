@@ -4,6 +4,7 @@
 import type { Hex } from 'viem';
 import type { NetConfig } from '@recall/net/config';
 import { CaptureSchema, ConfirmationSchema, arkivPublic } from '@recall/net/arkiv';
+import { redactKey } from '@recall/net/redact';
 import type { EntitySummary } from './pending';
 
 /** Offscreen request: answered with an EntitySummary or `{error}`. */
@@ -13,7 +14,8 @@ export type OffscreenReadEntity = {
   net: NetConfig;
 };
 
-const message = (e: unknown) => (e instanceof Error ? e.message : String(e)).split('\n')[0];
+/** The first line of an error, with the Arkiv access key removed (it is part of the request URL). */
+const message = (e: unknown, key?: string) => redactKey(e instanceof Error ? e.message : String(e), key).split('\n')[0];
 
 /** The record under `entityKey`, read through the capture schema, else the confirmation one. */
 export async function readEntitySummary(
@@ -33,7 +35,7 @@ export async function readEntitySummary(
         captureKey: e.captureKey.value,
       };
     } catch {
-      return { error: message(asCapture) };
+      return { error: message(asCapture, net.arkiv.accessKey) };
     }
   }
 }
