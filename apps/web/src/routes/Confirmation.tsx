@@ -2,7 +2,9 @@ import { ConfirmationSchema, arkivPublic, readArkivExpiry } from '@recall/net';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { hexToBytes, type Address, type Hex } from 'viem';
 import { KeepAlive } from '../components/KeepAlive';
+import { OutsideLinkList } from '../components/OutsideLinks';
 import { errorText } from '../errors';
+import { recordLinks } from '../explorers';
 import { formatDay, formatUtc } from '../format';
 import { getNetConfig } from '../net';
 import { MonoValue } from '../ui/MonoValue';
@@ -216,6 +218,8 @@ function ConfirmationView({ entityKey, row }: { entityKey: Hex; row: Row }) {
       <p>
         <a href={`#/c/${row.captureKey}`}>View the capture it confirms</a>
       </p>
+      {/* This confirmation's own record in the Arkiv explorer (live only). */}
+      <OutsideLinkList links={recordLinks(cfg, { entityKey })} />
       <section className="stack panel" aria-labelledby="conf-storage">
         <h2 className="section-title" id="conf-storage">
           Storage

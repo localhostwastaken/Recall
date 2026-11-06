@@ -1,0 +1,54 @@
+/* Links to outside tools (explorers, gateways): quiet text links, never buttons. Tokens only. */
+.outside-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  /* A 44 px touch target from padding; the text keeps its size. */
+  min-height: 44px;
+  padding: var(--space-2) 0;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+  color: var(--accent);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.outside-link:hover,
+.outside-link:focus-visible {
+  color: var(--accent-hover);
+  text-decoration: underline;
+}
+
+.outside-link-after {
+  margin-left: var(--space-3);
+}
+
+.outside-link svg {
+  flex: none;
+}
+
+.outside-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.check-yourself {
+  display: grid;
+  gap: var(--space-1);
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+
+.check-yourself-label {
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}

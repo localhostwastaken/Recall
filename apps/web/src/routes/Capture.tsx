@@ -144,7 +144,12 @@ export function Capture({ entityKey }: { entityKey: Hex }) {
         </Notice>
       ) : null}
       {v.facts ? (
-        <ExhibitCard facts={v.facts} evidenceRef={v.record?.evidenceRef} unverified={v.report?.C.status !== 'pass'} />
+        <ExhibitCard
+          facts={v.facts}
+          evidenceRef={v.record?.evidenceRef}
+          unverified={v.report?.C.status !== 'pass'}
+          {...(v.record ? { record: { entityKey: v.record.entityKey, owner: v.record.creator } } : {})}
+        />
       ) : null}
       <RepoSnapshot snapshots={snapshots} />
       <CheckPanel

@@ -39,9 +39,11 @@ import {
   type RepoSummary,
 } from '../attachments/git';
 import { ExhibitCard } from '../components/ExhibitCard';
+import { OutsideLink } from '../components/OutsideLinks';
 import { CommitId } from '../components/RepoSnapshot';
 import { downloadEvidence } from '../download';
 import { errorText, shortErrorText } from '../errors';
+import { arkivEntityUrl, gnosisTxUrl } from '../explorers';
 import { UPLOAD_NETWORK_COPY, publishNetworkCopy } from '../networkCopy';
 import { ExtError, addBatches, ext, extensionIdFromLink, getStampAddress } from '../ext';
 import { formatBytes, formatBzzCeil, formatDay, formatUtc } from '../format';
@@ -644,6 +646,8 @@ export function Approve({ captureId }: { captureId: string | null }) {
   const [discard, setDiscard] = useState<Discard>({ state: 'idle' });
   const [save, setSave] = useState<Save>({ state: 'idle' });
   const [bought, setBought] = useState(false);
+  /** The createBatch transaction of the storage this page bought, for the Gnosisscan link once published. */
+  const [buyTx, setBuyTx] = useState<Hex | null>(null);
   const [extAsk, setExtAsk] = useState<ExtAsk>({ state: 'none' });
   const [price, setPrice] = useState<Price>({ kind: 'loading' });
   const [priceTry, setPriceTry] = useState(0);
@@ -1067,8 +1071,10 @@ export function Approve({ captureId }: { captureId: string | null }) {
       setSave({ state: 'buying', how: 'buy', step: 'checking' });
       const found = await settlePurchase(gnosisPub, earlier, owner, buyDepth);
       if (found.kind === 'unknown') return mayHaveGone(earlier);
-      if (found.kind === 'bought') batchId = found.batchId;
-      else forgetSent(key); // it bought nothing: buy below
+      if (found.kind === 'bought') {
+        batchId = found.batchId;
+        setBuyTx(earlier);
+      } else forgetSent(key); // it bought nothing: buy below
     }
     if (!batchId) {
       // Only at a price read just now: the purchase may cost at most 10% more than shown.
@@ -1092,6 +1098,7 @@ export function Approve({ captureId }: { captureId: string | null }) {
         return stop('Storage not bought', `${sentence(buyReason(e))}. Nothing was bought.`);
       }
       setSave({ state: 'buying', how: 'buy', step: 'buying' });
+      let sentTx: Hex | null = null;
       const r = await buyOneBatch(w, gnosisPub, {
         owner,
         days: BUY_DAYS,
@@ -1099,6 +1106,9 @@ export function Approve({ captureId }: { captureId: string | null }) {
         quotedTotal: price.perBatch,
         sentKey: key,
         durable: true,
+        onSent: (txHash) => {
+          sentTx = txHash;
+        },
       });
       if (r.kind === 'unknown') return mayHaveGone(r.txHash);
       if (r.kind === 'cancelled') {
@@ -1116,6 +1126,7 @@ export function Approve({ captureId }: { captureId: string | null }) {
         );
       }
       batchId = r.batchId;
+      setBuyTx(sentTx);
     }
     // Handed over at once: from now on the extension holds it, so a reopened tab offers
     // "Upload and publish", never a second purchase.
@@ -1293,6 +1304,11 @@ export function Approve({ captureId }: { captureId: string | null }) {
 
   const { facts, report, pending } = load;
   const published = publish.state === 'published';
+  // "Check it yourself" once published: the records in the Arkiv explorer and, when this page
+  // bought the storage, its payment on Gnosisscan (live only: the devnet has no explorers).
+  const recordUrl = publish.state === 'published' ? arkivEntityUrl(cfg, publish.entityKey) : null;
+  const codeRecordUrl = publish.state === 'published' ? arkivEntityUrl(cfg, publish.attachmentKey) : null;
+  const buyTxUrl = published ? gnosisTxUrl(cfg, buyTx) : null;
   const timelineHref = `#/u/${facts.urlHash}`;
   const heading = isConfirmation && load.earlier ? `Unchanged since ${formatUtc(load.earlier.signedAt)}` : title;
   const how: SaveHow | null = save.state === 'idle' ? null : save.how;
@@ -1439,10 +1455,25 @@ export function Approve({ captureId }: { captureId: string | null }) {
           {publish.until ? `Record on Arkiv until ${formatDay(publish.until)}.` : `Record on Arkiv for ${RECORD_DAYS} days.`}{' '}
           <span className="approve-record">
             {publish.attachmentKey ? 'Capture record' : 'Record'} <MonoValue value={publish.entityKey} />
+            {recordUrl ? (
+              <OutsideLink after href={recordUrl}>
+                View on Arkiv explorer
+              </OutsideLink>
+            ) : null}
           </span>
           {publish.attachmentKey ? (
             <span className="approve-record">
               Code record <MonoValue value={publish.attachmentKey} />
+              {codeRecordUrl ? (
+                <OutsideLink after href={codeRecordUrl}>
+                  View on Arkiv explorer
+                </OutsideLink>
+              ) : null}
+            </span>
+          ) : null}
+          {buyTxUrl ? (
+            <span className="approve-record">
+              <OutsideLink href={buyTxUrl}>Storage payment on Gnosisscan</OutsideLink>
             </span>
           ) : null}
           {publish.markError ? (

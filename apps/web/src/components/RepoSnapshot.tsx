@@ -1,11 +1,15 @@
 import { Copy, Download } from 'lucide-react';
+import { useMemo } from 'react';
 import type { RepoSnapshotItem, RepoSnapshots, SnapshotState } from '../attachments/useRepoSnapshot';
 import { codeFileName, GIT_CONTENT_TYPE, type GitHubBranch } from '../attachments/git';
 import { saveBytes } from '../download';
+import { attachmentLinks } from '../explorers';
 import { formatBytes } from '../format';
+import { getNetConfig } from '../net';
 import { StatusBadge, type Status } from '../ui/StatusBadge';
 import { useToast } from '../ui/Toast';
 import { TechnicalDetails } from '../verify/CheckPanel';
+import { OutsideLinkList } from './OutsideLinks';
 import './repoSnapshot.css';
 
 const BADGE: Record<SnapshotState['phase'], { status: Status; label: string }> = {
@@ -64,6 +68,11 @@ function SnapshotCard({ branch, item, index }: { branch: GitHubBranch; item: Rep
   const badge = snapshotBadge(item);
   const titleId = `repo-snapshot-title-${index}`;
   const size = state.phase === 'ok' ? state.computed.size : Number(record.size);
+  // The code record and the archive in the outside tools' own pages (live only).
+  const links = useMemo(
+    () => attachmentLinks(getNetConfig(), { entityKey: record.entityKey, evidenceRef: record.evidenceRef }),
+    [record.entityKey, record.evidenceRef],
+  );
   return (
     <section className="exhibit repo-snapshot" aria-labelledby={titleId} data-phase={state.phase}>
       <div className="repo-snapshot-head">
@@ -140,6 +149,7 @@ function SnapshotCard({ branch, item, index }: { branch: GitHubBranch; item: Rep
           <Download size={16} strokeWidth={1.75} aria-hidden="true" />
           Download code (.tar.gz)
         </button>
+        <OutsideLinkList links={links} />
       </div>
     </section>
   );
