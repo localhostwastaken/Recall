@@ -31,7 +31,7 @@ vi.mock('../src/brand/Duo', async () => {
 });
 // The hero story is exercised in heroStory.test.ts; here the page renders its final state.
 vi.mock('../src/landing/heroStory', () => ({
-  playHeroStory: () => ({ kill() {} }),
+  playHeroStory: () => ({ kill() {}, playing: () => false }),
   followPointer: () => () => {},
   popPill: () => {},
 }));

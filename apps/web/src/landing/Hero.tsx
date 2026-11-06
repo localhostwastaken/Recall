@@ -1,8 +1,9 @@
 import './landing.css';
-import { useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import { Duo } from '../brand/Duo';
 import { CaptureCard } from '../components/CaptureCard';
 import { useLibraryCounts } from './LibraryPreview';
+import { followPointer, playHeroStory, popPill, type HeroStory } from './heroStory';
 import { exampleCardProps, exampleStatus, type ExampleCheck } from './SeeItWork';
 
 /** The four steps of how Recall works, shown as the hero's rail. */
@@ -52,7 +53,31 @@ export function Hero({
   onGetExtension: () => void;
 }) {
   const root = useRef<HTMLElement>(null);
+  const story = useRef<HeroStory | null>(null);
   const status = exampleStatus(check);
+
+  // The story plays once on load; it never waits for data (spec 12.1). A layout effect, so its
+  // start frame is set before the first paint.
+  useLayoutEffect(() => {
+    const el = root.current;
+    if (!el) return;
+    story.current = playHeroStory(el, { reducedMotion: prefersReducedMotion() });
+    const stopPointer = followPointer(el);
+    return () => {
+      story.current?.kill();
+      story.current = null;
+      stopPointer();
+    };
+  }, []);
+
+  // When the real verdict arrives after the story has shown the card, its pill pops once.
+  const shown = useRef(status.status);
+  useEffect(() => {
+    if (shown.current === status.status) return;
+    shown.current = status.status;
+    const pill = root.current?.querySelector('.hero-card .ccard-pill');
+    if (pill && !story.current?.playing() && !prefersReducedMotion()) popPill(pill);
+  }, [status.status]);
   return (
     <section className="hero" ref={root} aria-labelledby="hero-title">
       <div className="hero-grid">
