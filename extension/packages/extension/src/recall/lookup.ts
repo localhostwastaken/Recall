@@ -59,7 +59,8 @@ let cached: { key: string; at: number; status: WitnessStatus } | null = null;
 
 /**
  * The witness to use. Candidates, in order: the URL the first pinned witness announced on
- * Arkiv (a `recall.v1.witness` profile OWNED by that key; anyone else's profile is ignored),
+ * Arkiv (a `recall.v1.witness` profile CREATED by that key; anyone else's profile is ignored,
+ * even one handed to the witness later),
  * then the URL in settings. The first that answers `/info` in time with a pinned signer
  * wins. None online: offline, with the first candidate as the URL to try. An online answer
  * is cached briefly so a capture started from the popup uses the witness the popup showed.

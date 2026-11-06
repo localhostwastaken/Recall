@@ -4,7 +4,25 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { createWalletClient } from 'viem';
 import { describe, expect, it } from 'vitest';
 import { DEV_PRIVATE_KEY } from '../../../e2e/fixtures/keys';
-import { LOCAL, arkivPublic, arkivWallet, extendEntity, latestWitnessUrl, listByUrl, writeCapture, writeConfirmation, writeWitnessProfile, type CaptureRow } from '../src/index';
+import { key, u64 } from '@arkiv-network/sdk/schema';
+import {
+  CaptureSchema,
+  ConfirmationSchema,
+  LOCAL,
+  WitnessSchema,
+  arkivPublic,
+  arkivWallet,
+  blocksForDays,
+  extendEntities,
+  extendEntity,
+  latestWitnessUrl,
+  listByUrl,
+  readArkivExpiry,
+  writeCapture,
+  writeConfirmation,
+  writeWitnessProfile,
+  type CaptureRow,
+} from '../src/index';
 
 const transport = http(LOCAL.arkiv.rpcUrl);
 
@@ -181,5 +199,92 @@ describe('listByUrl paging', () => {
     const { rows, truncated } = await listByUrl(pub, urlHash, { pageSize: 2, maxRows: 2 });
     expect(rows).toHaveLength(2);
     expect(truncated).toBe(false);
+  });
+});
+
+describe('records are read-only, and witness discovery trusts only the creator (R41)', () => {
+  const pub = arkivPublic(LOCAL);
+
+  async function funded(): Promise<ReturnType<typeof privateKeyToAccount>> {
+    const acct = privateKeyToAccount(generatePrivateKey());
+    const bank = createWalletClient({ account: privateKeyToAccount(DEV_PRIVATE_KEY), chain: pub.chain, transport });
+    await pub.waitForTransactionReceipt({ hash: await bank.sendTransaction({ to: acct.address, value: parseEther('1') }) });
+    return acct;
+  }
+
+  async function shown(entityKey: Hex): Promise<void> {
+    for (let i = 0; i < 40; i++) {
+      try {
+        await pub.getEntity(entityKey);
+        return;
+      } catch {
+        await new Promise((r) => setTimeout(r, 250));
+      }
+    }
+    throw new Error('entity did not show up');
+  }
+
+  it('the owner cannot patch a capture, a confirmation or a witness profile; a stranger can still extend them', async () => {
+    const owner = await funded();
+    const stranger = await funded();
+    const w = arkivWallet(LOCAL, transport, owner);
+    const urlHash = keccak256(stringToBytes(`https://readonly.recall.test/x?run=${randomUUID()}`));
+    const capture = await writeCapture(w, {
+      urlHash,
+      bodySha256: ('0x' + 'ab'.repeat(32)) as Hex,
+      serverName: 'readonly.recall.test',
+      witness: owner.address,
+      signedAt: 1n,
+      httpStatus: 200,
+      batchId: ('0x' + 'cd'.repeat(32)) as Hex,
+      evidenceRef: ('0x' + 'ef'.repeat(32)) as Hex,
+      canonicalUrl: 'https://readonly.recall.test/x',
+    });
+    const confirmation = await writeConfirmation(w, {
+      captureKey: capture.entityKey,
+      urlHash,
+      bodySha256: ('0x' + 'ab'.repeat(32)) as Hex,
+      witness: owner.address,
+      signedAt: 2n,
+      evidence: new Uint8Array([1]),
+    });
+    const profile = await writeWitnessProfile(w, { witness: owner.address, url: 'https://honest.example' });
+    for (const k of [capture.entityKey, confirmation.entityKey, profile.entityKey]) await shown(k);
+
+    await expect(
+      w.patchEntity(CaptureSchema, capture.entityKey, { set: { bodySha256: key(('0x' + '00'.repeat(32)) as Hex) } }),
+    ).rejects.toThrow();
+    await expect(w.patchEntity(ConfirmationSchema, confirmation.entityKey, { set: { signedAt: u64(9n) } })).rejects.toThrow();
+    await expect(w.patchEntity(WitnessSchema, profile.entityKey, { set: { url: 'https://evil.example' } })).rejects.toThrow();
+
+    const keys = [capture.entityKey, confirmation.entityKey, profile.entityKey];
+    const before = await readArkivExpiry(pub, keys);
+    const out = await extendEntities(arkivWallet(LOCAL, transport, stranger), pub, keys, 7);
+    expect(out.txHash).toMatch(/^0x[0-9a-f]{64}$/);
+    const after = await readArkivExpiry(pub, keys);
+    after.forEach((a, i) => expect(a.expiresAtBlock).toBe(before[i]!.expiresAtBlock + blocksForDays(7)));
+    expect((await pub.getEntity(profile.entityKey, WitnessSchema)).url.value).toBe('https://honest.example');
+  });
+
+  it('a profile created by someone else and then handed to the witness is ignored', async () => {
+    const witness = await funded();
+    const attacker = await funded();
+    await writeWitnessProfile(arkivWallet(LOCAL, transport, witness), { witness: witness.address, url: 'https://honest.example' });
+    expect(
+      await eventually(() => latestWitnessUrl(pub, witness.address), (u) => u === 'https://honest.example'),
+    ).toBe('https://honest.example');
+
+    // Newer than the honest profile, names the witness, and is then owned by the witness.
+    const aw = arkivWallet(LOCAL, transport, attacker);
+    const evil = await writeWitnessProfile(aw, { witness: witness.address, url: 'https://evil.example' });
+    await shown(evil.entityKey);
+    await aw.changeOwnership({ entityKey: evil.entityKey, newOwner: witness.address });
+    const owned = await eventually(
+      () => pub.getEntity(evil.entityKey),
+      (e) => e.$owner.toLowerCase() === witness.address.toLowerCase(),
+    );
+    expect(owned.$owner.toLowerCase()).toBe(witness.address.toLowerCase());
+
+    expect(await latestWitnessUrl(pub, witness.address)).toBe('https://honest.example');
   });
 });

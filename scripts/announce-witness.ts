@@ -1,5 +1,5 @@
 // Announces where the witness can be reached: writes a `recall.v1.witness` profile entity on
-// Arkiv, signed BY the witness key. The extension trusts only profiles owned by its pinned
+// Arkiv, signed BY the witness key. The extension trusts only profiles created by its pinned
 // witness, takes the newest one's URL, and falls back to the URL in its settings. Run again
 // whenever the URL changes (a quick tunnel gets a new URL on every restart).
 // Run: `pnpm witness:announce [options]` (tsx scripts/announce-witness.ts).

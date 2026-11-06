@@ -8,7 +8,12 @@ import { arkivRpcUrl, type NetConfig } from './config';
 import { redactKey } from './redact';
 
 const DEFAULT_DAYS = 30;
-const FLAGS = { permissionlessExtension: true } as const;
+/**
+ * Every Recall entity is created read-only (its attributes can never change, not even by its owner)
+ * and with permissionless extension (anyone may extend its expiry: keep-alive). The owner can still
+ * delete it or hand it to another owner; the SDK has no flag against that. Ruling R41.
+ */
+const FLAGS = { readonly: true, permissionlessExtension: true } as const;
 
 export const CaptureSchema = defineSchema('recall.v1.capture', {
   urlHash: key().indexed(),
@@ -279,12 +284,18 @@ export async function listByUrl(
   return { rows: out, truncated };
 }
 
+/**
+ * The URL of the witness's newest profile. Only profiles CREATED by the witness key count: the
+ * creator never changes, whereas the owner does. Filtering on the owner would let anyone write a
+ * newer profile naming the witness and then hand it to the witness (`changeOwnership`), and so
+ * point extensions at their own server. Ruling R41.
+ */
 export async function latestWitnessUrl(pub: ArkivPublic, witness: Address): Promise<string | null> {
   const page = await pub
     .select()
     .from(WitnessSchema)
     .where(eq('witness', addr(witness)))
-    .ownedBy(witness)
+    .createdBy(witness)
     .fetch();
   if (page.entities.length === 0) return null;
   const latest = page.entities.reduce((a, b) => (b.$createdAt > a.$createdAt ? b : a));

@@ -93,7 +93,7 @@ export async function readHistory(
   }
 }
 
-/** Only profiles OWNED by the witness key count (latestWitnessUrl filters on the owner). */
+/** Only profiles CREATED by the witness key count (latestWitnessUrl filters on `$creator`, R41). */
 export async function readWitnessUrl(req: OffscreenWitnessUrl): Promise<{ url: string | null } | { error: string }> {
   try {
     return { url: await latestWitnessUrl(arkivPublic(req.net), req.witness) };
