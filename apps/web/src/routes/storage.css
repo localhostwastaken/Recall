@@ -1,0 +1,116 @@
+/* Buy storage (#/storage). Tokens only (no raw colours or sizes).
+   Desktop (>= 1024 px): the purchase form is a card on the left (owner, size, count, how long) and
+   a side panel stays in view on the right with the price, the Buy button and its help, then the
+   progress and the result, the same shape as the publish page's side panel. The batches bought
+   sit under both as a grid of small cards. Phones: one column, in the same order, so Buy comes
+   at the end of the form (never a sticky bar over the content). */
+
+.storage-form.stack {
+  max-width: none;
+  gap: var(--space-4);
+}
+
+.storage-main,
+.storage-summary {
+  display: grid;
+  align-content: start;
+  min-width: 0;
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+}
+
+.storage-main {
+  gap: var(--space-4);
+}
+
+.storage-summary {
+  gap: var(--space-3);
+}
+
+/* How many and how long, side by side once there is room; the count needs a short box only. */
+.storage-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-5) var(--space-6);
+}
+
+.storage-count {
+  flex: 1 1 12rem;
+  max-width: 16rem;
+  min-width: 0;
+}
+
+.storage-side {
+  display: grid;
+  align-content: start;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.storage-summary .price {
+  margin: 0;
+  font-weight: 600;
+}
+
+.storage-summary .actions {
+  justify-items: stretch;
+}
+
+.storage-summary .btn-wide {
+  width: 100%;
+  min-width: 0;
+}
+
+.storage-summary .field-helper,
+.storage-main .field-helper {
+  max-width: 70ch;
+}
+
+/* Notices in the panel fill it. */
+.page .storage-side .notice {
+  max-width: none;
+}
+
+/* The batches bought: a grid of small cards instead of one long list. */
+.storage-batches.stack {
+  max-width: none;
+  margin-top: var(--space-6);
+}
+
+.storage-batches .batch-list {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 18rem), 1fr));
+}
+
+@media (max-width: 599px) {
+  .storage-count {
+    flex-basis: 100%;
+    max-width: none;
+  }
+}
+
+@media (min-width: 600px) {
+  .storage-main,
+  .storage-summary {
+    padding: var(--space-5);
+  }
+
+  .storage-main {
+    gap: var(--space-5);
+  }
+}
+
+@media (min-width: 1024px) {
+  .storage-form.stack {
+    grid-template-columns: minmax(0, 1fr) minmax(18rem, 24rem);
+    column-gap: var(--space-6);
+    align-items: start;
+  }
+
+  .storage-side {
+    position: sticky;
+    top: calc(var(--header-h, 64px) + var(--space-5));
+  }
+}

@@ -1,14 +1,99 @@
-/* The Settings page. Tokens only (no raw colours or sizes). */
-.settings-section {
+/* The Settings page. Tokens only (no raw colours or sizes).
+   Desktop (>= 1024 px): the Advanced disclosure spans the page and its three sections are cards in
+   two columns: witnesses on the left; endpoints, then the extension, on the right. The visual order
+   follows the DOM order, so Tab still walks the cards as they read. Phones: one column. */
+
+/* The one disclosure that holds the whole form: everything is preconfigured. The summary is the
+   toggle bar; once open, the cards sit under it on the page background (no card in a card). */
+.settings-advanced {
+  border-radius: var(--radius-2);
+}
+
+.settings-advanced-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: 44px;
+  padding: var(--space-2) var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  font-weight: 700;
+  color: var(--accent-text);
+  cursor: pointer;
+  list-style: none;
+}
+
+.settings-advanced-summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-advanced-summary:hover {
+  background: var(--surface-sunken);
+}
+
+.settings-advanced-summary svg {
+  flex: none;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.settings-advanced[open] > .settings-advanced-summary svg {
+  transform: rotate(180deg);
+}
+
+.settings-advanced-body {
   display: grid;
   gap: var(--space-4);
-  max-width: var(--measure);
-  padding-top: var(--space-5);
-  border-top: 1px solid var(--border);
+  padding-top: var(--space-4);
+}
+
+.settings-advanced-body > p {
+  margin: 0;
+}
+
+/* The form uses the page width; paragraphs inside keep their own measure. */
+.settings-advanced .settings-form {
+  max-width: none;
+}
+
+/* Groups the editable sections so a shared gateway address can disable them in one go. */
+.settings-fieldset {
+  display: grid;
+  gap: var(--space-4);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.settings-fieldset[disabled] {
+  opacity: 0.6;
+}
+
+/* Each section is one card: 16 inside on a phone, 24 from 600 px. */
+.settings-section {
+  display: grid;
+  align-content: start;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
 }
 
 .settings-section > h2 {
   margin: 0;
+}
+
+/* The amber warning fills its card instead of stopping at the text measure. */
+.page .settings-section .notice {
+  max-width: none;
+}
+
+.settings-section p {
+  max-width: 70ch;
 }
 
 .witness-list {
@@ -26,7 +111,7 @@
   justify-content: space-between;
   gap: var(--space-2) var(--space-3);
   padding: var(--space-3) var(--space-4);
-  background: var(--surface);
+  background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-2);
 }
@@ -39,14 +124,7 @@
 
 .witness-form {
   display: grid;
-  gap: var(--space-3);
-}
-
-.field-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2) var(--space-3);
+  gap: var(--space-2);
 }
 
 .secret-row {
@@ -68,14 +146,48 @@ textarea.input {
   resize: vertical;
 }
 
+/* A field with its "Reset to default": the reset sits at the right end of the label line, so each
+   field is label, input, helper (no extra row per field). The label keeps clear of it. */
+.settings-field {
+  position: relative;
+  display: grid;
+  gap: var(--space-1);
+}
+
+.settings-field .field-label {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  padding-right: 8.5rem;
+}
+
+.settings-field > .field-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: flex;
+}
+
+/* A 36 px button inside a card, with a 44 px hit area (spec 4.3); its text lines up with the
+   input's right edge. */
+.settings-field > .field-actions .btn {
+  position: relative;
+  min-height: 36px;
+  margin-right: calc(-1 * var(--space-3));
+  padding: 0 var(--space-3);
+}
+
+.settings-field > .field-actions .btn::before {
+  content: '';
+  position: absolute;
+  inset: calc(-1 * var(--space-1)) 0;
+}
+
 .settings-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-3);
-  padding-top: var(--space-5);
-  border-top: 1px solid var(--border);
-  max-width: var(--measure);
 }
 
 .settings-dirty {
@@ -110,88 +222,35 @@ textarea.input {
   margin-top: var(--space-5);
 }
 
-/* A field with its "Reset to default" under it: closer together than two separate fields. */
-.settings-field {
-  display: grid;
-  gap: var(--space-1);
+@media (min-width: 600px) {
+  .settings-section {
+    padding: var(--space-5);
+  }
 }
 
-.settings-field .field-actions .btn-ghost {
-  margin-left: calc(-1 * var(--space-4));
-}
+/* Desktop: two columns of cards, read row by row in DOM order: witnesses | endpoints (over both
+   rows, the longest card), then the extension under the witnesses. The two columns end level. */
+@media (min-width: 1024px) {
+  .settings-fieldset {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: auto 1fr;
+    align-items: start;
+  }
 
-/* Groups the editable sections so a shared gateway address can disable them in one go. */
-.settings-fieldset {
-  display: grid;
-  gap: var(--space-5);
-  min-width: 0;
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
+  .settings-witnesses {
+    grid-column: 1;
+    grid-row: 1;
+  }
 
-.settings-fieldset[disabled] {
-  opacity: 0.6;
-}
+  .settings-endpoints {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    align-self: stretch;
+  }
 
-/* "Reset to default" sits close under its field: it moves into the line kept free for an error
-   while there is none (the error, when shown, pushes it down as before). */
-.settings-field:has(.field-error-slot) > .field-actions {
-  margin-top: calc(-1 * var(--lh-sm));
-}
-
-.settings-section {
-  padding-top: var(--space-6);
-}
-
-/* The one disclosure that holds the whole form: everything is preconfigured. */
-.settings-advanced {
-  max-width: var(--measure);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-2);
-}
-
-.settings-advanced-summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  min-height: 44px;
-  padding: var(--space-2) var(--space-4);
-  border-radius: var(--radius-2);
-  font-weight: 700;
-  color: var(--accent-text);
-  cursor: pointer;
-  list-style: none;
-}
-
-.settings-advanced-summary::-webkit-details-marker {
-  display: none;
-}
-
-.settings-advanced-summary:hover {
-  background: var(--surface-sunken);
-}
-
-.settings-advanced-summary svg {
-  flex: none;
-  transition: transform var(--dur-fast) var(--ease-out);
-}
-
-.settings-advanced[open] > .settings-advanced-summary svg {
-  transform: rotate(180deg);
-}
-
-.settings-advanced-body {
-  display: grid;
-  gap: var(--space-4);
-  padding: var(--space-4);
-  border-top: 1px solid var(--border);
-}
-
-/* Inside the card the first section needs no rule of its own. */
-.settings-advanced-body .settings-fieldset > .settings-section:first-of-type {
-  border-top: 0;
-  padding-top: 0;
+  .settings-extension {
+    grid-column: 1;
+    grid-row: 2;
+    align-self: stretch;
+  }
 }
