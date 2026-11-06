@@ -13,6 +13,7 @@ import { onPendingUploadResult } from './pendingUpload';
 import { initExternalApi } from './external';
 import { earlierCaptures, resolveWitness } from './lookup';
 import { stampKey } from './stamp';
+import { repoCaptureUrl, resolveRepoTarget } from './gitRepo';
 import type { RecallMessage } from './messages';
 
 /** Messages from our own pages only: the popup and the offscreen document. */
@@ -55,6 +56,17 @@ export function initRecallBackground(): void {
         return reply(resolveWitness({ fresh: true }));
       case 'recall.earlierCaptures':
         return reply(earlierCaptures(msg.url));
+      case 'recall.repoTarget':
+        return reply(
+          resolveRepoTarget(msg.url).then(
+            (t) => (t ? { target: t, captureUrl: repoCaptureUrl(t) } : { none: true }),
+            (err: unknown) => ({ error: err instanceof Error ? err.message : String(err) }),
+          ),
+        );
+      case 'recall.repo.progress':
+        // Also keeps this worker awake while the offscreen document downloads the code.
+        void onCaptureStep(msg.id, msg.step);
+        return;
       case 'recall.capture.step':
         void onCaptureStep(msg.id, msg.step);
         return;

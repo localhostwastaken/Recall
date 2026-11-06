@@ -6,6 +6,8 @@
 import type { Hex } from 'viem';
 import type { EvidenceFile } from '@recall/evidence';
 import type { UploadMode } from './settings';
+import type { AttachmentSummary } from './gitRepo';
+import { deleteAttachment } from './attachmentStore';
 
 export const PENDING_PREFIX = 'recall.pending.';
 /** After markPublished: a small tombstone (no evidence), so a repeated mark stays ok. */
@@ -36,13 +38,22 @@ export type PendingRecord = {
   createdAt: number;
   /** Captures only: an upload in progress, or the last one that failed. */
   upload?: StoredUpload;
+  /**
+   * A GitHub repository capture (R46): the checked snapshot of the notarized commit. Its tar.gz
+   * bytes are in IndexedDB under the captureId (attachmentStore.ts), never here.
+   */
+  attachment?: AttachmentSummary;
+  /** With an attachment: the storage depth a stamped upload needs (18). */
+  needsDepth?: number;
+  /** Set once the snapshot is on Swarm (with evidenceRef). */
+  attachmentRef?: Hex;
 };
 
 /** What `recall.getPending` reports about the upload of a pending capture. */
 export type PendingUploadState =
   | { status: 'none' }
   | { status: 'uploading'; mode: UploadMode }
-  | { status: 'uploaded'; evidenceRef: Hex; batchId: Hex }
+  | { status: 'uploaded'; evidenceRef: Hex; batchId: Hex; attachmentRef?: Hex }
   | { status: 'failed'; reason: string; mode: UploadMode };
 
 /**
@@ -50,16 +61,31 @@ export type PendingUploadState =
  * the batch wait (2 min) and the upload itself (1 min) are both bounded, so it ended long ago.
  */
 export const UPLOAD_LOST_AFTER_MS = 5 * 60_000;
+/** The same for an upload that carries a repository snapshot (up to 25 MB, bounded at 10 min). */
+export const ATTACHMENT_UPLOAD_LOST_AFTER_MS = 15 * 60_000;
+
+export const lostAfter = (rec: PendingRecord) =>
+  rec.attachment ? ATTACHMENT_UPLOAD_LOST_AFTER_MS : UPLOAD_LOST_AFTER_MS;
+
+/** Uploaded: the evidence, and the snapshot when there is one, are on Swarm. */
+export function isUploaded(rec: PendingRecord): boolean {
+  return !!(rec.evidenceRef && rec.batchId && (!rec.attachment || rec.attachmentRef));
+}
 
 /** The upload state of a pending record, as the publish tab sees it. */
 export function pendingUploadState(rec: PendingRecord, now = Date.now()): PendingUploadState {
-  if (rec.evidenceRef && rec.batchId) {
-    return { status: 'uploaded', evidenceRef: rec.evidenceRef, batchId: rec.batchId };
+  if (isUploaded(rec)) {
+    return {
+      status: 'uploaded',
+      evidenceRef: rec.evidenceRef!,
+      batchId: rec.batchId!,
+      ...(rec.attachmentRef ? { attachmentRef: rec.attachmentRef } : {}),
+    };
   }
   const u = rec.upload;
   const mode: UploadMode = u?.mode === 'free' ? 'free' : 'stamped';
   if (u?.status === 'uploading') {
-    return now - u.at < UPLOAD_LOST_AFTER_MS
+    return now - u.at < lostAfter(rec)
       ? { status: 'uploading', mode }
       : { status: 'failed', reason: 'the upload did not finish', mode };
   }
@@ -153,6 +179,10 @@ export async function prunePending(area: PendingArea, now = Date.now()): Promise
   pending.sort((a, b) => b.at - a.at);
   drop.push(...pending.slice(PENDING_MAX).map((p) => p.key));
   if (drop.length) await area.remove(drop);
+  // Their repository snapshots go too (best effort; never throws).
+  for (const key of drop) {
+    if (key.startsWith(PENDING_PREFIX)) await deleteAttachment(key.slice(PENDING_PREFIX.length));
+  }
 }
 
 /** The pending record for exactly this captureId, or null (malformed ids never reach storage). */
@@ -183,6 +213,7 @@ export function discardPending(
   return pendingLocked(async () => {
     if (!(await readPending(captureId, area))) return { error: 'no pending capture with this id' };
     await area.remove(PENDING_PREFIX + (captureId as string));
+    await deleteAttachment(captureId as string);
     return { ok: true as const };
   });
 }
@@ -271,6 +302,7 @@ export async function markPublished(
   return pendingLocked(async () => {
     await area.set({ [PUBLISHED_PREFIX + captureId]: tombstone });
     await area.remove(PENDING_PREFIX + captureId);
+    await deleteAttachment(captureId);
     return { ok: true as const };
   });
 }

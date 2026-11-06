@@ -5,7 +5,15 @@
 // confirmation), then kept as a pending record WITHOUT any upload, and the web app's publish
 // tab opens (R44, capture first). There the person chooses: confirm, upload with storage they
 // have or buy, or discard; the upload itself is pendingUpload.ts.
-import { encodeEvidence, runChecks, urlHash, type CheckReport, type EvidenceFile } from '@recall/evidence';
+import {
+  encodeEvidence,
+  githubBranchFromFacts,
+  runChecks,
+  urlHash,
+  type CheckReport,
+  type EvidenceFile,
+  type GitHubBranch,
+} from '@recall/evidence';
 import type { Hex } from 'viem';
 import { RECALL_DEV } from './build';
 import { loadSettings } from './settings';
@@ -23,12 +31,24 @@ import {
 } from './captureParts';
 import type { OffscreenCancel, OffscreenCapture } from './messages';
 import {
+  ATTACHMENT_DEPTH,
+  GITHUB_HOSTS,
+  GITHUB_UNREADABLE,
+  branchMatchesTarget,
+  repoCaptureUrl,
+  resolveRepoTarget,
+  type AttachmentSummary,
+} from './gitRepo';
+import type { OffscreenRepoSnapshot, RepoSnapshotResult } from './repoSnapshot';
+import { deleteAttachment } from './attachmentStore';
+import {
   CAPTURE_STATE_KEY,
   isLiveRunning,
   type CaptureBase as Base,
   type CaptureState,
   type CheckSummary,
   type FinalState,
+  type JobStep,
   type UploadState,
 } from './jobState';
 
@@ -98,11 +118,22 @@ function failure(base: Base, error: string, code: CaptureErrorCode, size?: numbe
   };
 }
 
+/** The fixed part of a job's state (what every later state carries). */
+const baseOf = (s: Base): Base => ({
+  id: s.id,
+  url: s.url,
+  startedAt: s.startedAt,
+  ...(s.captureUrl ? { captureUrl: s.captureUrl } : {}),
+  ...(s.repo ? { repo: s.repo } : {}),
+});
+
 /** Sends to the offscreen document, retrying briefly while a new document is still loading. */
-async function sendToOffscreen(msg: OffscreenCapture): Promise<{ accepted?: boolean } | undefined> {
+async function sendToOffscreen<T = { accepted?: boolean }>(
+  msg: OffscreenCapture | OffscreenRepoSnapshot,
+): Promise<T | undefined> {
   for (let attempt = 0; ; attempt++) {
     try {
-      return (await chrome.runtime.sendMessage(msg)) as { accepted?: boolean } | undefined;
+      return (await chrome.runtime.sendMessage(msg)) as T | undefined;
     } catch (err) {
       if (attempt >= 20 || !/receiving end does not exist/i.test(String(err))) throw err;
       await new Promise((resolve) => setTimeout(resolve, 150));
@@ -120,9 +151,16 @@ export async function startCapture(
 ): Promise<{ id: string } | { error: string }> {
   // Never a witness that failed its signer check (fail closed).
   const witness = await witnessForCapture();
+  // A GitHub repository page (R46): capture GitHub's API answer for the branch instead.
+  const repo = await resolveRepoTarget(url).catch((err: unknown) => ({ error: errorText(err) }));
   return update(async () => {
     if (isLive(await readCaptureState())) return { error: 'A capture is already running.' };
-    const base: Base = { id: crypto.randomUUID(), url, startedAt: Date.now() };
+    let base: Base = { id: crypto.randomUUID(), url, startedAt: Date.now() };
+    if (repo && 'error' in repo) {
+      await finish(failure(base, `couldn't read this repository from GitHub: ${repo.error}`, 'failed'));
+      return { id: base.id };
+    }
+    if (repo) base = { ...base, captureUrl: repoCaptureUrl(repo), repo };
     const witnessUrl = witness.url;
     if (!witnessUrl) {
       await finish(failure(base, 'no witness address is set', 'witness_offline'));
@@ -147,7 +185,7 @@ export async function startCapture(
       const msg: OffscreenCapture = {
         type: 'recall.offscreen.capture',
         id: base.id,
-        url,
+        url: base.captureUrl ?? url,
         witnessUrl,
         maxRecvData: MAX_RECV_DATA,
         ...(RECALL_DEV && overrides ? { overrides } : {}),
@@ -162,7 +200,7 @@ export async function startCapture(
 }
 
 /** Offscreen progress. Ignored unless it belongs to the running capture. */
-export function onCaptureStep(id: string, step: CaptureStep): Promise<void> {
+export function onCaptureStep(id: string, step: CaptureStep | JobStep): Promise<void> {
   return update(async () => {
     const s = await readCaptureState();
     if (s?.status === 'running' && s.id === id && step > s.step) {
@@ -180,17 +218,17 @@ export function onCaptureStep(id: string, step: CaptureStep): Promise<void> {
  */
 export async function onCaptureResult(id: string, outcome: CaptureOutcome): Promise<void> {
   const next = await checkCapture(id, outcome);
-  if (next) await afterChecks(id, next.evidence, next.checks);
+  if (next) await afterChecks(id, next.evidence, next.checks, next.git);
 }
 
 function checkCapture(
   id: string,
   outcome: CaptureOutcome,
-): Promise<{ evidence: EvidenceFile; checks: CheckSummary } | undefined> {
+): Promise<{ evidence: EvidenceFile; checks: CheckSummary; git?: GitHubBranch } | undefined> {
   return update(async () => {
     const s = await readCaptureState();
     if (s?.status !== 'running' || s.id !== id || s.step > 3 || s.evidence) return; // cancelled or superseded
-    const base: Base = { id: s.id, url: s.url, startedAt: s.startedAt };
+    const base = baseOf(s);
     if ('evidence' in outcome) {
       await area().set({
         [CAPTURE_STATE_KEY]: { ...s, step: 3, stepAt: Date.now() } satisfies CaptureState,
@@ -198,11 +236,12 @@ function checkCapture(
       // The canonical form is what gets checked, uploaded and kept (see canonicalEvidence).
       let evidence: EvidenceFile;
       let checks: CheckSummary;
+      let report: CheckReport;
       try {
         evidence = canonicalEvidence(outcome.evidence);
         const { pinnedWitnesses } = await loadSettings();
         // Bounded: a hung check must not leave the job "running" and block later captures.
-        const report = await withTimeout(
+        report = await withTimeout(
           runChecks(evidence, { pinnedWitnesses }),
           CHECKS_TIMEOUT_MS,
           `the checks did not finish within ${CHECKS_TIMEOUT_MS / 1000} s`,
@@ -213,10 +252,20 @@ function checkCapture(
         await finish(failure(base, `the evidence could not be checked: ${why}`, 'failed'));
         return;
       }
-      const gate = uploadGate(checks, base.url);
+      const gate = uploadGate(checks, base.captureUrl ?? base.url);
       if (!gate.ok) {
         await finishDone(base, evidence, checks, { status: 'skipped', reason: gate.reason });
         return undefined;
+      }
+      // A repository: the notarized answer must name a commit and tree of exactly this branch.
+      let git: GitHubBranch | undefined;
+      if (base.repo) {
+        const b = report.facts ? githubBranchFromFacts(report.facts, { apiHost: GITHUB_HOSTS.api }) : null;
+        if (!b || !branchMatchesTarget(b, base.repo)) {
+          await finish(failure(base, GITHUB_UNREADABLE, 'failed'));
+          return undefined;
+        }
+        git = b;
       }
       // Still step 3: the same-page check runs next. Storing the checked capture marks it.
       await area().set({
@@ -229,7 +278,7 @@ function checkCapture(
           checks,
         } satisfies CaptureState,
       });
-      return { evidence, checks };
+      return { evidence, checks, ...(git ? { git } : {}) };
     } else if (outcome.code === 'cancelled') {
       await finish({ ...base, status: 'cancelled', finishedAt: Date.now() });
     } else {
@@ -263,13 +312,20 @@ async function sameAsLatest(evidence: EvidenceFile, checks: CheckSummary): Promi
  * the same bytes as the newest verified capture it is a confirmation; if that cannot be kept,
  * it is kept as a new capture instead.
  */
-async function afterChecks(id: string, evidence: EvidenceFile, checks: CheckSummary): Promise<void> {
+async function afterChecks(
+  id: string,
+  evidence: EvidenceFile,
+  checks: CheckSummary,
+  git?: GitHubBranch,
+): Promise<void> {
+  // The same notarized body names the same commit: a confirmation, no code download needed.
   const same = await sameAsLatest(evidence, checks).catch(() => null);
   let opened: string | undefined;
+  let snapshotId: string | undefined;
   await update(async () => {
     const s = await readCaptureState();
     if (s?.status !== 'running' || s.id !== id || s.step !== 3 || !s.evidence) return; // cancelled
-    const base: Base = { id: s.id, url: s.url, startedAt: s.startedAt };
+    const base = baseOf(s);
     const f = checks.facts;
     if (!f) {
       await finishDone(base, evidence, checks, { status: 'skipped', reason: 'the checks gave no verified facts' });
@@ -297,6 +353,15 @@ async function afterChecks(id: string, evidence: EvidenceFile, checks: CheckSumm
         console.error('[recall] confirmation could not be kept', errorText(err));
       }
     }
+    if (git) {
+      // A new commit: its code is downloaded and checked first (outside this chain, so a
+      // cancel is never held up by the download).
+      snapshotId = newCaptureId();
+      await area().set({
+        [CAPTURE_STATE_KEY]: { ...s, step: 4, stepAt: Date.now() } satisfies CaptureState,
+      });
+      return;
+    }
     try {
       const captureId = newCaptureId();
       const rec: PendingRecord = { captureId, kind: 'capture', ...common };
@@ -310,7 +375,86 @@ async function afterChecks(id: string, evidence: EvidenceFile, checks: CheckSumm
       });
     }
   });
+  if (snapshotId && git) opened = await snapshotThenKeep(id, snapshotId, evidence, checks, git);
   if (opened) await openApproveTab(opened);
+}
+
+/**
+ * The repository snapshot (R46): the offscreen document downloads the commit's tar.gz, checks
+ * its tree against the notarized one and keeps the bytes under `captureId`. Then the capture is
+ * kept as pending with the snapshot's summary. Anything else (cancelled, a mismatch, a failure)
+ * keeps nothing and drops the bytes. Returns the captureId kept, if any.
+ */
+async function snapshotThenKeep(
+  id: string,
+  captureId: string,
+  evidence: EvidenceFile,
+  checks: CheckSummary,
+  git: GitHubBranch,
+): Promise<string | undefined> {
+  let result: RepoSnapshotResult;
+  try {
+    await ensureOffscreen();
+    const msg: OffscreenRepoSnapshot = {
+      type: 'recall.offscreen.repoSnapshot',
+      id,
+      captureId,
+      owner: git.owner,
+      repo: git.repo,
+      commitSha: git.commitSha,
+      treeSha: git.treeSha,
+    };
+    result = (await sendToOffscreen<RepoSnapshotResult>(msg)) ?? { ok: false, error: 'the code check gave no answer' };
+  } catch (err) {
+    result = { ok: false, error: errorText(err) };
+  }
+  let opened: string | undefined;
+  await update(async () => {
+    const s = await readCaptureState();
+    if (s?.status !== 'running' || s.id !== id || s.step < 4 || !s.evidence) {
+      await deleteAttachment(captureId); // cancelled meanwhile
+      return;
+    }
+    const base = baseOf(s);
+    const f = checks.facts;
+    if (!result.ok || !f) {
+      await deleteAttachment(captureId);
+      await finish(failure(base, result.ok ? 'the checks gave no verified facts' : result.error, 'failed'));
+      return;
+    }
+    const attachment: AttachmentSummary = {
+      kind: 'git',
+      owner: git.owner,
+      repo: git.repo,
+      branch: git.branch,
+      commitSha: git.commitSha,
+      treeSha: git.treeSha,
+      size: result.size,
+      sha256: result.sha256,
+      files: result.files,
+      contentType: 'application/gzip',
+    };
+    try {
+      await savePending({
+        captureId,
+        kind: 'capture',
+        evidence: canonicalEvidence(evidence),
+        bodySha256: f.bodySha256,
+        createdAt: Date.now(),
+        attachment,
+        needsDepth: ATTACHMENT_DEPTH,
+      });
+      await finishDone(base, evidence, checks, { status: 'pending', captureId });
+      opened = captureId;
+    } catch (err) {
+      await deleteAttachment(captureId);
+      await finishDone(base, evidence, checks, {
+        status: 'failed',
+        error: `the capture could not be kept for publishing: ${errorText(err)}`,
+      });
+    }
+  });
+  return opened;
 }
 
 function finishDone(
@@ -330,9 +474,7 @@ export function cancelCapture(): Promise<void> {
     const s = await readCaptureState();
     if (s?.status !== 'running') return;
     await finish({
-      id: s.id,
-      url: s.url,
-      startedAt: s.startedAt,
+      ...baseOf(s),
       status: 'cancelled',
       finishedAt: Date.now(),
     });

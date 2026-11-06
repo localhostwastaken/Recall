@@ -10,6 +10,7 @@ import type { CaptureOutcome } from '../../recall/captureParts';
 import { uploadEvidence } from '../../recall/swarmUpload';
 import { readEntitySummary } from '../../recall/arkivRead';
 import { readHistory, readWitnessUrl } from '../../recall/historyRead';
+import { repoSnapshot, type OffscreenRepoSnapshot, type RepoSnapshotResult } from '../../recall/repoSnapshot';
 import type { UploadOutcome } from '../../recall/uploadParts';
 import type {
   CaptureResultMessage,
@@ -17,6 +18,7 @@ import type {
   OffscreenCapture,
   OffscreenUpload,
   RecallMessage,
+  RepoProgressMessage,
   UploadResultMessage,
 } from '../../recall/messages';
 
@@ -30,7 +32,7 @@ proveManager().catch((err) => logger.error('[recall] prover init failed', err));
 
 const running = new Map<string, AbortController>();
 
-function send(msg: CaptureStepMessage | CaptureResultMessage | UploadResultMessage): void {
+function send(msg: CaptureStepMessage | CaptureResultMessage | UploadResultMessage | RepoProgressMessage): void {
   chrome.runtime
     .sendMessage(msg)
     .catch((err) => logger.warn('[recall] message to service worker failed', err));
@@ -54,6 +56,31 @@ async function run(req: OffscreenCapture): Promise<void> {
     running.delete(req.id);
   }
   send({ type: 'recall.capture.result', id: req.id, outcome });
+}
+
+/**
+ * The repository snapshot of a capture (R46). A cancel of the capture job aborts it. While it
+ * runs, the step is re-sent every 5 s, which keeps the service worker (waiting for the answer)
+ * awake.
+ */
+async function snapshot(req: OffscreenRepoSnapshot): Promise<RepoSnapshotResult> {
+  const ctl = new AbortController();
+  running.set(req.id, ctl);
+  let step: 4 | 5 = 4;
+  const ping = setInterval(() => send({ type: 'recall.repo.progress', id: req.id, step }), 5_000);
+  try {
+    return await repoSnapshot(req, ctl.signal, {
+      onStep: (s) => {
+        step = s;
+        send({ type: 'recall.repo.progress', id: req.id, step: s });
+      },
+    });
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  } finally {
+    clearInterval(ping);
+    running.delete(req.id);
+  }
 }
 
 // Uploads run one at a time, so two jobs never stamp the same batch at once.
@@ -104,6 +131,9 @@ chrome.runtime.onMessage.addListener((raw: unknown, sender, sendResponse) => {
     return true; // async response
   } else if (msg?.type === 'recall.offscreen.witnessUrl') {
     readWitnessUrl(msg).then(sendResponse);
+    return true; // async response
+  } else if (msg?.type === 'recall.offscreen.repoSnapshot') {
+    snapshot(msg).then(sendResponse);
     return true; // async response
   } else if (msg?.type === 'recall.offscreen.cancel') {
     running.get(msg.id)?.abort();

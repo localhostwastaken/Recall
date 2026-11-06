@@ -3,6 +3,7 @@
 import type { Address, Hex } from 'viem';
 import type { CheckResult, EvidenceFile } from '@recall/evidence';
 import type { CaptureErrorCode, CaptureStep } from './captureParts';
+import type { RepoTarget } from './gitRepo';
 
 export const CAPTURE_STATE_KEY = 'recall.capture';
 
@@ -27,8 +28,11 @@ export type CheckSummary = {
   };
 };
 
-/** Job steps: the capture's three (the same-page check runs within step 3). */
-export type JobStep = CaptureStep;
+/**
+ * Job steps: the capture's three (the same-page check runs within step 3), then for a repository
+ * (R46) 4 = downloading the code, 5 = checking it against the notarized commit.
+ */
+export type JobStep = CaptureStep | 4 | 5;
 
 /** What happened to the capture after the checks (R44: nothing is uploaded here). */
 export type UploadState =
@@ -45,7 +49,11 @@ export type UploadState =
   /** The capture could not be kept for publishing. */
   | { status: 'failed'; error: string };
 
-export type CaptureBase = { id: string; url: string; startedAt: number };
+/**
+ * `url`: the page the capture was started on (the popup matches its tab by it). On a GitHub
+ * repository page (R46) `repo` is the branch and `captureUrl` the GitHub API URL actually captured.
+ */
+export type CaptureBase = { id: string; url: string; startedAt: number; captureUrl?: string; repo?: RepoTarget };
 type Base = CaptureBase;
 export type CaptureState =
   | (Base & {

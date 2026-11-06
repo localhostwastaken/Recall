@@ -5,11 +5,13 @@ import type { CaptureOutcome, CaptureOverrides, CaptureStep } from './capturePar
 import type { OffscreenUpload, UploadResultMessage } from './uploadParts';
 import type { OffscreenReadEntity } from './arkivRead';
 import type { OffscreenHistory, OffscreenWitnessUrl } from './historyRead';
+import type { OffscreenRepoSnapshot, RepoProgressMessage } from './repoSnapshot';
 
 export type { OffscreenUpload, UploadResultMessage } from './uploadParts';
 export type { OffscreenReadEntity } from './arkivRead';
 export type { OffscreenHistory, OffscreenWitnessUrl } from './historyRead';
 export type { ExternalRequest } from './external';
+export type { OffscreenRepoSnapshot, RepoProgressMessage } from './repoSnapshot';
 
 /** Service worker -> offscreen: run one capture. Answered at once with `{accepted:true}`. */
 export type OffscreenCapture = {
@@ -44,7 +46,9 @@ export type PopupRequest =
   | { type: 'recall.cancelCapture' }
   | { type: 'recall.dismissCapture' }
   | { type: 'recall.witnessStatus' }
-  | { type: 'recall.earlierCaptures'; url: string };
+  | { type: 'recall.earlierCaptures'; url: string }
+  /** R46: on a GitHub repository page, the branch and API URL a capture would use. */
+  | { type: 'recall.repoTarget'; url: string };
 
 export type RecallMessage =
   | OffscreenCapture
@@ -53,6 +57,8 @@ export type RecallMessage =
   | OffscreenReadEntity
   | OffscreenHistory
   | OffscreenWitnessUrl
+  | OffscreenRepoSnapshot
+  | RepoProgressMessage
   | CaptureStepMessage
   | CaptureResultMessage
   | UploadResultMessage
