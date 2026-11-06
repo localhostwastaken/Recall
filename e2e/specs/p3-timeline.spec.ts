@@ -168,6 +168,10 @@ const HOSTILE = `<!doctype html><html><head><meta charset="utf-8">
 <a target="_self" href="http://localhost:15174/svg-href"><text x="150" y="25">svg href link</text></a></svg>
 <map name="m"><area shape="rect" coords="0,0,60,60" href="http://localhost:15174/area" target="_self"></map>
 <img usemap="#m" width="60" height="60" alt="area map" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7">
+<div><template shadowrootmode="open"><a target="_self" href="http://localhost:15174/dsd-html">dsd html link</a></template></div>
+<div><template shadowrootmode="open"><svg width="200" height="30" xmlns="http://www.w3.org/2000/svg"><a target="_self" href="http://localhost:15174/dsd-svg"><text x="5" y="20">dsd svg link</text></a></svg></template></div>
+<svg width="200" height="30" xmlns="http://www.w3.org/2000/svg"><a target="_self"><set attributeName="href" to="http://localhost:15174/smil" begin="0s" fill="freeze"/><text x="5" y="20">smil link</text></a></svg>
+<math><mi href="http://localhost:15174/mathml" target="_self">mathml link</mi></math>
 <form action="http://localhost:15174/form"><button type="submit">submit</button></form></body></html>`;
 
 test.beforeAll(async () => {
@@ -449,10 +453,22 @@ test('@p3 timeline preview blocks scripts, outside resources, redirects, links a
     // Nothing in the document can navigate: no href is left on any link, whatever its target.
     expect(await frame!.evaluate(() => [...document.querySelectorAll('a, area')].filter((a) => a.hasAttribute('href') || a.hasAttributeNS('http://www.w3.org/1999/xlink', 'href')).length)).toBe(0);
     expect(await frame!.evaluate(() => document.querySelectorAll('link, iframe, meta[http-equiv="refresh"], base[href]').length)).toBe(0);
+    // Declarative shadow DOM: a link inside `<template shadowrootmode>` is invisible to a query but becomes
+    // live in the frame's own parser. No template is left, and nothing in the frame has a shadow root.
+    expect(await frame!.evaluate(() => document.querySelectorAll('template, animate, set').length)).toBe(0);
+    expect(await frame!.evaluate(() => [...document.querySelectorAll('*')].filter((e) => e.shadowRoot).length)).toBe(0);
+    expect(await frame!.evaluate(() => [...document.querySelectorAll('*')].filter((e) => [...e.attributes].some((a) => a.localName === 'href')).length)).toBe(0);
 
     // Clicks: a plain link, target=_self, target=_top, SVG links (xlink:href and href), an image map, a form.
     for (const target of ['a link', 'self link', 'top link', 'svg xlink link', 'svg href link']) {
       await frame!.getByText(target, { exact: true }).click({ force: true });
+      await page.waitForTimeout(250);
+      await quiet(`click "${target}"`);
+    }
+    // Links that only exist if a hiding place survived (a shadow root, an SMIL-written href, MathML): clicking
+    // them must go nowhere whether or not they are there (a missing one just times out quickly).
+    for (const target of ['dsd html link', 'dsd svg link', 'smil link', 'mathml link']) {
+      await frame!.getByText(target, { exact: true }).click({ force: true, timeout: 1_500 }).catch(() => undefined);
       await page.waitForTimeout(250);
       await quiet(`click "${target}"`);
     }

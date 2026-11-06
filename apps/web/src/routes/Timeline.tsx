@@ -234,7 +234,7 @@ export function Timeline({ urlHash }: { urlHash: Hex }) {
                 </button>
               }
             >
-              Checked {t.rows.length - tl.unchecked.length} of {t.rows.length} records so far. A record that has not been
+              Checked {t.checked.size} of {t.rows.length} records so far. A record that has not been
               checked is not listed as a capture: it has not passed its checks.
             </Notice>
           ) : null}

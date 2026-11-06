@@ -275,6 +275,20 @@ describe('buildTimeline: confirmations', () => {
     expect(t.versions[0].confirmations.map((c) => c.entityKey)).toEqual([key(2)]);
   });
 
+  it('waits (not "isn\'t shown") for a capture still being checked when the confirmation names its key in another case', () => {
+    const upper = `0x${'AB'.repeat(32)}` as Hex;
+    const lowerKey = upper.toLowerCase() as Hex;
+    const rows = [{ ...capture(1), entityKey: lowerKey }, confirmation(2, upper)];
+    const only = results([[key(2), verified({ signedAt: 2_000n })]]); // the capture has no result yet
+    const checking = buildTimeline(rows, only);
+    expect(checking.pending.map((p) => p.entityKey)).toEqual([lowerKey, key(2)]);
+    expect(checking.unverified).toEqual([]);
+    const idle = buildTimeline(rows, only, new Set([lowerKey])); // ... or was never started
+    expect(idle.unchecked.map((p) => p.entityKey)).toEqual([lowerKey, key(2)]);
+    expect(idle.pending).toEqual([]);
+    expect(idle.unverified).toEqual([]);
+  });
+
   it('shows the same confirmation published twice once', () => {
     const rows = [capture(1), confirmation(2, key(1)), confirmation(3, key(1))];
     const same = verified({ signedAt: 2_000n });

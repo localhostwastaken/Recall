@@ -60,8 +60,10 @@ function PdfDownload({ facts }: { facts: VerifiedFacts }) {
  * verdict above says so. This shows what the witness signed, not that the page was trustworthy.
  * `fallback` is an action (the evidence download) offered when there is no preview.
  *
- * Backstop: a preview loads once. If the frame loads a second time something navigated it, so
- * it is replaced by a notice.
+ * Backstop, advisory only: a preview loads once, so a second load means something navigated it
+ * and the frame is replaced by a notice. It cannot be relied on (a navigation to a page whose
+ * subresources hang never fires `load`); the protection is that nothing in the document can
+ * navigate at all (see `previewDoc`).
  */
 export function Preview({ facts, fallback }: { facts: VerifiedFacts; fallback?: ReactNode }) {
   const kind = contentKind(facts.contentType);
