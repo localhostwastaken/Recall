@@ -154,13 +154,17 @@ export function buildFixtureRepos(root: string): { good: FixtureRepo; tampered: 
   };
 }
 
-/** The body of GitHub's "get a branch" response, trimmed to the fields Recall reads plus a few more. */
-export function branchJson(r: FixtureRepo, apiHost: string): Buffer {
+/**
+ * The body of GitHub's "get a branch" response, trimmed to the fields Recall reads plus a few more.
+ * Every branch name of a fixture repository points at the same commit, so a test can capture a
+ * branch URL nobody captured before (the devnet keeps records between runs).
+ */
+export function branchJson(r: FixtureRepo, apiHost: string, branch: string = FIXTURE_BRANCH): Buffer {
   const base = `https://${apiHost}/repos/${FIXTURE_OWNER}/${r.repo}`;
   const person = { name: 'Recall Fixture', email: 'fixture@recall.test', date: '2025-11-06T00:00:00Z' };
   return Buffer.from(
     JSON.stringify({
-      name: FIXTURE_BRANCH,
+      name: branch,
       commit: {
         sha: r.commitSha,
         commit: {
@@ -175,7 +179,7 @@ export function branchJson(r: FixtureRepo, apiHost: string): Buffer {
         html_url: `https://github.com/${FIXTURE_OWNER}/${r.repo}/commit/${r.commitSha}`,
         parents: [],
       },
-      _links: { self: `${base}/branches/${FIXTURE_BRANCH}`, html: `https://github.com/${FIXTURE_OWNER}/${r.repo}/tree/${FIXTURE_BRANCH}` },
+      _links: { self: `${base}/branches/${branch}`, html: `https://github.com/${FIXTURE_OWNER}/${r.repo}/tree/${branch}` },
       protected: false,
     }),
   );

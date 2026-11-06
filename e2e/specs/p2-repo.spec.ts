@@ -40,12 +40,16 @@ import {
 
 const APP = 'http://localhost:5173';
 const OWNER = 'recall-fixture';
+// The devnet keeps records between runs and the fixture's commit never changes, so the demo is
+// captured on a branch of its own each run (the fixture answers any branch name with the same
+// commit); otherwise a later run would only be a confirmation of an earlier one.
+const BRANCH = `run-${Math.random().toString(36).slice(2, 10)}`;
 // The dev build accepts github.com and github.recall.test as repository pages; the page itself is
 // stubbed by the test (only its URL matters to the popup).
-const DEMO_PAGE = `https://github.recall.test/${OWNER}/demo`;
+const DEMO_PAGE = `https://github.recall.test/${OWNER}/demo/tree/${BRANCH}`;
 const TAMPERED_PAGE = `https://github.recall.test/${OWNER}/tampered`;
 const API_HOST = 'api.github.recall.test';
-const DEMO_API = `https://${API_HOST}/repos/${OWNER}/demo/branches/main`;
+const DEMO_API = `https://${API_HOST}/repos/${OWNER}/demo/branches/${BRANCH}`;
 const TAMPERED_API = `https://${API_HOST}/repos/${OWNER}/tampered/branches/main`;
 const MISMATCH = "The repository snapshot doesn't match the commit GitHub reported";
 const hashOf = (u: string) => urlHash(canonicalUrl(u));
@@ -206,7 +210,7 @@ test.describe('@p2 repo', () => {
     const { tab, popup } = await popupFor(DEMO_PAGE);
     const button = popup.getByRole('button', { name: 'Capture this repository' });
     await expect(button).toBeEnabled({ timeout: 20_000 });
-    await expect(popup.getByText("branch main · notarizes GitHub's commit, then checks the code")).toBeVisible();
+    await expect(popup.getByText(`branch ${BRANCH} · notarizes GitHub's commit, then checks the code`)).toBeVisible();
     await expect(popup.getByRole('button', { name: 'Capture this page' })).toHaveCount(0);
     await button.click();
     await expect(popup.getByRole('heading', { name: 'Continue in the Recall tab' })).toBeVisible({ timeout: 180_000 });
@@ -223,7 +227,7 @@ test.describe('@p2 repo', () => {
       kind: 'capture',
       upload: { status: 'none' },
       needsDepth: 18,
-      attachment: { kind: 'git', owner: OWNER, repo: 'demo', branch: 'main', commitSha: git.good.commitSha, treeSha: git.good.treeSha, files: 5 },
+      attachment: { kind: 'git', owner: OWNER, repo: 'demo', branch: BRANCH, commitSha: git.good.commitSha, treeSha: git.good.treeSha, files: 5 },
     });
     const summary = kept.attachment!;
     expect(summary.sha256).toMatch(/^0x[0-9a-f]{64}$/);
@@ -292,7 +296,7 @@ test.describe('@p2 repo', () => {
     // The record page: a GitHub branch capture with a hash-anchored snapshot whose download is that file.
     const rec = await ext.context.newPage();
     await rec.goto(`${APP}/#/c/${captureKey}`);
-    await expect(rec.getByText(`GitHub branch ${OWNER}/demo@main`)).toBeVisible({ timeout: 60_000 });
+    await expect(rec.getByText(`GitHub branch ${OWNER}/demo@${BRANCH}`)).toBeVisible({ timeout: 60_000 });
     const card = snapshotCards(rec);
     await expect(card).toHaveCount(1, { timeout: 60_000 });
     await expect(card.getByRole('heading', { name: 'Repository snapshot' })).toBeVisible();
@@ -389,7 +393,7 @@ test.describe('@p2 repo', () => {
     await expect.poll(async () => (await listAttachments(pub, lone)).rows.length, { timeout: 30_000 }).toBe(1);
     const page = await ext.context.newPage();
     await page.goto(`${APP}/#/c/${lone}`);
-    await expect(page.getByText(`GitHub branch ${OWNER}/demo@main`)).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByText(`GitHub branch ${OWNER}/demo@${BRANCH}`)).toBeVisible({ timeout: 60_000 });
     const card = snapshotCards(page);
     await expect(card).toHaveCount(1, { timeout: 60_000 });
     await expect(card).toHaveAttribute('data-phase', 'mismatch', { timeout: 120_000 });

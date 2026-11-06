@@ -25,7 +25,8 @@ const big = (() => {
 
 // GitHub-like routes for the .git adapter (R46), on any fixture host (api.github.recall.test,
 // codeload.github.recall.test or notice.recall.test):
-//   GET /repos/recall-fixture/<demo|tampered>/branches/main   the branch JSON (commit + tree ids)
+//   GET /repos/recall-fixture/<demo|tampered>/branches/<b>    the branch JSON (commit + tree ids); any
+//                                                             simple branch name <b> names the same commit
 //   GET /repos/recall-fixture/<demo|tampered>                 { default_branch: "main" }
 //   GET /recall-fixture/<demo|tampered>/tar.gz/<commit>        the codeload-style tarball
 //   GET /recall-fixture/demo/tar.gz/<commit>/tampered          the demo commit with one file changed
@@ -49,10 +50,10 @@ function sendWith(res: ServerResponse, type: string, body: Buffer, extra: Record
 /** Serves a GitHub-like route, or returns false. */
 function serveGit(req: IncomingMessage, res: ServerResponse, url: string): boolean {
   const host = (req.headers.host ?? 'api.github.recall.test').replace(/:\d+$/, '').toLowerCase();
-  const api = /^\/repos\/([^/]+)\/([^/]+)(\/branches\/main)?$/.exec(url);
+  const api = /^\/repos\/([^/]+)\/([^/]+)(?:\/branches\/([A-Za-z0-9][A-Za-z0-9._-]{0,99}))?$/.exec(url);
   if (api && api[1] === FIXTURE_OWNER && repos[api[2]!]) {
     const r = repos[api[2]!]!;
-    const body = api[3] ? branchJson(r, host) : repoJson(r);
+    const body = api[3] ? branchJson(r, host, api[3]) : repoJson(r);
     sendWith(res, 'application/json; charset=utf-8', body, { 'Access-Control-Allow-Origin': '*' });
     return true;
   }
