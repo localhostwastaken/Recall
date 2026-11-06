@@ -12,7 +12,7 @@ use tlsn::{
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::watch;
-use tokio::task::JoinHandle;
+use tokio::task::{AbortHandle, JoinHandle};
 use tokio_util::compat::TokioAsyncReadCompatExt;
 use tracing::{debug, info, warn};
 
@@ -90,8 +90,22 @@ pub async fn verifier<T: AsyncWrite + AsyncRead + Send + Unpin + 'static>(
         }
         result
     });
+    // Recall: the driver dies with this future. Without the guard, a
+    // cancelled verifier (the 120 s timeout, an aborted session task) or an
+    // early error return would leave the driver running detached, holding the
+    // prover socket.
+    let _driver_guard = DriverGuard(driver_task.abort_handle());
 
     run_protocol(handle, driver_task, lost_rx, max_sent_data, max_recv_data, root_store).await
+}
+
+/// Aborts the session driver task when dropped (a no-op once it has ended).
+struct DriverGuard(AbortHandle);
+
+impl Drop for DriverGuard {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 /// Runs `fut` (a protocol step that needs the prover), or fails with
@@ -333,4 +347,44 @@ fn compress_redacted_sequences(text: String) -> String {
 /// Recall: lossy, so binary bodies (PDFs) no longer fail the session.
 fn bytes_to_redacted_string(bytes: &[u8], to: &str) -> String {
     String::from_utf8_lossy(bytes).replace('\0', to)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::AsyncReadExt;
+
+    /// M1: cancelling the verifier (the 120 s timeout, or the session task
+    /// being aborted) must also stop its session driver, which owns the
+    /// prover socket. A detached driver would keep the socket open.
+    #[tokio::test]
+    async fn cancelled_verifier_stops_its_driver() {
+        let (mut prover_side, witness_side) = tokio::io::duplex(64 * 1024);
+        let task = tokio::spawn(verifier(
+            witness_side,
+            4096,
+            16384,
+            RootCertStore::empty(),
+        ));
+        // Let the verifier spawn its driver and wait for the prover (who never
+        // speaks).
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(!task.is_finished(), "the verifier should be waiting for the prover");
+        task.abort();
+        let _ = task.await;
+
+        // Once the driver is gone, the witness half of the pipe is dropped and
+        // the prover half reads EOF instead of waiting forever.
+        let eof = tokio::time::timeout(Duration::from_secs(5), async {
+            let mut buf = [0u8; 4096];
+            loop {
+                match prover_side.read(&mut buf).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => continue,
+                }
+            }
+        })
+        .await;
+        assert!(eof.is_ok(), "the session driver outlived the cancelled verifier");
+    }
 }
