@@ -4,3 +4,4 @@ export * from './url';
 export * from './request';
 export * from './evidence';
 export * from './checks';
+export * from './git';

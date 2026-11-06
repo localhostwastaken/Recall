@@ -8,6 +8,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@noble/hashes": "1.8.0",
+    "fflate": "0.8.2",
     "viem": "^2.21.0"
   },
   "devDependencies": {

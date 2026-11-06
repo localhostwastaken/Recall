@@ -1,0 +1,103 @@
+{
+  "name": "main",
+  "commit": {
+    "sha": "04995f68e470a18d1fc99f86fa326c2a87bab4f2",
+    "node_id": "C_kwDOPG3UANoAKDA0OTk1ZjY4ZTQ3MGExOGQxZmM5OWY4NmZhMzI2YzJhODdiYWI0ZjI",
+    "commit": {
+      "author": {
+        "name": "callebtc",
+        "email": "93376500+callebtc@users.noreply.github.com",
+        "date": "2026-10-25T00:55:00Z"
+      },
+      "committer": {
+        "name": "GitHub",
+        "email": "noreply@github.com",
+        "date": "2026-10-25T00:55:00Z"
+      },
+      "message": "Port the Android globe geohash picker to iOS (#1807)\n\n* Port the Android globe geohash picker to iOS\n\nAdds the 3D globe picker from bitchat-android: a map button next to the\ngeohash field opens a full-screen orthographic globe (Natural Earth land,\nborders and cities, geohash grid, crosshair) with drag/fling, pinch, tap\nand double-tap, precision buttons and a fly-in to the current geohash.\nSelecting teleports like typing a geohash.\n\nBeyond a straight port:\n- Fix ocean painted as land: the point-in-ring test counted the\n  antimeridian seam as a crossing for Eurasia, flipping its fill over the\n  Pacific and Atlantic. Android has the same bug.\n- Motion detail only steps down within one gesture, so layers no longer\n  flash on and off while dragging.\n- The geohash grid and city dots draw at every detail level instead of\n  vanishing while the globe moves.\n\nExtracts GeohashCoverage so the sheet and picker share the cell-size\nstring, and adds the picker strings in all locales.\n\n* Let the globe reach polar targets past the drag limit\n\nA polar cell's center can lie past the ±89° drag limit (zzzz is at\n89.91°). The animated intro clamped its latitude there and selected\nzzzf, while the Reduce Motion path kept zzzz. Animations now always\nreach their target; dragging keeps the limit on the far side and never\nsnaps a polar view back to it.",
+      "tree": {
+        "sha": "74f38d254ea1a6a87caec1016b29dc4ca296b5ff",
+        "url": "https://api.github.com/repos/permissionlesstech/bitchat/git/trees/74f38d254ea1a6a87caec1016b29dc4ca296b5ff"
+      },
+      "url": "https://api.github.com/repos/permissionlesstech/bitchat/git/commits/04995f68e470a18d1fc99f86fa326c2a87bab4f2",
+      "comment_count": 0,
+      "verification": {
+        "verified": true,
+        "reason": "valid",
+        "signature": "-----BEGIN PGP SIGNATURE-----\n\nwsFcBAABCAAQBQJq3VNkCRC1aQ7uu5UhlAAA/LkQAIzPqWqKIscL+Tt0cvEIlU8C\nmGBH7cETE09OthbNVg3NoeppqYhX8BhcKujcuOzVUMLG0RoKdqvYHpwTumjVmSM/\nSLxZaUM1d1XZHq4HmWR/Rw49hjdTPcAGM6Eac72efqsAJ7BX29QQwqoXuGICojkD\nWa8Z2r18F0XxI8RLWOsBEgLO6zLqDffQXnUOszitIj8+o22R8baBeozoxdDDWdGV\n/jC8ttCUIeZwnW1rxrQWKGyyvM+L2Yf40KSLjHTc9v9ECiJH4JBLCQGhkS/lxXHK\nxbIuWTyYV/5JCSty66doyoKPDcmWu46eKkUA8YUo9q6S6sCc14SHMVCS1/lDssVp\nar6M7wj88gDrgRifOnPDA48zPXv1QnhB+ePp1uhdfycHlgb+1/sf4KYhb+ohMmZ1\nugqJCMxKPdvhqKr8kxVBpVHCM8t9oKC7mpDYNiTj55gTyBhOFoO1hPTFoCC4XZrf\nBi9d8Z1Uwn1vMGUJoDlLuZqJIf+5DB+SuUt2NFJt7AbslH5ypoPjflac0iogA09u\nQpMMXavNYmRrZv97hReu3nrN5Xdt5dJMaW0nvIm9jKsmAH/k+SWFRDe+9HReTOlm\n2ysv3iCzKq4E5fbf/xQSXuktri7EAU6S/vmbwWpuBL7KWYFG2EaFtnHY69FSXMXf\naT1kpaAcef8vuWKPlxM0\n=Hpfc\n-----END PGP SIGNATURE-----\n",
+        "payload": "tree 74f38d254ea1a6a87caec1016b29dc4ca296b5ff\nparent 30c58eee349e172b37f69faa2113c9d5f2c76c23\nauthor callebtc <93376500+callebtc@users.noreply.github.com> 1792889700 +0200\ncommitter GitHub <noreply@github.com> 1792889700 +0200\n\nPort the Android globe geohash picker to iOS (#1807)\n\n* Port the Android globe geohash picker to iOS\n\nAdds the 3D globe picker from bitchat-android: a map button next to the\ngeohash field opens a full-screen orthographic globe (Natural Earth land,\nborders and cities, geohash grid, crosshair) with drag/fling, pinch, tap\nand double-tap, precision buttons and a fly-in to the current geohash.\nSelecting teleports like typing a geohash.\n\nBeyond a straight port:\n- Fix ocean painted as land: the point-in-ring test counted the\n  antimeridian seam as a crossing for Eurasia, flipping its fill over the\n  Pacific and Atlantic. Android has the same bug.\n- Motion detail only steps down within one gesture, so layers no longer\n  flash on and off while dragging.\n- The geohash grid and city dots draw at every detail level instead of\n  vanishing while the globe moves.\n\nExtracts GeohashCoverage so the sheet and picker share the cell-size\nstring, and adds the picker strings in all locales.\n\n* Let the globe reach polar targets past the drag limit\n\nA polar cell's center can lie past the ±89° drag limit (zzzz is at\n89.91°). The animated intro clamped its latitude there and selected\nzzzf, while the Reduce Motion path kept zzzz. Animations now always\nreach their target; dragging keeps the limit on the far side and never\nsnaps a polar view back to it.",
+        "verified_at": "2026-10-25T00:55:01Z"
+      }
+    },
+    "url": "https://api.github.com/repos/permissionlesstech/bitchat/commits/04995f68e470a18d1fc99f86fa326c2a87bab4f2",
+    "html_url": "https://github.com/permissionlesstech/bitchat/commit/04995f68e470a18d1fc99f86fa326c2a87bab4f2",
+    "comments_url": "https://api.github.com/repos/permissionlesstech/bitchat/commits/04995f68e470a18d1fc99f86fa326c2a87bab4f2/comments",
+    "author": {
+      "login": "callebtc",
+      "id": 93376500,
+      "node_id": "U_kgDOBZDP9A",
+      "avatar_url": "https://avatars.githubusercontent.com/u/93376500?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/callebtc",
+      "html_url": "https://github.com/callebtc",
+      "followers_url": "https://api.github.com/users/callebtc/followers",
+      "following_url": "https://api.github.com/users/callebtc/following{/other_user}",
+      "gists_url": "https://api.github.com/users/callebtc/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/callebtc/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/callebtc/subscriptions",
+      "organizations_url": "https://api.github.com/users/callebtc/orgs",
+      "repos_url": "https://api.github.com/users/callebtc/repos",
+      "events_url": "https://api.github.com/users/callebtc/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/callebtc/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "committer": {
+      "login": "web-flow",
+      "id": 19864447,
+      "node_id": "MDQ6VXNlcjE5ODY0NDQ3",
+      "avatar_url": "https://avatars.githubusercontent.com/u/19864447?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/web-flow",
+      "html_url": "https://github.com/web-flow",
+      "followers_url": "https://api.github.com/users/web-flow/followers",
+      "following_url": "https://api.github.com/users/web-flow/following{/other_user}",
+      "gists_url": "https://api.github.com/users/web-flow/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/web-flow/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/web-flow/subscriptions",
+      "organizations_url": "https://api.github.com/users/web-flow/orgs",
+      "repos_url": "https://api.github.com/users/web-flow/repos",
+      "events_url": "https://api.github.com/users/web-flow/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/web-flow/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "parents": [
+      {
+        "sha": "30c58eee349e172b37f69faa2113c9d5f2c76c23",
+        "url": "https://api.github.com/repos/permissionlesstech/bitchat/commits/30c58eee349e172b37f69faa2113c9d5f2c76c23",
+        "html_url": "https://github.com/permissionlesstech/bitchat/commit/30c58eee349e172b37f69faa2113c9d5f2c76c23"
+      }
+    ]
+  },
+  "_links": {
+    "self": "https://api.github.com/repos/permissionlesstech/bitchat/branches/main",
+    "html": "https://github.com/permissionlesstech/bitchat/tree/main"
+  },
+  "protected": false,
+  "protection": {
+    "enabled": false,
+    "required_status_checks": {
+      "enforcement_level": "off",
+      "contexts": [
+
+      ],
+      "checks": [
+
+      ]
+    }
+  },
+  "protection_url": "https://api.github.com/repos/permissionlesstech/bitchat/branches/main/protection"
+}
