@@ -33,8 +33,10 @@ export function ExhibitCard({
   );
   // The signed time comes from evidence anyone can make: an impossible one must not crash the page.
   const when = safeDate(facts.signedAt);
-  const row = (term: string, value: ReactNode) => (
-    <div className="exhibit-row">
+  // `size`: how much of the facts grid a row takes on a wide card (the address gets a whole line,
+  // the who and when half, the small technical facts a third). Narrow cards use two columns.
+  const row = (term: string, value: ReactNode, size: 'wide' | 'half' | 'third') => (
+    <div className={`exhibit-row exhibit-row-${size}`}>
       <dt>{term}</dt>
       <dd>{value}</dd>
     </div>
@@ -45,8 +47,8 @@ export function ExhibitCard({
         {unverified ? 'Unverified: what a witness you have not pinned says it saw' : 'What the witness saw'}
       </h2>
       <dl className="exhibit-list">
-        {row('Site', <span className="mono">{facts.serverName}</span>)}
-        {row('Address', <MonoValue value={facts.canonicalUrl} full />)}
+        {row('Address', <MonoValue value={facts.canonicalUrl} full />, 'wide')}
+        {row('Site', <span>{facts.serverName}</span>, 'half')}
         {row(
           'Captured',
           when ? (
@@ -56,18 +58,21 @@ export function ExhibitCard({
           ) : (
             <span>{INVALID_TIME}</span>
           ),
+          'half',
         )}
-        {row('Size', <span className="mono">{formatBytes(facts.body.length)}</span>)}
-        {row('HTTP status', <span className="mono">{facts.httpStatus}</span>)}
-        {row('Content type', facts.contentType ? <span className="mono">{facts.contentType}</span> : <span className="muted">Not stated</span>)}
         {row(
           'Witness',
           <span className="exhibit-witness">
             <span>{label ?? 'Unknown witness'}</span>
             <MonoValue value={facts.witness} />
           </span>,
+          // Without an Evidence fact beside it, the witness takes the whole line.
+          evidenceRef ? 'half' : 'wide',
         )}
-        {evidenceRef ? row('Evidence', <MonoValue value={evidenceRef} />) : null}
+        {evidenceRef ? row('Evidence', <MonoValue value={evidenceRef} />, 'half') : null}
+        {row('Size', <span className="tabular">{formatBytes(facts.body.length)}</span>, 'third')}
+        {row('HTTP status', <span className="tabular">{facts.httpStatus}</span>, 'third')}
+        {row('Content type', facts.contentType ? <span>{facts.contentType}</span> : <span className="muted">Not stated</span>, 'third')}
       </dl>
       <CheckItYourself links={links} />
     </section>

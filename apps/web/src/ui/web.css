@@ -494,6 +494,8 @@ h1[tabindex='-1']:focus-visible {
 /* Capture detail: exhibit card, verdict line, check extras, actions. */
 /* The capture's facts: a plain card (orange is only for things you can press). */
 .exhibit {
+  /* The facts grid follows the card's own width (a side column, a phone), not the window's. */
+  container-type: inline-size;
   max-width: var(--measure);
   padding: var(--space-4);
   background: var(--surface);
@@ -501,36 +503,70 @@ h1[tabindex='-1']:focus-visible {
   border-radius: var(--radius-2);
 }
 
+/* Every card on the record pages titles itself the same way (facts, snapshot, checks, preview). */
 .exhibit-title {
   margin: 0 0 var(--space-4);
   font-family: var(--font-display);
-  font-size: var(--text-xl);
-  line-height: var(--lh-xl);
+  font-size: var(--text-lg);
+  line-height: var(--lh-lg);
   font-weight: 800;
 }
 
+/* Facts as a calm grid, each label above its value. Narrow card (a phone): two columns, the
+   address, who and when on their own line, the small technical facts side by side. */
 .exhibit-list {
   display: grid;
-  gap: var(--space-2);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3) var(--space-4);
   margin: 0;
 }
 
 .exhibit-row {
   display: grid;
-  grid-template-columns: 8.5rem minmax(0, 1fr);
-  gap: var(--space-3);
-  align-items: baseline;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
   font-size: var(--text-sm);
   line-height: var(--lh-sm);
+}
+
+.exhibit-row-half,
+.exhibit-row-wide,
+.exhibit-row-third:last-child {
+  grid-column: 1 / -1;
+}
+
+/* A Copy button keeps its 44 px hit area without making its row taller than the others. */
+.exhibit-row dd .icon-btn {
+  margin-block: calc(-1 * var(--space-2) - 2px);
 }
 
 .exhibit-row dt {
   font-size: var(--text-xs);
   line-height: var(--lh-xs);
   font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
   color: var(--text-muted);
+}
+
+/* Wide card: a calm grid of labelled facts, the label above its value. The address takes a whole
+   line, who and when take half, the small technical facts a third. */
+@container (min-width: 34rem) {
+  .exhibit-list {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: var(--space-4) var(--space-5);
+  }
+
+  .exhibit-row,
+  .exhibit-row-third:last-child {
+    grid-column: span 2;
+  }
+
+  .exhibit-row-half {
+    grid-column: span 3;
+  }
+
+  .exhibit-row-wide {
+    grid-column: 1 / -1;
+  }
 }
 
 .exhibit-row dd {
@@ -603,8 +639,27 @@ h1[tabindex='-1']:focus-visible {
 }
 
 .why-witness > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 44px;
+  list-style: none;
   cursor: pointer;
+  font-weight: 600;
   color: var(--accent-text);
+}
+
+.why-witness > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* The same turning chevron as "Show details". */
+.why-witness > summary svg {
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.why-witness[open] > summary svg {
+  transform: rotate(180deg);
 }
 
 .why-witness > p {
@@ -660,11 +715,6 @@ h1[tabindex='-1']:focus-visible {
 }
 
 @media (max-width: 599px) {
-  .exhibit-row {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 0;
-  }
-
   .btn-wide {
     width: 100%;
     min-width: 0;
@@ -982,24 +1032,36 @@ a.btn-secondary:hover {
 }
 
 /* Preview: the captured bytes in a sandboxed frame. */
+/* The same card as the facts and the checks; the frame sits inside it. */
 .preview {
   display: grid;
   gap: var(--space-2);
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+}
+
+.preview .section-title {
+  font-size: var(--text-lg);
+  line-height: var(--lh-lg);
 }
 
 .preview-caption {
+  margin-top: calc(-1 * var(--space-1));
   font-size: var(--text-sm);
   line-height: var(--lh-sm);
 }
 
 .preview-frame {
   width: 100%;
-  height: 24rem;
+  height: 22rem;
+  margin-top: var(--space-2);
   /* Pages assume a light canvas: keep it light in the dark theme too. */
   color-scheme: light;
   background: Canvas;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-1);
   resize: vertical;
 }
 
@@ -1126,4 +1188,194 @@ a.btn-secondary:hover {
 .inline-ok:has(svg.lucide-triangle-alert),
 .inline-ok:has(svg.lucide-alert-triangle) {
   color: var(--warn);
+}
+
+/* Record pages (a capture #/c, its timeline #/u, a dropped evidence file #/file).
+   Desktop (user feedback, 7 Nov: no long narrow column beside an empty right side): the record
+   fills the left column and a side panel stays in view on the right, as on the publish page.
+   Phones: one column; `display: contents` lets the panel's parts join the page flow, the actions
+   after the checks and before the preview. */
+.record {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.record-main,
+.record-side {
+  display: contents;
+}
+
+.record > *,
+.record-main > *,
+.record-side > * {
+  min-width: 0;
+  margin: 0;
+}
+
+.record > h1,
+.record > .capture-subtitle,
+.record > .tl-address {
+  order: -2;
+}
+
+.record > .capture-subtitle,
+.record > .tl-address {
+  margin-top: calc(-1 * var(--space-2));
+}
+
+.record-main > .preview {
+  order: 1;
+}
+
+/* The timeline's summary and a dropped file's name belong under the title on a phone. */
+.record-timeline .record-panel,
+.record-file .record-panel {
+  order: -1;
+}
+
+/* The record's blocks use the whole column: no narrow caps (paragraphs keep their own measure). */
+.record .exhibit,
+.record .verdict,
+.record .checks-panel,
+.record .notice,
+.record .timeline,
+.record .tl-loading,
+.record .tl-address,
+.record .diff-text,
+.record .repo-snapshot-note,
+.record .ka-hint,
+.record .why-witness {
+  max-width: none;
+}
+
+.record .repo-snapshot {
+  margin-top: 0;
+}
+
+/* A side card: the same surface, hairline and corner as every other card. */
+.record-panel {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+}
+
+.record-panel > * {
+  margin: 0;
+}
+
+.record-panel .check-yourself {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+/* In its own side card the label is the card's title, set like every other card title. */
+.record-panel .check-yourself-label {
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  line-height: var(--lh-lg);
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text);
+}
+
+/* The panel's actions stack, full width, the primary on top: big, easy targets on every screen. */
+.record-side .page-actions {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.record-side .page-actions .btn {
+  width: 100%;
+}
+
+.record-side .outside-links {
+  flex-direction: column;
+}
+
+/* A notice inside a side card is a line of that card, not a second card. */
+.record-panel .notice {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.record-timeline .timeline {
+  margin-top: var(--space-3);
+}
+
+.record-side .why-witness {
+  padding: 0 var(--space-4);
+}
+
+/* Nothing open yet: one calm card with the way forward. */
+.record-empty {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+  max-width: var(--measure);
+  padding: var(--space-5);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  color: var(--text-muted);
+}
+
+.record-empty > svg {
+  flex: none;
+}
+
+.record-empty .lede {
+  margin: 0;
+}
+
+@media (min-width: 1024px) {
+  .record {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(18rem, 21rem);
+    gap: var(--space-5) var(--space-6);
+    align-items: start;
+  }
+
+  .record > h1,
+  .record > .capture-subtitle,
+  .record > .tl-address {
+    grid-column: 1 / -1;
+  }
+
+  .record > .capture-subtitle,
+  .record > .tl-address {
+    margin-top: calc(-1 * var(--space-3));
+  }
+
+  .record-main {
+    display: grid;
+    gap: var(--space-4);
+    grid-column: 1;
+  }
+
+  .record-side {
+    display: grid;
+    gap: var(--space-4);
+    grid-column: 2;
+  }
+
+  .record-timeline .record-panel,
+  .record-file .record-panel {
+    order: 0;
+  }
+}
+
+/* Tall enough windows keep the panel in view while the record scrolls. */
+@media (min-width: 1024px) and (min-height: 640px) {
+  .record-side {
+    position: sticky;
+    top: calc(var(--header-h, 64px) + var(--space-5));
+  }
 }

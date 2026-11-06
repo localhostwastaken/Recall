@@ -1,13 +1,16 @@
 import { Copy, Download, History } from 'lucide-react';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { Hex } from 'viem';
 import { repoOf } from '../attachments/git';
 import { useRepoSnapshot } from '../attachments/useRepoSnapshot';
 import { ExhibitCard } from '../components/ExhibitCard';
+import { CheckItYourself } from '../components/OutsideLinks';
 import { KeepAlive } from '../components/KeepAlive';
 import { Preview } from '../components/Preview';
 import { RepoSnapshot } from '../components/RepoSnapshot';
 import { evidenceFileName, saveBytes } from '../download';
+import { recordLinks } from '../explorers';
+import { getNetConfig } from '../net';
 import { Notice } from '../ui/Notice';
 import { useToast } from '../ui/Toast';
 import { captureTitle } from '../verify/captureTitle';
@@ -40,6 +43,14 @@ export function Capture({ entityKey }: { entityKey: Hex }) {
   const verified = v.facts && isVerifiedReport(v.report) && !v.report.mismatch?.length ? v.facts : null;
   const snapshots = useRepoSnapshot(v.record?.entityKey ?? null, verified, v.record?.creator ?? null);
   const branch = repoOf(v.facts);
+  // "Check it yourself": the same record (and its evidence file and publisher) in the outside tools.
+  const recordKey = v.record?.entityKey;
+  const recordOwner = v.record?.creator;
+  const evidenceRef = v.record?.evidenceRef;
+  const links = useMemo(
+    () => (recordKey ? recordLinks(getNetConfig(), { entityKey: recordKey, evidenceRef, owner: recordOwner }) : []),
+    [recordKey, recordOwner, evidenceRef],
+  );
 
   const onFile = async (f: File) => {
     try {
@@ -120,7 +131,7 @@ export function Capture({ entityKey }: { entityKey: Hex }) {
   }
 
   return (
-    <>
+    <div className="record">
       {branch && v.report?.C.status === 'pass' ? (
         <>
           <h1 tabIndex={-1}>
@@ -131,76 +142,84 @@ export function Capture({ entityKey }: { entityKey: Hex }) {
       ) : (
         <h1 tabIndex={-1}>{captureTitle(v.facts, v.report?.C.status)}</h1>
       )}
-      {v.phase === 'loading' ? (
-        <p className="muted" role="status">
-          Loading the record from Arkiv…
-        </p>
-      ) : null}
-      <VerdictLine verdict={verdict} />
-      {v.report?.mismatch?.length ? (
-        <Notice kind="error" title="Record does not match its evidence">
-          The Arkiv record and the evidence it points to disagree about the {v.report.mismatch.join(', ')}. The
-          evidence may belong to a different capture, so none of its details are shown here as this record's.
-        </Notice>
-      ) : null}
-      {v.facts ? (
-        <ExhibitCard
-          facts={v.facts}
-          evidenceRef={v.record?.evidenceRef}
-          unverified={v.report?.C.status !== 'pass'}
-          {...(v.record ? { record: { entityKey: v.record.entityKey, owner: v.record.creator } } : {})}
+      {/* The record: the verdict, what the witness saw, the checks, the preview. Desktop keeps the
+          actions in a side panel beside it; phones show the panel after the checks. */}
+      <div className="record-main">
+        {v.phase === 'loading' ? (
+          <p className="muted" role="status">
+            Loading the record from Arkiv…
+          </p>
+        ) : null}
+        <VerdictLine verdict={verdict} />
+        {v.report?.mismatch?.length ? (
+          <Notice kind="error" title="Record does not match its evidence">
+            The Arkiv record and the evidence it points to disagree about the {v.report.mismatch.join(', ')}. The
+            evidence may belong to a different capture, so none of its details are shown here as this record's.
+          </Notice>
+        ) : null}
+        {v.facts ? (
+          <ExhibitCard facts={v.facts} evidenceRef={v.record?.evidenceRef} unverified={v.report?.C.status !== 'pass'} />
+        ) : null}
+        <RepoSnapshot snapshots={snapshots} />
+        <CheckPanel
+          report={v.report}
+          storage={v.storage}
+          batchId={v.record?.batchId}
+          file={file}
+          fileError={fileError}
+          onFile={onFile}
+          onRemoveFile={() => {
+            setFile(null);
+            setFileError(undefined);
+          }}
         />
-      ) : null}
-      <RepoSnapshot snapshots={snapshots} />
-      <CheckPanel
-        report={v.report}
-        storage={v.storage}
-        batchId={v.record?.batchId}
-        file={file}
-        fileError={fileError}
-        onFile={onFile}
-        onRemoveFile={() => {
-          setFile(null);
-          setFileError(undefined);
-        }}
-      />
-      <WhyWitness />
-      {v.facts ? (
-        <Preview
-          facts={v.facts}
-          fallback={
+        {v.facts ? (
+          <Preview
+            facts={v.facts}
+            fallback={
+              <button type="button" className="btn btn-secondary" disabled={!v.evidenceBytes} onClick={() => downloadEvidence(v)}>
+                <Download size={16} strokeWidth={1.75} aria-hidden="true" />
+                Download evidence file
+              </button>
+            }
+          />
+        ) : null}
+      </div>
+      <aside className="record-side" aria-label="Capture actions">
+        <div className="record-panel">
+          <div className="page-actions">
+            {v.facts ? (
+              <a className="btn btn-primary" href={`#/u/${v.facts.urlHash}`}>
+                <History size={16} strokeWidth={1.75} aria-hidden="true" />
+                View timeline
+              </a>
+            ) : null}
             <button type="button" className="btn btn-secondary" disabled={!v.evidenceBytes} onClick={() => downloadEvidence(v)}>
               <Download size={16} strokeWidth={1.75} aria-hidden="true" />
               Download evidence file
             </button>
-          }
-        />
-      ) : null}
-      <div className="page-actions">
-        {v.facts ? (
-          <a className="btn btn-primary" href={`#/u/${v.facts.urlHash}`}>
-            <History size={16} strokeWidth={1.75} aria-hidden="true" />
-            View timeline
-          </a>
+            {v.record && isVerifiedReport(v.report) ? (
+              <KeepAlive
+                target={{ entityKeys: [v.record.entityKey], batchId: v.record.batchId }}
+                onChanged={v.refreshStorage}
+              />
+            ) : null}
+            <button type="button" className="btn btn-ghost" onClick={copyLink}>
+              <Copy size={16} strokeWidth={1.75} aria-hidden="true" />
+              Copy link
+            </button>
+          </div>
+          {v.report && !isVerifiedReport(v.report) ? (
+            <p className="ka-hint">Keep-alive is offered only for captures whose checks A to C passed.</p>
+          ) : null}
+        </div>
+        {links.length > 0 ? (
+          <div className="record-panel">
+            <CheckItYourself links={links} />
+          </div>
         ) : null}
-        <button type="button" className="btn btn-secondary" disabled={!v.evidenceBytes} onClick={() => downloadEvidence(v)}>
-          <Download size={16} strokeWidth={1.75} aria-hidden="true" />
-          Download evidence file
-        </button>
-        {v.record && isVerifiedReport(v.report) ? (
-          <KeepAlive
-            target={{ entityKeys: [v.record.entityKey], batchId: v.record.batchId }}
-            onChanged={v.refreshStorage}
-          />
-        ) : null}
-        <button type="button" className="btn btn-ghost" onClick={copyLink}>
-          <Copy size={16} strokeWidth={1.75} aria-hidden="true" />
-          Copy link
-        </button>
-      </div>
-      {v.report && !isVerifiedReport(v.report) ? (
-        <p className="ka-hint">Keep-alive is offered only for captures whose checks A to C passed.</p>
-      ) : null}
-    </>
+        <WhyWitness />
+      </aside>
+    </div>
   );
 }
