@@ -49,7 +49,11 @@ export function SiteHeader({ route }: { route: Route }) {
   const header = useRef<HTMLElement>(null);
   const menuButton = useRef<HTMLButtonElement>(null);
   const panelId = useId();
-  const close = () => setOpen(false);
+  // Closing from a link keeps focus in the header (the focused link unmounts with the panel).
+  const close = () => {
+    setOpen(false);
+    menuButton.current?.focus();
+  };
 
   // A new page always starts with the menu closed.
   const page = routeId(route);

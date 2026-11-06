@@ -6,9 +6,9 @@ const REPO = 'https://github.com/localhostwastaken/Recall';
 /** For judges: where to look, one click each. All open in a new tab. */
 const JUDGE_LINKS: { label: string; href: string }[] = [
   { label: 'GitHub repo', href: REPO },
-  { label: 'Demo video', href: `${REPO}#demo-video` },
+  { label: 'Demo video', href: `${REPO}#demo` },
   { label: 'Arkiv notes', href: `${REPO}/tree/main/arkiv` },
-  { label: 'Run one query yourself', href: `${REPO}#run-one-query` },
+  { label: 'Run one query yourself', href: `${REPO}#writer-wallets` },
 ];
 
 /** The site footer, on every route: the standing note, the judges' links and the advanced settings. */
