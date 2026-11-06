@@ -192,15 +192,17 @@ test('@p2 storage never buys a batch twice when the result of a sent purchase co
   });
   // ...and so do the page's own reads from the Gnosis RPC, until the test lets them through.
   let failPageReceipts = true;
+  let failBalance = false;
   let failedReads = 0;
+  const BALANCE_OF = '0x70a08231';
   const rpcOrigin = new URL(LOCAL.gnosis.rpcUrl).origin;
   await page.route(
     (u) => u.origin === rpcOrigin,
     async (route) => {
       const body = route.request().postData() ?? '';
-      if (!failPageReceipts || route.request().method() !== 'POST' || !body.includes('eth_getTransactionReceipt')) {
-        return route.continue();
-      }
+      const receipt = failPageReceipts && body.includes('eth_getTransactionReceipt');
+      const balance = failBalance && body.includes('"eth_call"') && body.includes(BALANCE_OF);
+      if (route.request().method() !== 'POST' || !(receipt || balance)) return route.continue();
       const { id } = JSON.parse(body) as { id: number };
       failedReads++;
       await route.fulfill({
@@ -226,15 +228,22 @@ test('@p2 storage never buys a batch twice when the result of a sent purchase co
   await expect(page.getByRole('button', { name: 'Buy 1 batch' })).toBeDisabled();
   await expect.poll(sentNonce).toBe(n0 + 2); // approve + createBatch
 
-  // Still unreadable: checking again says so again, and sends nothing.
+  // Still unreadable, and this time MetaMask rejects and the xBZZ balance read fails too: checking
+  // again needs neither, keeps the slot and its transaction, says so again and sends nothing.
+  failBalance = true;
+  await page.evaluate(() => ((window as unknown as { __rejectNext: unknown }).__rejectNext = true));
   const reads = failedReads;
   await page.getByRole('button', { name: 'Check again' }).click();
   await expect.poll(() => failedReads, { timeout: 60_000 }).toBeGreaterThan(reads);
   await expect(unknown).toBeVisible({ timeout: 90_000 });
   await expect(page.getByRole('button', { name: 'Check again' })).toBeEnabled({ timeout: 90_000 });
+  await expect(page.getByText(/Nothing (more )?was charged/)).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Not bought' })).toHaveCount(0);
+  await expect(page.locator('li').filter({ hasText: 'Batch 1' })).toContainText('Not confirmed');
   expect(await sentNonce()).toBe(n0 + 2);
 
-  // Readable again: the same purchase is found, not repeated.
+  // Readable again (the balance read still fails, MetaMask still rejects): the same purchase is
+  // found, not repeated.
   failPageReceipts = false;
   await page.evaluate(() => delete (window as unknown as { __failReceiptsAfter?: number }).__failReceiptsAfter);
   await page.getByRole('button', { name: 'Check again' }).click();
@@ -317,22 +326,26 @@ async function stubExtension(page: Parameters<typeof installMockWallet>[0], stam
 test('@p2 storage asks before using an extension that only the link names', async ({ page }) => {
   const mine = privateKeyToAddress(generatePrivateKey());
   const theirs = privateKeyToAddress(generatePrivateKey());
+  const later = privateKeyToAddress(generatePrivateKey());
   const MINE = 'a'.repeat(32);
   const THEIRS = 'b'.repeat(32);
-  // Settings name extension a…a; another installed extension b…b answers with its own stamp key.
+  // Settings name extension a…a; another installed extension b…b answers with its own stamp key,
+  // and with another one once `__switchStamp` is set.
   await page.addInitScript(
-    ({ mine, theirs, MINE }) => {
+    ({ mine, theirs, later, MINE }) => {
       localStorage.setItem('recall.web.settings.v1', JSON.stringify({ extensionId: MINE, theme: 'system' }));
+      const w = window as unknown as { __switchStamp?: boolean };
+      const stamp = (extId: string) => (extId === MINE ? mine : w.__switchStamp ? later : theirs);
       (window as unknown as { chrome: unknown }).chrome = {
         runtime: {
           lastError: undefined,
           sendMessage(extId: string, msg: { type: string }, cb: (r: unknown) => void) {
-            setTimeout(() => cb(msg.type === 'recall.getStampAddress' ? { address: extId === MINE ? mine : theirs } : { error: 'no' }), 0);
+            setTimeout(() => cb(msg.type === 'recall.getStampAddress' ? { address: stamp(extId) } : { error: 'no' }), 0);
           },
         },
       };
     },
-    { mine, theirs, MINE },
+    { mine, theirs, later, MINE },
   );
   await wallet(page, 100);
   const buy = page.getByRole('button', { name: /^Buy / });
@@ -352,10 +365,13 @@ test('@p2 storage asks before using an extension that only the link names', asyn
   await expect(buy).toBeEnabled();
   expect(JSON.parse((await page.evaluate(() => localStorage.getItem('recall.web.settings.v1')))!)).toMatchObject({ extensionId: MINE });
 
-  // Use this extension: it becomes the owner and is saved to Settings.
+  // Use this extension: the address it showed becomes the owner (not a second, different answer),
+  // and the extension is saved to Settings.
   await page.goto(`${APP}/#/storage?ext=${THEIRS}`);
   await page.reload(); // the init script resets Settings to a…a first
   await expect(buy).toBeDisabled();
+  await expect(page.locator('.ext-choice .mono-value')).toHaveAttribute('title', theirs);
+  await page.evaluate(() => ((window as unknown as { __switchStamp: boolean }).__switchStamp = true));
   await page.getByRole('button', { name: 'Use this extension' }).click();
   await expect(page.locator('.owner-row .mono-value')).toHaveAttribute('title', theirs);
   await expect(buy).toBeEnabled();

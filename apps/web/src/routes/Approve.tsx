@@ -622,7 +622,11 @@ export function Approve({ captureId }: { captureId: string | null }) {
   return (
     <div className="approve" data-kind={pending.kind}>
       <h1 tabIndex={-1}>{title}</h1>
-      <ExhibitCard facts={facts} {...(pending.evidenceRef ? { evidenceRef: pending.evidenceRef } : {})} />
+      <ExhibitCard
+        facts={facts}
+        unverified={report.C.status !== 'pass'}
+        {...(pending.evidenceRef ? { evidenceRef: pending.evidenceRef } : {})}
+      />
 
       <section className="approve-proves" aria-labelledby="proves-title">
         <h2 id="proves-title" className="section-title">

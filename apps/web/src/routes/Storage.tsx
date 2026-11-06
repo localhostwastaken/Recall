@@ -25,7 +25,7 @@ const SETTLE_TIMEOUT_MS = 30_000;
 type SlotState = 'waiting' | 'checking' | 'buying' | 'bought' | 'ready' | 'unknown' | 'cancelled' | 'failed';
 /** `txHash`: the slot's createBatch transaction once it was sent, kept until its outcome is known. */
 type Slot = { state: SlotState; batchId?: Hex; ttl?: bigint | null; txHash?: Hex };
-type Phase = 'idle' | 'connecting' | 'buying' | 'waiting';
+type Phase = 'idle' | 'checking' | 'connecting' | 'buying' | 'waiting';
 type Outcome =
   | { kind: 'success'; count: number; owner: Address }
   | { kind: 'unconfirmed'; count: number }
@@ -45,7 +45,10 @@ type ExtLink = { kind: 'checking' } | { kind: 'connected'; address: Address } | 
  * the batches, so an extension named only by the link (`?ext=`) that is neither the one in
  * Settings nor the build default is used only after the person says so (`ask`).
  */
-type ExtChoice = { kind: 'settled'; extensionId?: string } | { kind: 'ask'; linkId: string; settingsId?: string };
+type ExtChoice =
+  /** `address`: the stamp address the person confirmed; it is used as is, not asked for again. */
+  | { kind: 'settled'; extensionId?: string; address?: Address }
+  | { kind: 'ask'; linkId: string; settingsId?: string };
 type LinkOwner = { kind: 'checking' } | { kind: 'ok'; address: Address } | { kind: 'error' };
 
 function initialExtChoice(): ExtChoice {
@@ -70,34 +73,46 @@ const SLOT_VIEW: Record<SlotState, { status: Status; label: string }> = {
 const plural = (n: number) => `${n} ${n === 1 ? 'batch' : 'batches'}`;
 
 /**
- * The createBatch hash of slot `i`, kept in this tab's sessionStorage until its outcome is known,
- * so a retry (even after a reload) looks the purchase up instead of paying for it again. Not on a
- * shared /bzz/ origin (R38), where another site could plant one: there it lives on the slot only.
+ * The createBatch hash of slot `i`, kept until its outcome is known, so a retry looks the purchase
+ * up instead of paying for it again: in memory for as long as the app is open, and in this tab's
+ * sessionStorage so it survives a reload. Not in sessionStorage on a shared /bzz/ origin (R38),
+ * where another site could plant one, nor when the browser blocks it: there memory alone keeps it.
  */
 const sentKey = (i: number) => `recall.storage.sentTx.v1.${i}`;
+const sentInMemory = new Map<number, Hex>();
 function rememberSent(i: number, txHash: Hex): void {
+  sentInMemory.set(i, txHash);
   if (isSharedOrigin()) return;
   try {
     window.sessionStorage.setItem(sentKey(i), txHash);
   } catch {
-    /* storage blocked: the hash stays on the slot */
+    /* storage blocked: memory keeps it */
   }
 }
 function recallSent(i: number): Hex | undefined {
-  if (isSharedOrigin()) return undefined;
-  try {
-    const v = window.sessionStorage.getItem(sentKey(i));
-    return v && /^0x[0-9a-fA-F]{64}$/.test(v) ? (v as Hex) : undefined;
-  } catch {
-    return undefined;
+  if (!isSharedOrigin()) {
+    try {
+      const v = window.sessionStorage.getItem(sentKey(i));
+      if (v && /^0x[0-9a-fA-F]{64}$/.test(v)) return v as Hex;
+    } catch {
+      /* storage blocked: memory keeps it */
+    }
   }
+  return sentInMemory.get(i);
 }
 function forgetSent(i: number): void {
+  sentInMemory.delete(i);
   try {
     window.sessionStorage.removeItem(sentKey(i));
   } catch {
     /* nothing stored */
   }
+}
+
+/** "the batch price rose to <n> (16 decimals) from the quoted <m>": buyBatch's price ceiling. */
+function priceRose(err: unknown): { total: bigint; quoted: bigint } | null {
+  const m = /price rose to (\d+) \(16 decimals\) from the quoted (\d+)/.exec(err instanceof Error ? err.message : '');
+  return m ? { total: BigInt(m[1]!), quoted: BigInt(m[2]!) } : null;
 }
 const reason = (e: unknown) => (e as { shortMessage?: string }).shortMessage ?? (e instanceof Error ? e.message : String(e));
 
@@ -129,14 +144,20 @@ export function Storage() {
       live = false;
     };
   }, [askId]);
-  const adoptLinkExtension = (linkId: string) => {
+  const adoptLinkExtension = (linkId: string, address: Address) => {
     // Saved to Settings, except on a shared /bzz/ origin (R38), where it holds for this page only.
     saveSettingsChecked({ extensionId: linkId });
-    setExtChoice({ kind: 'settled', extensionId: linkId });
+    // The owner is the address the person was shown, not a second answer from the extension.
+    setExtChoice({ kind: 'settled', extensionId: linkId, address });
   };
+  const confirmedAddress = extChoice.kind === 'settled' ? extChoice.address : undefined;
   useEffect(() => {
     if (!extensionId) {
       setExtLink({ kind: 'absent' });
+      return;
+    }
+    if (confirmedAddress) {
+      setExtLink({ kind: 'connected', address: confirmedAddress });
       return;
     }
     setExtLink({ kind: 'checking' });
@@ -148,7 +169,7 @@ export function Storage() {
     return () => {
       live = false;
     };
-  }, [extensionId]);
+  }, [extensionId, confirmedAddress]);
   const [ownerText, setOwnerText] = useState('');
   const [ownerTouched, setOwnerTouched] = useState(false);
   const typedOwner = isAddress(ownerText.trim()) ? (ownerText.trim() as Address) : null;
@@ -225,88 +246,110 @@ export function Storage() {
     setExtWarning(null);
     setHandedOver(false);
 
-    // 1. Wallet on Gnosis with enough xBZZ.
-    setPhase('connecting');
-    let wallet: ReturnType<typeof walletFor>;
-    try {
-      const { address } = await connectWallet();
-      await ensureChain(100);
-      wallet = walletFor(address, 100);
-      const toBuy = plan.filter((s, i) => !s.batchId && !sentBefore(i)).length;
-      const need = BigInt(toBuy) * (await costFor(pub, DEPTH, days));
-      const have = await pub.readContract({ address: XBZZ, abi: erc20Abi, functionName: 'balanceOf', args: [address] });
-      if (have < need) {
-        show({ kind: 'short', need });
-        if (boughtCount() === 0) setSlots([]);
-        return setPhase('idle');
-      }
-    } catch (err) {
-      if (err instanceof WalletError && err.kind === 'no-wallet') show({ kind: 'no-wallet' });
-      else if (isUserRejection(err)) show({ kind: 'cancelled', bought: boughtCount(), target, stage: 'wallet' });
-      else show({ kind: 'failed', bought: boughtCount(), target, message: reason(err) });
-      // Nothing was bought, so there is no batch list to show.
-      if (boughtCount() === 0) setSlots([]);
-      return setPhase('idle');
-    }
-
-    // 2. One batch after another, so each MetaMask step is clear.
-    setPhase('buying');
     let stopped: Outcome | null = null;
     const notKnown = (i: number, txHash: Hex) => {
       plan[i] = { state: 'unknown', txHash };
       stopped = { kind: 'unknown', slot: i + 1, txHash };
       show(stopped);
     };
-    for (let i = 0; i < plan.length && !stopped; i++) {
-      if (plan[i].batchId) continue;
-      // Sent before, result not read: look it up. Only a purchase that bought nothing is repeated.
-      const earlier = sentBefore(i);
-      if (earlier) {
+    /** Slots that hold a batch or a sent purchase are never dropped from the list. */
+    const keepsSomething = () => plan.some((s) => s.batchId || s.txHash);
+
+    // 1. Purchases sent before whose result was not read: look them up first, with no wallet step,
+    //    so a failing wallet or price read can never hide one. Only one that bought nothing is
+    //    bought again; one that is still unknown stops the run.
+    if (plan.some((s, i) => !s.batchId && sentBefore(i))) {
+      setPhase('checking');
+      for (let i = 0; i < plan.length && !stopped; i++) {
+        const earlier = plan[i].batchId ? undefined : sentBefore(i);
+        if (!earlier) continue;
         plan[i] = { state: 'checking', txHash: earlier };
         commit();
         const found = await settle(i, earlier);
-        if (found.kind !== 'none') {
-          if (found.kind === 'bought') plan[i] = found.slot;
-          else notKnown(i, earlier);
-          commit();
-          continue;
-        }
+        if (found.kind === 'bought') plan[i] = found.slot;
+        else if (found.kind === 'unknown') notKnown(i, earlier);
+        else plan[i] = { state: 'waiting' }; // it bought nothing: bought below like any other
+        commit();
       }
-      plan[i] = { state: 'buying' };
-      commit();
+    }
+    const toBuy = plan.filter((s) => !s.batchId).length;
+
+    // 2. Wallet on Gnosis with enough xBZZ, only when something is left to buy.
+    let wallet: ReturnType<typeof walletFor> | null = null;
+    if (!stopped && toBuy > 0) {
+      setPhase('connecting');
       try {
-        const { batchId } = await buyBatch(wallet, {
-          owner,
-          depth: DEPTH,
-          days,
-          quotedTotal, // the price may move up 10% at most between the quote and the purchase
-          onSent: (txHash) => {
-            plan[i] = { state: 'buying', txHash };
-            rememberSent(i, txHash);
-            commit();
-          },
-        });
-        forgetSent(i);
-        const ttl = await batchTtlSeconds(pub, batchId).catch(() => null);
-        plan[i] = { state: 'bought', batchId, ttl };
+        const { address } = await connectWallet();
+        await ensureChain(100);
+        const need = BigInt(toBuy) * (await costFor(pub, DEPTH, days));
+        const have = await pub.readContract({ address: XBZZ, abi: erc20Abi, functionName: 'balanceOf', args: [address] });
+        if (have < need) stopped = { kind: 'short', need };
+        else wallet = walletFor(address, 100);
       } catch (err) {
-        const sent = plan[i].txHash;
-        const found = sent ? await settle(i, sent) : null;
-        if (sent && found?.kind === 'bought') {
-          plan[i] = found.slot; // only reading the result failed
-        } else if (sent && found?.kind === 'unknown') {
-          notKnown(i, sent);
-        } else {
-          const cancelled = !sent && isUserRejection(err);
-          plan[i] = { state: cancelled ? 'cancelled' : 'failed' };
-          stopped = cancelled
-            ? { kind: 'cancelled', bought: boughtCount(), target, stage: 'purchase' }
-            : { kind: 'failed', bought: boughtCount(), target, message: reason(err) };
-          // Say so right away; the usability polling below can take minutes.
-          show(stopped);
+        if (err instanceof WalletError && err.kind === 'no-wallet') stopped = { kind: 'no-wallet' };
+        else if (isUserRejection(err)) stopped = { kind: 'cancelled', bought: boughtCount(), target, stage: 'wallet' };
+        else stopped = { kind: 'failed', bought: boughtCount(), target, message: reason(err) };
+      }
+      if (stopped) {
+        show(stopped);
+        // Nothing bought and nothing sent: there is no batch list to show.
+        if (!keepsSomething()) {
+          setSlots([]);
+          return setPhase('idle');
         }
       }
-      commit();
+    }
+
+    // 3. One batch after another, so each MetaMask step is clear.
+    if (wallet && !stopped) {
+      setPhase('buying');
+      for (let i = 0; i < plan.length && !stopped; i++) {
+        if (plan[i].batchId) continue;
+        plan[i] = { state: 'buying' };
+        commit();
+        try {
+          const { batchId } = await buyBatch(wallet, {
+            owner,
+            depth: DEPTH,
+            days,
+            quotedTotal, // the price may move up 10% at most between the quote and the purchase
+            onSent: (txHash) => {
+              plan[i] = { state: 'buying', txHash };
+              rememberSent(i, txHash);
+              commit();
+            },
+          });
+          forgetSent(i);
+          const ttl = await batchTtlSeconds(pub, batchId).catch(() => null);
+          plan[i] = { state: 'bought', batchId, ttl };
+        } catch (err) {
+          const sent = plan[i].txHash;
+          const found = sent ? await settle(i, sent) : null;
+          if (sent && found?.kind === 'bought') {
+            plan[i] = found.slot; // only reading the result failed
+          } else if (sent && found?.kind === 'unknown') {
+            notKnown(i, sent);
+          } else {
+            const cancelled = !sent && isUserRejection(err);
+            const rose = sent ? null : priceRose(err);
+            if (rose) setPriceTry((n) => n + 1); // show the new price before another try
+            plan[i] = { state: cancelled ? 'cancelled' : 'failed' };
+            stopped = cancelled
+              ? { kind: 'cancelled', bought: boughtCount(), target, stage: 'purchase' }
+              : {
+                  kind: 'failed',
+                  bought: boughtCount(),
+                  target,
+                  message: rose
+                    ? `The price rose to ${formatBzzCeil(rose.total)} xBZZ per batch from the ${formatBzzCeil(rose.quoted)} xBZZ shown, so nothing was sent. Check the new price`
+                    : reason(err),
+                };
+            // Say so right away; the usability polling below can take minutes.
+            show(stopped);
+          }
+        }
+        commit();
+      }
     }
 
     // 3. Bee accepts stamps only a little after creation. "Ready" needs that live confirmation.
@@ -352,6 +395,7 @@ export function Storage() {
   const buyingIndex = slots.findIndex((s) => s.state === 'buying') + 1;
   const label = {
     idle: `Buy ${countValid ? plural(count) : 'batches'}`,
+    checking: 'Checking the earlier purchase…',
     connecting: 'Waiting for MetaMask…',
     buying: `Buying batch ${buyingIndex || bought + 1} of ${slots.length}…`,
     waiting: 'Waiting for storage…',
@@ -372,7 +416,9 @@ export function Storage() {
   const remaining = outcome && (outcome.kind === 'cancelled' || outcome.kind === 'failed') ? outcome.target - outcome.bought : 0;
 
   const progressText =
-    phase === 'connecting'
+    phase === 'checking'
+      ? 'Looking up a purchase that was already sent, so it is not paid for twice.'
+      : phase === 'connecting'
       ? 'Confirm in MetaMask: connect, then switch to Gnosis.'
       : phase === 'buying'
         ? `Buying batch ${buyingIndex || bought + 1} of ${slots.length}… Confirm both steps in MetaMask: approve xBZZ, then create the batch.`
@@ -404,7 +450,7 @@ export function Storage() {
                       type="button"
                       className="btn btn-secondary"
                       disabled={linkOwner.kind !== 'ok'}
-                      onClick={() => adoptLinkExtension(extChoice.linkId)}
+                      onClick={() => linkOwner.kind === 'ok' && adoptLinkExtension(extChoice.linkId, linkOwner.address)}
                     >
                       Use this extension
                     </button>
