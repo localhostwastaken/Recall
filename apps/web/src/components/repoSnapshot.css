@@ -78,10 +78,16 @@
 .repo-git-check summary {
   display: inline-flex;
   align-items: center;
+  gap: var(--space-1);
   min-height: 44px;
+  list-style: none;
   cursor: pointer;
   font-weight: 600;
+  color: var(--accent-text);
 }
+.repo-git-check summary::-webkit-details-marker { display: none; }
+.repo-git-check summary svg { transition: transform var(--dur-fast) var(--ease-out); }
+.repo-git-check[open] summary svg { transform: rotate(180deg); }
 .repo-git-check summary:focus-visible { outline: 2px solid var(--focus, currentColor); outline-offset: 2px; }
 .repo-git-check p { margin: var(--space-2) 0; max-width: var(--measure); color: var(--text-muted); }
 .repo-git-cmd {
