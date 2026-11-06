@@ -24,9 +24,9 @@ describe('library route', () => {
     expect(round).toEqual({ name: 'library', q: 'x&y=z', type: 'repo', sort: 'time' });
   });
 
-  it('gives two library views different route ids', () => {
-    expect(routeId(parseHash('#/library?q=a'))).not.toBe(routeId(parseHash('#/library?q=b')));
-    expect(routeId(parseHash('#/library'))).toBe(routeId(parseHash('#/library?sort=time')));
+  it('gives every library view the same route id (typing a search must not remount the page or move focus)', () => {
+    expect(routeId(parseHash('#/library?q=a'))).toBe('library');
+    expect(routeId(parseHash('#/library?q=b&type=repo&sort=ending'))).toBe('library');
   });
 
   it('leaves the other routes alone', () => {

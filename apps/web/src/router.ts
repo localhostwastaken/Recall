@@ -78,8 +78,6 @@ export function routeId(route: Route): string {
       return `url:${route.urlHash}`;
     case 'approve':
       return `approve:${route.captureId ?? ''}`;
-    case 'library':
-      return `library:${libraryHash(route)}`;
     default:
       return route.name;
   }
