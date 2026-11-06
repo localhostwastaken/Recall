@@ -1,0 +1,129 @@
+# Swarm in Recall
+
+## What lives where
+
+| Swarm | Arkiv |
+|---|---|
+| The **evidence file** of each capture: a JSON file (`recall.evidence.v1`) with the witness's signed EIP-712 statement, the signature and signer, and the full TLS transcript (request and response bytes). A few KB; at most about 64 KB of page | The **index**: one `recall.v1.capture` entity per capture, with the page's `urlHash`, `bodySha256`, `serverName`, `witness`, `signedAt`, `httpStatus`, and the two Swarm fields below ([schema.md](schema.md)) |
+| The Recall **web app** itself, as a Swarm website (`pnpm publish:swarm`), so the verifier keeps working if GitHub Pages goes away | The **witness profile** (where to reach the witness) |
+
+The entity field that holds the Swarm reference is **`evidenceRef`** (a 32-byte key attribute) on
+`recall.v1.capture`. Next to it, **`batchId`** names the postage batch the evidence was stamped with,
+so anyone can top it up (keep-alive). A `recall.v1.confirmation` (same page, byte-identical body)
+carries its small evidence inline and needs no Swarm upload.
+
+Evidence references are **unencrypted** on purpose: Recall captures public pages, and the evidence is
+meant to be read by anyone. No encrypted reference (which would contain its key) is ever written to
+Arkiv.
+
+## How evidence is stored
+
+1. **One batch per capture.** The web app's Storage page buys immutable **depth-17** postage batches
+   on Gnosis with MetaMask (`approve` xBZZ, then `createBatch` with **owner = the extension's stamp
+   address**), and hands them to the extension, which keeps a pool. Each capture takes a fresh batch,
+   so a capture's storage can be topped up on its own and a used stamp slot is never reused.
+2. **Client-side stamping.** No Bee node owns the batch. The extension's offscreen document splits the
+   evidence into chunks, stamps each chunk with the stamp key (bee-js `Stamper`), and pushes it with
+   **`POST /chunks`** to a gateway or Bee node (default: `https://api.gateway.ethswarm.org`). The stamp
+   key lives only in the extension's `chrome.storage.local`.
+3. **Root verification on read.** A reader downloads `/bytes/<ref>` from any gateway (default:
+   `https://download.gateway.ethswarm.org`, then `https://bzz.link`), **recomputes the Swarm root hash
+   locally** and refuses bytes that do not hash to the reference. Gateways are not trusted. Then the
+   evidence is checked (A to C) and compared with the Arkiv record (urlHash, bodySha256, witness,
+   signedAt).
+4. **Keep-alive.** Anyone can `topUp` the batch on Gnosis (permissionless) and extend the Arkiv record,
+   in one flow in the web app. Before paying, it checks that the batch exists and is a Recall batch
+   (immutable, depth 17).
+
+## One live example (2026-11-06, from [docs/evidence-log.md](../docs/evidence-log.md))
+
+- **Arkiv entity key:** `0xc50021a907dbd1d511d2e4a1482614647cbbb4a0dd2d4bf26ad70065b3611244`
+  (type `recall.v1.capture` on Rabdi, tx
+  [`0x512ad75ec7002990307ba29f763d2e3f9aa343b851abc4b39e6ab89bf4175d4f`](https://rabdi.explorer.arkiv.network/tx/0x512ad75ec7002990307ba29f763d2e3f9aa343b851abc4b39e6ab89bf4175d4f),
+  block 279811, written by `0xd46480d1Ec02B8ce92aE383914026efD5F73f835`).
+  Verified view: <https://localhostwastaken.github.io/Recall/app/#/c/0xc50021a907dbd1d511d2e4a1482614647cbbb4a0dd2d4bf26ad70065b3611244>
+- **Swarm reference** (its `evidenceRef`): `4dde720fa70159f4e335e165a2b8b93b5aec439ac9f5dbd06cf389856bb13202`
+  (2723 bytes). Open it: <https://bzz.link/bytes/4dde720fa70159f4e335e165a2b8b93b5aec439ac9f5dbd06cf389856bb13202>
+  or <https://download.gateway.ethswarm.org/bytes/4dde720fa70159f4e335e165a2b8b93b5aec439ac9f5dbd06cf389856bb13202>.
+- **Postage batch ID:** `0xde1b6b808de55064687e6c1ef7eae9aef91d9d9167d44719a2350fb3c6d8dd63`
+  (depth 17, bucket depth 16, immutable, 3 days; cost 0.1367189760376832 xBZZ).
+- **Batch owner:** `0x5455B84fcB0a05C0B68F8262a183D7e28f2a4212` (the extension's stamp address; it signs
+  the stamps). **Paid by** the treasury `0xd46480d1Ec02B8ce92aE383914026efD5F73f835`: approve tx
+  [`0x57969134...93325f`](https://gnosisscan.io/tx/0x57969134d16aff5883a3f163e6f45fa7813889adca1a60e7e50811ab9093325f),
+  createBatch tx [`0x603c269c...a44cd4`](https://gnosisscan.io/tx/0x603c269cf0fbe031e1a58a91bdb1e2a9281209fb6fb16e25d41cfb1b81a44cd4)
+  (Gnosis blocks 49134082 and 49134085).
+- **Uploaded through the gateway** `https://api.gateway.ethswarm.org` (`POST /chunks`, client-stamped).
+  Read back, root-checked, from `https://download.gateway.ethswarm.org` (2.7 s) and `https://bzz.link`
+  (1.5 s, byte-equal).
+- The page it captured: `https://localhostwastaken.github.io/Recall/notice/?run=0tzgmo55`, body
+  sha256 `0x99bb0a8d8c7026af50281298955f0447def7c5069c66de0566914ffe26932273` ("Deadline: 15 December").
+
+The batch was bought for 3 days (until about 2026-11-09 05:10 UTC); after that the evidence stays only
+if someone tops the batch up with keep-alive.
+
+## The files that upload to Swarm and read from it
+
+| File | What it does |
+|---|---|
+| [`extension/packages/extension/src/recall/swarmUpload.ts`](../extension/packages/extension/src/recall/swarmUpload.ts) | Picks a batch, stamps the evidence chunks and `POST /chunks` them |
+| [`extension/packages/extension/src/recall/stamp.ts`](../extension/packages/extension/src/recall/stamp.ts), [`uploadParts.ts`](../extension/packages/extension/src/recall/uploadParts.ts), [`pool.ts`](../extension/packages/extension/src/recall/pool.ts), [`batchChain.ts`](../extension/packages/extension/src/recall/batchChain.ts) | The stamp key, the stamper state, the batch pool and its on-chain checks |
+| [`packages/net/src/swarm.ts`](../packages/net/src/swarm.ts) | `uploadStamped`, `swarmRootOf`, `downloadBytes` (root-verified, size-capped, gateway by gateway) |
+| [`packages/net/src/postage.ts`](../packages/net/src/postage.ts) | `buyBatch`, `topUp`, `batchTtlSeconds`, `waitBatchUsable` (Gnosis postage contract) |
+| [`apps/web/src/routes/Storage.tsx`](../apps/web/src/routes/Storage.tsx) | Buying batches with MetaMask and handing them to the extension |
+| [`apps/web/src/verify/`](../apps/web/src/verify/) | Downloading and verifying a capture's evidence |
+| [`apps/web/src/keepalive/`](../apps/web/src/keepalive/) | The top-up |
+| [`scripts/publish-swarm.ts`](../scripts/publish-swarm.ts) | Publishes the web app as a Swarm website (client-stamped chunks plus a mantaray manifest; optional feed) |
+| [`scripts/arkiv-query.ts`](../scripts/arkiv-query.ts) | Reads the index and downloads and verifies the evidence from the command line |
+
+## Run one upload and one read yourself
+
+**Read (live, needs only Node and pnpm):**
+```bash
+pnpm install
+pnpm arkiv:query
+```
+You should see the capture above with `evidenceRef 0x4dde720f...13202` and the line
+`verified A-C (evidence 2723 B from https://download.gateway.ethswarm.org, Swarm root checked: true)`.
+Or just `curl -s https://bzz.link/bytes/4dde720fa70159f4e335e165a2b8b93b5aec439ac9f5dbd06cf389856bb13202`
+and look for `"schema":"recall.evidence.v1"`.
+
+**Upload (local, needs Docker; no money):**
+```bash
+pnpm devnet:up    # Bee nodes on :1633 (upload) and :1643 (download), Gnosis fork on :9545
+pnpm --filter @recall/net exec vitest run test/swarm.test.ts -t "stamped upload"
+```
+This buys a batch on the Gnosis fork, stamps a payload on the client, uploads it to node A with
+`POST /chunks` and downloads it byte-identical from node B. To publish a whole site instead:
+`pnpm publish:swarm --net local` prints the reference, and `http://localhost:1633/bzz/<ref>/` serves
+the app.
+
+**Upload (live, the product path):** load the extension (`pnpm extension:zip`), buy a batch on the
+app's Storage page (about 0.137 xBZZ for 3 days of depth 17, plus a tiny xDAI fee), capture the demo
+notice, and publish from the approval tab. The popup shows the `evidenceRef`, and the record's page
+links to the evidence.
+
+## In the demo video
+
+<!-- DEMO-VIDEO-SWARM: timestamp to be filled in after recording -->
+_Timestamp to be added after recording:_ the capture's upload to Swarm in the popup, and the verify
+view downloading the evidence from a different gateway and checking its root.
+
+## What got in our way with Swarm
+
+- **Gateway `/bytes` uploads over 4 KB do not match the local root.** The free `POST /bytes` on
+  api.gateway.ethswarm.org returned, for 5000 random bytes, a reference that is not the
+  ChunkSplitter root of those bytes (gateway `074b6b80...`, local `2e3bb84f...`); single-chunk
+  payloads matched. A reader therefore cannot bind gateway-built references to the bytes, which is
+  why Recall stamps and chunks on the client.
+- **A fresh batch never appeared in the gateway's `/batches`** (we watched for many minutes), and
+  the gateway has no `/chainstate`, yet `/chunks` accepted stamps for it. We judge a batch usable by
+  the chain instead (12 blocks after the `createBatch` block). The gateway's `/batches` list is also
+  about 1.8 MB, too heavy to poll from a browser.
+- **The minimum batch is huge for our files.** A depth-17 batch holds far more than one 3 KB evidence
+  file, but it is the smallest Recall can use, so each capture costs about 0.137 xBZZ for 3 days
+  (7 days would have been 0.319 xBZZ).
+- **bzz.link's CID subdomain form serves manifests only.** `https://<cid>.bzz.link/` answered 404 for
+  raw-bytes evidence; the path form `https://bzz.link/bytes/<ref>` works.
+- **The local cluster needs three full Bee nodes.** With a light node, or only two nodes, Bee never
+  marks peers healthy: `POST /chunks` takes 30 s per chunk and the second node cannot retrieve
+  anything.

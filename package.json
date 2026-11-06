@@ -17,7 +17,9 @@
     "extension:zip": "bash scripts/package-extension.sh",
     "publish:swarm": "tsx scripts/publish-swarm.ts",
     "tunnel:up": "bash scripts/tunnel.sh",
-    "tunnel:down": "bash scripts/tunnel-stop.sh"
+    "tunnel:down": "bash scripts/tunnel-stop.sh",
+    "check:docs": "tsx scripts/check-docs.ts",
+    "arkiv:query": "tsx scripts/arkiv-query.ts"
   },
   "devDependencies": {
     "@playwright/test": "1.49.1",

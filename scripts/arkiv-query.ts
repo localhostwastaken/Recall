@@ -1,0 +1,170 @@
+// The README's runnable Arkiv query: prints the latest captures of one page from Arkiv Rabdi.
+// Run: `pnpm arkiv:query [options]` (tsx scripts/arkiv-query.ts).
+//
+//   --url <url>        The captured page (default: the demo notice of the P2 live run,
+//                      https://localhostwastaken.github.io/Recall/notice/?run=0tzgmo55).
+//   --limit <n>        How many captures to print, newest first (default 5).
+//   --witness <addr>   A witness address to trust for check C (repeatable; default: the Recall
+//                      witness 0xC9319e18e86cd7EB653c0Ed0693c0cf5B63db37D).
+//   --no-verify        Only list the rows; do not download and check the evidence.
+//
+// How it works: the URL is canonicalised and hashed (keccak256), and `listByUrl` from
+// @recall/net asks Rabdi for every `recall.v1.capture` entity whose indexed `urlHash` attribute
+// equals it (keyset paging on $key). Anyone can write rows with our schema, so a row by itself
+// proves nothing: for each one the evidence file is downloaded from Swarm by its `evidenceRef`
+// (the Swarm root hash is recomputed locally, so the gateway is not trusted), checks A to C run
+// on it, and the verified facts must match the row (urlHash, bodySha256, witness, signedAt).
+// Only then is the row marked "verified A-C".
+//
+// Reads use ARKIV_ACCESS_KEY from the environment or .env.local when there is one (sent the
+// SDK's way, in the Rabdi URL path) and the public, rate-limited Rabdi endpoint otherwise. The
+// key is never printed, and errors are scrubbed of it.
+import { readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { parseArgs } from 'node:util';
+import { getAddress, isAddress, type Address } from 'viem';
+import { canonicalUrl, decodeEvidence, runChecks, urlHash } from '../packages/evidence/src/index';
+import {
+  arkivPublic,
+  downloadBytes,
+  isFreeBatch,
+  listByUrl,
+  liveConfig,
+  redactKey,
+  type Listed,
+} from '../packages/net/src/index';
+
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const DEFAULT_URL = 'https://localhostwastaken.github.io/Recall/notice/?run=0tzgmo55';
+const RECALL_WITNESS: Address = '0xC9319e18e86cd7EB653c0Ed0693c0cf5B63db37D';
+const DOWNLOAD_TIMEOUT_MS = 30_000;
+
+/** Reads one variable from the repo-root .env.local (gitignored); the process env wins. */
+function envLocal(name: string): string | undefined {
+  if (process.env[name]) return process.env[name];
+  try {
+    const text = readFileSync(process.env.RECALL_ENV_FILE ?? join(ROOT, '.env.local'), 'utf8');
+    for (const line of text.split('\n')) {
+      const m = /^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/.exec(line);
+      if (m && m[1] === name) return m[2].replace(/^(['"])(.*)\1$/, '$2') || undefined;
+    }
+  } catch {
+    /* no env file */
+  }
+  return undefined;
+}
+
+const accessKey = envLocal('ARKIV_ACCESS_KEY');
+const safe = (text: string): string => redactKey(text, accessKey);
+
+function fail(msg: string): never {
+  console.error(`arkiv-query: ${safe(msg)}`);
+  process.exit(1);
+}
+
+type Capture = Extract<Listed, { kind: 'capture' }>;
+
+/** Downloads the evidence, runs A to C and compares the verified facts with the row. */
+async function verify(row: Capture, pinned: Address[], downloadUrls: string[]): Promise<string> {
+  let bytes: Uint8Array;
+  let from: string;
+  try {
+    ({ bytes, from } = await downloadBytes(row.evidenceRef, downloadUrls, {
+      verifyRoot: !isFreeBatch(row.batchId),
+      signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+    }));
+  } catch (e) {
+    return `not verified: evidence not downloaded (${(e as Error).message})`;
+  }
+  let report;
+  try {
+    report = await runChecks(decodeEvidence(bytes), { pinnedWitnesses: pinned });
+  } catch (e) {
+    return `not verified: the evidence file does not parse (${(e as Error).message})`;
+  }
+  const failed = (['A', 'B', 'C'] as const).filter((k) => report[k].status !== 'pass');
+  if (failed.length > 0) return `not verified: ${failed.map((k) => `${k} ${report[k].status} (${report[k].detail})`).join('; ')}`;
+  const f = report.facts!;
+  const mismatch = [
+    f.urlHash.toLowerCase() !== row.urlHash.toLowerCase() && 'urlHash',
+    f.bodySha256.toLowerCase() !== row.bodySha256.toLowerCase() && 'bodySha256',
+    getAddress(f.witness) !== getAddress(row.witness) && 'witness',
+    f.signedAt !== row.signedAt && 'signedAt',
+  ].filter(Boolean);
+  if (mismatch.length > 0) return `not verified: the row does not match its evidence (${mismatch.join(', ')})`;
+  return `verified A-C (evidence ${bytes.length} B from ${from}, Swarm root checked: ${!isFreeBatch(row.batchId)})`;
+}
+
+async function main(): Promise<void> {
+  const { values } = parseArgs({
+    options: {
+      url: { type: 'string', default: DEFAULT_URL },
+      limit: { type: 'string', default: '5' },
+      witness: { type: 'string', multiple: true },
+      'no-verify': { type: 'boolean', default: false },
+    },
+    strict: true,
+  });
+  const limit = Number(values.limit);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) fail('--limit must be a whole number from 1 to 100');
+  const pinned = (values.witness ?? [RECALL_WITNESS]).map((w) => {
+    if (!isAddress(w, { strict: false })) fail(`not an address: ${w}`);
+    return getAddress(w);
+  });
+
+  let canonical: string;
+  try {
+    canonical = canonicalUrl(values.url!);
+  } catch (e) {
+    fail((e as Error).message);
+  }
+  const hash = urlHash(canonical);
+  const cfg = liveConfig(accessKey ? { ARKIV_ACCESS_KEY: accessKey } : {});
+  const pub = arkivPublic(cfg);
+
+  console.log(`Arkiv Rabdi (chain 7794095), entity type recall.v1.capture`);
+  console.log(`  page     ${canonical}`);
+  console.log(`  urlHash  ${hash}`);
+  console.log(`  endpoint https://rpc.rabdi.db-chain.testnet.arkiv.network ${accessKey ? '(with the access key from .env.local)' : '(public, no access key)'}`);
+  console.log(`  query    select().from(recall.v1.capture).where(eq('urlHash', ${hash})).orderBy(asc('$key'))`);
+
+  let result;
+  try {
+    result = await listByUrl(pub, hash);
+  } catch (e) {
+    fail(`the Arkiv read failed: ${(e as Error).message}`);
+  }
+  const captures = result.rows
+    .filter((r): r is Capture => r.kind === 'capture')
+    .sort((a, b) => (b.signedAt > a.signedAt ? 1 : b.signedAt < a.signedAt ? -1 : 0));
+  const confirmations = result.rows.length - captures.length;
+  console.log(
+    `\n${captures.length} capture(s) and ${confirmations} confirmation(s) for this page${result.truncated ? ' (truncated: more rows exist)' : ''}. Latest ${Math.min(limit, captures.length)}:`,
+  );
+
+  let verified = 0;
+  for (const [i, row] of captures.slice(0, limit).entries()) {
+    console.log(`\n${i + 1}. entity ${row.entityKey}`);
+    console.log(`   owner        ${row.owner}`);
+    console.log(`   signer       ${row.witness}`);
+    console.log(`   signedAt     ${row.signedAt} (${new Date(Number(row.signedAt) * 1000).toISOString()})`);
+    console.log(`   serverName   ${row.serverName}  HTTP ${row.httpStatus}`);
+    console.log(`   bodySha256   ${row.bodySha256}`);
+    console.log(`   evidenceRef  ${row.evidenceRef}`);
+    console.log(`   batchId      ${row.batchId}`);
+    console.log(`   expires at   block ${row.expiresAtBlock}`);
+    console.log(`   open         https://bzz.link/bytes/${row.evidenceRef.replace(/^0x/, '')}`);
+    if (!values['no-verify']) {
+      const verdict = await verify(row, pinned, cfg.swarm.downloadUrls);
+      if (verdict.startsWith('verified')) verified++;
+      console.log(`   ${safe(verdict)}`);
+    }
+  }
+  if (!values['no-verify'] && captures.length > 0) {
+    console.log(`\n${verified} of ${Math.min(limit, captures.length)} verified A-C against the pinned witness(es) ${pinned.join(', ')}.`);
+  }
+  if (captures.length === 0) process.exitCode = 2;
+}
+
+main().catch((e) => fail((e as Error).stack ?? String(e)));

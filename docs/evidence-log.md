@@ -115,3 +115,12 @@ Manual: real MetaMask approval: pending user.
 - Chromium's QUIC attempts made the tunnel's `/info` slow (6.5 s cold, versus 1.4 s with `--disable-quic`), so the live spec runs Chromium with `--disable-quic`. The extension's witness probe now allows 6 s (it was 2 s).
 - The P1 regression (`pnpm test:live --grep p1`, 06:11 to 06:15Z, tunnel only) failed the same way: both attempts ended with `setupProver timed out after 90000ms`.
 - The same live witness on 127.0.0.1:7048 captured in about 5 s. For the demo, run the witness on a machine with a good link (or capture on another machine), and re-run `pnpm test:live --grep p1` once the network is fast again.
+
+## 2026-11-06 read-back with `pnpm arkiv:query` (UTC, about 09:30Z)
+
+- `pnpm arkiv:query` (keyed Rabdi read through `listByUrl`, then Swarm download and checks A to C) for
+  …/notice/?run=0tzgmo55 found entity 0xc50021a907dbd1d511d2e4a1482614647cbbb4a0dd2d4bf26ad70065b3611244
+  (expires at Rabdi block 1575811) and marked it verified A-C: 2723 B from download.gateway.ethswarm.org, root checked.
+- The same for …/notice/?run=xbvmqf0p: entity 0x6c488161621f449b4b21f165f9717a9c2da183ea45a7da28a4eb3084ca88123c
+  (block 1575565), verified A-C, 2735 B.
+- The bare notice URL https://localhostwastaken.github.io/Recall/notice/ has no capture rows (every live run used a fresh `?run=`).
