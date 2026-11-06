@@ -202,6 +202,16 @@
   justify-content: center;
 }
 
+/* The receipt is white paper in both themes, so its "passed" check uses the light theme's pass
+   green (the dark theme's --pass is a pale mint made for text on dark, too faint under a white tick). */
+.hero.is-verified .hero-duo {
+  --duo-check: #126345;
+}
+
+.hero-duo #duo-receipt-check circle {
+  transition: fill 300ms var(--ease-out);
+}
+
 .hero-duo {
   display: block;
   width: 100%;
@@ -659,6 +669,7 @@
   }
 
   .hero-step,
+  .hero-duo #duo-receipt-check circle,
   .try-how > summary svg,
   .more-ways > summary svg {
     transition: none;

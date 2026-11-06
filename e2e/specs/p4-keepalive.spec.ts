@@ -883,6 +883,7 @@ test('@p4 offline dropped evidence verifies offline: A to C pass, E is not check
   // The app is loaded first, then the network goes away.
   await page.goto(`${APP}/#/`);
   await expect(page.getByRole('heading', { level: 1, name: 'Recall' })).toBeVisible();
+  await page.locator('summary', { hasText: 'More ways to check' }).click();
   await page.waitForLoadState('networkidle');
   await context.setOffline(true);
 
@@ -903,6 +904,7 @@ test('@p4 offline dropped evidence verifies offline: A to C pass, E is not check
   await page.goto(`${APP}/#/settings`);
   await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
   await page.goto(`${APP}/#/`);
+  await page.locator('summary', { hasText: 'More ways to check' }).click();
   await expect(page.getByText('Works offline. The file never leaves your browser.')).toBeVisible();
   await fileInput(page, 'Evidence file').setInputFiles(file('evidence.json', sample.evidenceBytes, 'application/json'));
   await expect(status(page, 'A')).toHaveAttribute('data-status', 'pass');

@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useRef } from 'react';
 import { Duo } from '../brand/Duo';
 import { CaptureCard } from '../components/CaptureCard';
 import { useLibraryCounts } from './LibraryPreview';
-import { followPointer, playHeroStory, popPill, type HeroStory } from './heroStory';
+import { followPointer, playHeroStory, popPill, popReceiptCheck, type HeroStory } from './heroStory';
 import { exampleCardProps, exampleStatus, type ExampleCheck } from './SeeItWork';
 
 /** The four steps of how Recall works, shown as the hero's rail. */
@@ -76,10 +76,13 @@ export function Hero({
     if (shown.current === status.status) return;
     shown.current = status.status;
     const pill = root.current?.querySelector('.hero-card .ccard-pill');
-    if (pill && !story.current?.playing() && !prefersReducedMotion()) popPill(pill);
+    if (story.current?.playing() || prefersReducedMotion()) return;
+    if (pill) popPill(pill);
+    if (status.status === 'verified' && root.current) popReceiptCheck(root.current);
   }, [status.status]);
   return (
-    <section className="hero" ref={root} aria-labelledby="hero-title">
+    // The duo's receipt check turns green only when the real verdict passed (spec 4.2).
+    <section className={status.status === 'verified' ? 'hero is-verified' : 'hero'} ref={root} aria-labelledby="hero-title">
       <div className="hero-grid">
         <div className="hero-copy">
           <h1 className="hero-title" id="hero-title" tabIndex={-1} aria-label="The web forgets. Recall doesn't.">

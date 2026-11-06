@@ -34,6 +34,7 @@ vi.mock('../src/landing/heroStory', () => ({
   playHeroStory: () => ({ kill() {}, playing: () => false }),
   followPointer: () => () => {},
   popPill: () => {},
+  popReceiptCheck: () => {},
 }));
 
 const { Home } = await import('../src/routes/Home');
@@ -128,9 +129,12 @@ describe('landing page', () => {
     render();
     expect(heroPill()).toBe('Checking…');
     expect(host.querySelector('.pill-pass')).toBeNull();
+    // The duo's receipt check stays grey until the verdict passed.
+    expect(host.querySelector('.hero')!.classList.contains('is-verified')).toBe(false);
     capture = base({ report: passing, facts });
     render();
     expect(heroPill()).toBe('Verified');
+    expect(host.querySelector('.hero')!.classList.contains('is-verified')).toBe(true);
     expect(host.querySelector('.hero-card .ccard-link')!.textContent).toBe('Admissions Notice');
   });
 
@@ -176,6 +180,7 @@ describe('landing page', () => {
     expect(text()).not.toContain('Verified');
     expect(heroPill()).toBe('Not checked');
     expect(host.querySelector('.pill-pass, .badge-pass')).toBeNull();
+    expect(host.querySelector('.hero.is-verified')).toBeNull();
     expect(text()).toContain("Couldn't fully verify.");
   });
 

@@ -80,7 +80,16 @@ describe('hero story', () => {
     }
     expect(gsap.getProperty(root.querySelector('.hero-card')!, 'opacity')).toBe(1);
     expect(root.querySelectorAll('.hero-step.is-on')).toHaveLength(4);
+
+    // Idle: the blink is a scaleY from the lids' top edge; their height is never animated.
+    const lids = [...root.querySelectorAll('.duo-owl-lid')];
+    const idle = gsap.globalTimeline.getChildren(false, false, true).find((t) => t.repeat() === -1)!;
+    expect(idle).toBeDefined();
+    expect(lids.every((l) => l.getAttribute('height') === '24' && gsap.getProperty(l, 'scaleY') === 0)).toBe(true);
+    idle.seek(0.08);
+    expect(lids.every((l) => l.getAttribute('height') === '24' && gsap.getProperty(l, 'scaleY') === 1)).toBe(true);
     story.kill();
+    expect(lids.every((l) => l.getAttribute('height') === '0')).toBe(true);
   });
 
   it('splits "forgets" into aria-hidden letters once, keeping the heading label', () => {

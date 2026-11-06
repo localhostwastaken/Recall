@@ -75,7 +75,7 @@ export const SPONSORS: Sponsor[] = [
       { title: 'This website', text: 'Published to a Swarm feed, so it outlives our hosting' },
       { title: 'No backend', text: 'Uploads are stamped right in the extension' },
     ],
-    link: { href: DOC('arkiv/swarm.md'), label: 'Our Swarm feedback' },
+    link: { href: DOC('arkiv/swarm.md'), label: 'How we use Swarm' },
   },
 ];
 

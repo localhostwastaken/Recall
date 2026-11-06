@@ -70,7 +70,12 @@ function finalState(p: Parts): void {
 function idle(p: Parts): gsap.core.Timeline | null {
   if (!p.lids.length && !p.eye && !p.ear) return null;
   const tl = gsap.timeline({ repeat: -1, repeatDelay: 3.2, delay: 2 });
-  if (p.lids.length) tl.to(p.lids, { attr: { height: 24 }, duration: 0.08 }, 0).to(p.lids, { attr: { height: 0 }, duration: 0.12 });
+  if (p.lids.length) {
+    // The lids are drawn closed-to-nothing; give them their full height once, folded up to their top
+    // edge, so the blink is a scaleY (transform only).
+    gsap.set(p.lids, { attr: { height: 24 }, scaleY: 0, transformOrigin: '50% 0%' });
+    tl.to(p.lids, { scaleY: 1, duration: 0.08, ease: 'power1.in' }, 0).to(p.lids, { scaleY: 0, duration: 0.12, ease: 'power1.out' });
+  }
   if (p.eye) tl.to(p.eye, { scaleY: 0.12, transformOrigin: '50% 50%', duration: 0.08, yoyo: true, repeat: 1 }, 0);
   if (p.ear) tl.to(p.ear, { rotation: -9, svgOrigin: '140 100', duration: 0.55, yoyo: true, repeat: 1, ease: 'sine.inOut' }, 3.4);
   return tl;
@@ -163,6 +168,15 @@ export function playHeroStory(root: HTMLElement, opts: { reducedMotion: boolean 
     },
     playing: () => tl !== null && (tl as gsap.core.Timeline).isActive(),
   };
+}
+
+/**
+ * The receipt's check pops when the real verdict arrives after the story (its colour comes from
+ * --duo-check). No clearProps: the check's own SVG placement lives in its transform.
+ */
+export function popReceiptCheck(root: ParentNode): void {
+  const el = root.querySelector('#duo-receipt-check');
+  if (el) gsap.fromTo(el, { scale: 0.6 }, { scale: 1, duration: 0.35, ease: 'back.out(3)', transformOrigin: '50% 50%' });
 }
 
 /** A small pop when the hero card's status changes after the story (the real verdict arrived). */

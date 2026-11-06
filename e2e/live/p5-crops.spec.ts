@@ -447,6 +447,7 @@ test.describe('@live p5 crops', () => {
       page.on('pageerror', (e) => errors.push(e.message));
       await page.goto(`${local}#/`);
       await expect(page.getByRole('heading', { level: 1, name: 'Recall' })).toBeVisible();
+      await page.locator('summary', { hasText: 'More ways to check' }).click();
       await page.waitForLoadState('networkidle'); // the app has loaded everything it needs
       await expect(page.getByText('Works offline. The file never leaves your browser.')).toBeVisible();
 

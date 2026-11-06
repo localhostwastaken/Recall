@@ -14,7 +14,6 @@ const ORANGE = '#f47a20';
 const CLOTH_HEX = '#b8480f';
 const LIME = '#def4b6';
 const TASSEL = '#f7c873';
-const PASS = '#126345';
 const INK = '#101411';
 const PAPER = '#fff';
 
@@ -128,7 +127,8 @@ export function Duo({ className }: { className?: string }) {
             <rect x="9" y="20" width="40" height="3.5" rx="1.75" fill={INK} opacity=".28" />
             <rect x="9" y="28" width="26" height="3.5" rx="1.75" fill={INK} opacity=".28" />
             <g id="duo-receipt-check" transform="translate(52 36)">
-              <circle r="10" fill={PASS} />
+              {/* Grey until a check really passed: the page sets --duo-check (spec 4.2). */}
+              <circle r="10" fill="var(--duo-check, var(--na))" />
               <path d="M-4.5 0 l3 3.2 l6 -6.5" stroke={PAPER} strokeWidth="2.6" fill="none" strokeLinecap="round" strokeLinejoin="round" />
             </g>
           </g>

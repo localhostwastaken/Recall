@@ -346,7 +346,9 @@ test.describe('@p3 settings web', () => {
   });
 
   test('@p3 settings changing the download gateway is used for downloads', async ({ page }) => {
-    await page.goto(`${APP}/#/`);
+    // Start on Settings, not the landing page: the landing's library preview keeps verifying (and
+    // downloading or reading Arkiv) in the background, and those requests must not be counted here.
+    await page.goto(`${APP}/#/settings`);
     await page.evaluate((k) => localStorage.removeItem(k), SETTINGS_KEY);
     const hits: string[] = [];
     page.on('request', (r) => {
@@ -399,7 +401,9 @@ test.describe('@p3 settings web', () => {
   });
 
   test('@p3 settings the Arkiv and Gnosis endpoints come from Settings', async ({ page }) => {
-    await page.goto(`${APP}/#/`);
+    // Start on Settings, not the landing page: the landing's library preview keeps verifying (and
+    // downloading or reading Arkiv) in the background, and those requests must not be counted here.
+    await page.goto(`${APP}/#/settings`);
     await page.evaluate((k) => localStorage.removeItem(k), SETTINGS_KEY);
     // The same nodes under another host name, so the requests are told apart.
     const ALLOW = {
@@ -517,7 +521,9 @@ test.describe('@p3 settings web', () => {
       extensionId: 'a'.repeat(32),
       theme: 'dark',
     };
-    await page.goto(`${APP}/#/`);
+    // Start on Settings, not the landing page: the landing's library preview keeps verifying (and
+    // downloading or reading Arkiv) in the background, and those requests must not be counted here.
+    await page.goto(`${APP}/#/settings`);
     await page.evaluate(([k, v]) => localStorage.setItem(k, v), [SETTINGS_KEY, JSON.stringify(planted)] as const);
 
     // The app served the way a gateway serves it: under /bzz/<ref>/ on the same origin.
