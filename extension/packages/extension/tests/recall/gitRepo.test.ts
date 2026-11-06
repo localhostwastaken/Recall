@@ -276,6 +276,7 @@ describe('uploadEvidence with a repository snapshot', () => {
       blockNumber: async () => 500n,
       batchTtl: async () => 10n ** 9n,
       upload: upload as never,
+      uploadMany: upload as never,
       loadAttachment: async () => snap,
     });
     expect(r).toMatchObject({
