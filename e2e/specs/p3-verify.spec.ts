@@ -53,6 +53,12 @@ const verdict = (page: Page): Locator => page.locator('[data-verdict]');
 // getByLabel matches substrings, and a drop zone's group name contains its input's name.
 const fileInput = (page: Page, name: string): Locator => page.getByLabel(name, { exact: true });
 const capturePage = (key: Hex) => `${APP}/#/c/${key}`;
+/** The landing page keeps the old Home tools under "More ways to check": open it first. */
+async function openHomeTools(page: Page): Promise<void> {
+  await page.goto(`${APP}/#/`);
+  const more = page.locator('details', { has: page.locator('summary', { hasText: 'More ways to check' }) });
+  if (!(await more.evaluate((d) => (d as HTMLDetailsElement).open))) await more.locator('summary').click();
+}
 const file = (name: string, bytes: Uint8Array, mimeType = 'application/octet-stream') => ({
   name,
   mimeType,
@@ -176,8 +182,8 @@ test('@p3 verify changing the file never shows a stale pass or a stale match', a
 });
 
 test('@p3 verify a dropped evidence file is verified offline', async ({ page, context }) => {
-  await page.goto(`${APP}/#/`);
-  await expect(page.getByRole('heading', { level: 1, name: 'Recall' })).toBeVisible();
+  await openHomeTools(page);
+  await expect(page.getByRole('heading', { level: 1, name: "The web forgets. Recall doesn't." })).toBeVisible();
   await page.waitForLoadState('networkidle'); // the app has loaded everything it needs
   await expect(page.getByText('Drop an evidence file to verify')).toBeVisible();
   await expect(page.getByText('Works offline. The file never leaves your browser.')).toBeVisible();
@@ -207,7 +213,7 @@ test('@p3 verify a dropped evidence file is verified offline', async ({ page, co
 });
 
 test('@p3 verify dropped tampered evidence shows A failed in red', async ({ page }) => {
-  await page.goto(`${APP}/#/`);
+  await openHomeTools(page);
   await fileInput(page, 'Evidence file').setInputFiles(file('tampered.json', tamperEvidence(good.evidence), 'application/json'));
 
   await expect(page).toHaveURL(/#\/file$/);
@@ -236,7 +242,7 @@ test('@p3 verify an impossible signed time cannot crash the page or pass', async
     ['an unpinned witness', stranger, 'warn'],
     ['the pinned witness', trusted, 'na'],
   ] as const) {
-    await page.goto(`${APP}/#/`);
+    await openHomeTools(page);
     await fileInput(page, 'Evidence file').setInputFiles(file('evidence.json', encodeEvidence(signed.evidence), 'application/json'));
     await expect(page).toHaveURL(/#\/file$/);
     // An unpinned witness's capture is labelled as unverified; its facts stay visible as its claim.
@@ -278,7 +284,7 @@ test('@p3 verify a page that fails to draw shows no result at all', async ({ pag
 });
 
 test('@p3 verify a file that is not evidence is refused', async ({ page }) => {
-  await page.goto(`${APP}/#/`);
+  await openHomeTools(page);
   await fileInput(page, 'Evidence file').setInputFiles(file('notes.json', new TextEncoder().encode('{"hello":1}'), 'application/json'));
   await expect(
     page.getByText("This isn't a Recall evidence file. Choose the .json file you downloaded from Recall."),
@@ -425,7 +431,7 @@ test('@p3 verify a link to a record that does not exist says so', async ({ page 
 });
 
 test('@p3 verify home search goes to the timeline of the canonical address', async ({ page }) => {
-  await page.goto(`${APP}/#/`);
+  await openHomeTools(page);
   const input = page.getByLabel('Page address');
   await expect(input).toHaveAttribute('placeholder', 'https://example.org/notice');
   await input.fill('example.org/notice');
@@ -440,7 +446,7 @@ test('@p3 verify home search goes to the timeline of the canonical address', asy
 
   // Parsed the way the extension parses the page it captures: dot segments, a trailing dot in
   // the host and a bare "?" all lead to the same capture.
-  await page.goto(`${APP}/#/`);
+  await openHomeTools(page);
   await page.getByLabel('Page address').fill('https://Notice.Recall.test./a/../notice?');
   await page.getByRole('button', { name: 'Show captures' }).click();
   await expect(page).toHaveURL(`${APP}/#/u/${urlHash(canonicalUrl('https://notice.recall.test/notice'))}`);
@@ -449,7 +455,7 @@ test('@p3 verify home search goes to the timeline of the canonical address', asy
 test('@p3 verify a raw file plus its address finds the matching capture', async ({ page }) => {
   // A capture of its own URL, so exactly one record can match.
   const own = await rig.publish();
-  await page.goto(`${APP}/#/`);
+  await openHomeTools(page);
   await page.getByText('Compare a file with captures').click();
   await page.getByLabel('Address the file came from').fill(own.url);
   await fileInput(page, 'File to compare').setInputFiles(file('notice.html', own.body, 'text/html'));
@@ -459,7 +465,7 @@ test('@p3 verify a raw file plus its address finds the matching capture', async 
   await expect(verdict(page)).toHaveAttribute('data-verdict', 'pass');
 
   // A file with other bytes finds nothing and says so without claiming anything.
-  await page.goto(`${APP}/#/`);
+  await openHomeTools(page);
   await page.getByText('Compare a file with captures').click();
   await page.getByLabel('Address the file came from').fill(own.url);
   await fileInput(page, 'File to compare').setInputFiles(file('x.html', new TextEncoder().encode('<p>nope</p>'), 'text/html'));
@@ -477,7 +483,7 @@ test('@p3 verify a junk record claiming the file\'s hash is never opened as a ma
     canonicalUrl: junkUrl,
     evidenceRef: `0x${randomBytes(32).toString('hex')}` as Hex,
   });
-  await page.goto(`${APP}/#/`);
+  await openHomeTools(page);
   await page.getByText('Compare a file with captures').click();
   await page.getByLabel('Address the file came from').fill(junkUrl);
   await fileInput(page, 'File to compare').setInputFiles(file('notice.html', real.body, 'text/html'));

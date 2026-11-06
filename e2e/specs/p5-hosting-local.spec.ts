@@ -58,15 +58,17 @@ test('@p5 local swarm hosting', async ({ page }) => {
 
   // Home, served from the manifest's index document at the bare /bzz/<ref>/ path.
   await page.goto(url);
-  await expect(page.getByRole('heading', { level: 1, name: 'Recall' })).toBeVisible();
-  await expect(page.getByText('Prove what a web page said, even after it changes.')).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: "The web forgets. Recall doesn't." })).toBeVisible();
+  // The old Home tools sit under "More ways to check" on the landing page.
+  await page.locator('summary', { hasText: 'More ways to check' }).click();
   await expect(page.getByLabel('Page address')).toBeVisible();
 
   // Hash routing inside the Swarm path: no server rewrite is involved.
   await page.goto(`${url}#/storage`);
   await expect(page.getByRole('heading', { level: 1, name: 'Buy storage' })).toBeVisible();
-  await page.getByRole('link', { name: 'Home' }).click();
-  await expect(page.getByText('Prove what a web page said, even after it changes.')).toBeVisible();
+  // The header's wordmark links home.
+  await page.locator('header a[href="#/"]').first().click();
+  await expect(page.getByRole('heading', { level: 1, name: "The web forgets. Recall doesn't." })).toBeVisible();
   expect(new URL(page.url()).pathname).toBe(`/bzz/${ref}/`);
 
   // The manifest's error document is the index document: an unknown path serves the app too.

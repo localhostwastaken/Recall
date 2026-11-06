@@ -1,0 +1,666 @@
+/* The landing page (spec 6.2). One rhythm everywhere: sections 96 px top and bottom (64 on a
+   phone), a heading, one sentence, then the content 32 px below. Cards 16 px inside, 16 between,
+   14 px corners. Alternating backgrounds bleed to the window edges without widening the page
+   (border-image outsets draw outside the box but never add scroll width). */
+
+.page:has(> .landing) {
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.landing {
+  /* Sponsor marks: simple initial tiles in each sponsor's colour (their logos are not redrawn). */
+  --sponsor-ef: #6b7aba;
+  --sponsor-arkiv: #181ea9;
+  --sponsor-swarm: #f47a20;
+  --sponsor-ink: #ffffff;
+  --sponsor-swarm-ink: #000000;
+}
+
+/* Buttons on the landing page: pill, 44 px, never wrapping their label. */
+.land-btn {
+  min-height: 44px;
+  height: 44px;
+  padding: 0 var(--space-5);
+  border-radius: var(--radius-pill, 999px);
+  border-width: 1.5px;
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.land-btn.btn-secondary {
+  background: transparent;
+}
+
+.lk {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--accent-text, var(--accent));
+  font-weight: 700;
+  text-decoration: none;
+  text-underline-offset: 3px;
+}
+
+.lk:hover {
+  text-decoration: underline;
+}
+
+.lk svg {
+  flex: none;
+}
+
+/* Sections. */
+.lsec {
+  position: relative;
+  padding: var(--space-9, 96px) 0;
+}
+
+.lsec::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  border-image: linear-gradient(var(--border) 0 0) fill 0 / / 0 100vmax;
+}
+
+.lsec-alt {
+  border-image: linear-gradient(var(--bg-alt) 0 0) fill 0 / / 0 100vmax;
+}
+
+.lsec-title {
+  margin: 0 0 var(--space-3);
+  font-family: var(--font-display);
+  font-size: 40px;
+  line-height: 1.1;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+}
+
+.lsec-intro {
+  max-width: 38em;
+  margin: 0 0 var(--space-6);
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
+/* 1. Hero. */
+.hero {
+  position: relative;
+  padding: var(--space-8) 0 var(--space-9, 96px);
+  background: radial-gradient(30% 55% at 70% 50%, var(--accent-soft) 0%, transparent 100%);
+}
+
+.hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: var(--space-7);
+  align-items: center;
+}
+
+.hero-title {
+  margin: 0 0 var(--space-5);
+  font-family: var(--font-display);
+  font-size: clamp(38px, 6vw, 60px);
+  line-height: 1;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  overflow-wrap: normal;
+}
+
+.hero-title .nw {
+  white-space: nowrap;
+}
+
+.hero-title .ch {
+  display: inline-block;
+}
+
+.hero-lead {
+  max-width: 32em;
+  margin: 0 0 var(--space-6);
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
+.hero-ctas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.hero-reassure,
+.hero-stats {
+  margin: var(--space-4) 0 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-muted);
+}
+
+.hero-stats {
+  margin-top: var(--space-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.hero-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+  padding: var(--space-5);
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2, 14px);
+}
+
+.hero-rail {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.hero-step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  transition: color 200ms var(--ease-out);
+}
+
+.hero-step.is-on {
+  color: var(--text);
+}
+
+.hero-track {
+  display: block;
+  height: 4px;
+  border-radius: 4px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.hero-fill {
+  display: block;
+  height: 100%;
+  background: var(--text);
+  transform-origin: left center;
+}
+
+.hero-stage {
+  display: flex;
+  justify-content: center;
+}
+
+.hero-duo {
+  display: block;
+  width: 100%;
+  max-width: 260px;
+  height: auto;
+  overflow: visible;
+}
+
+/* 2. See it work. */
+.try-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.try-left {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.try-left .ccard {
+  height: auto;
+}
+
+.try-action {
+  display: flex;
+}
+
+.try-right {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.try-right .verdict {
+  max-width: none;
+}
+
+.try-checks {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2, 14px);
+  overflow: hidden;
+}
+
+.try-check + .try-check {
+  border-top: 1px solid var(--border);
+}
+
+.try-check-head {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4) 0;
+}
+
+.try-letter {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--surface-2, var(--surface-sunken));
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.try-title {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+}
+
+.try-badge {
+  display: inline-flex;
+}
+
+.try-check.is-revealed .try-badge {
+  animation: try-pop 250ms var(--ease-out);
+}
+
+@keyframes try-pop {
+  from {
+    transform: scale(0.7);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.try-detail {
+  margin: var(--space-1) 0 0;
+  padding: 0 var(--space-4) 0 calc(var(--space-4) + 24px + var(--space-3));
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.try-how {
+  padding: 0 var(--space-4) var(--space-1) calc(var(--space-4) + 24px + var(--space-3));
+}
+
+.try-how > summary,
+.more-ways > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 36px;
+  color: var(--accent-text, var(--accent));
+  font-size: 13px;
+  font-weight: 700;
+  list-style: none;
+  cursor: pointer;
+}
+
+.try-how > summary::-webkit-details-marker,
+.more-ways > summary::-webkit-details-marker {
+  display: none;
+}
+
+.try-how > summary svg,
+.more-ways > summary svg {
+  transition: transform 150ms var(--ease-out);
+}
+
+.try-how[open] > summary svg,
+.more-ways[open] > summary svg {
+  transform: rotate(180deg);
+}
+
+.try-how > p {
+  margin: 0 0 var(--space-3);
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-muted);
+}
+
+.try-error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-2, 14px);
+  background: var(--surface);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.try-error p {
+  margin: 0;
+}
+
+.more-ways {
+  margin-top: var(--space-6);
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-4);
+}
+
+.more-ways > summary {
+  min-height: 44px;
+  font-size: 14px;
+}
+
+.more-ways-body {
+  margin-top: var(--space-4);
+}
+
+/* 3. Library preview (LibraryPreview renders its own section): the same rhythm as the others. */
+.landing .lib-preview {
+  position: relative;
+  padding: var(--space-9, 96px) 0;
+}
+
+.landing .lib-preview::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  border-image: linear-gradient(var(--border) 0 0) fill 0 / / 0 100vmax;
+}
+
+.landing .lib-preview-head {
+  margin-bottom: var(--space-6);
+}
+
+.landing .lib-preview .section-title {
+  margin: 0 0 var(--space-3);
+  font-family: var(--font-display);
+  font-size: 40px;
+  line-height: 1.1;
+  font-weight: 800;
+  letter-spacing: -0.025em;
+}
+
+.landing .lib-preview-head p {
+  max-width: 38em;
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+.landing .lib-preview-head .btn {
+  min-height: 44px;
+  border-radius: var(--radius-pill, 999px);
+  border-width: 1.5px;
+  background: transparent;
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* 4. Sponsors. */
+.sp-grid,
+.inst-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sp-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2, 14px);
+}
+
+.sp-who {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.sp-mark {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-1);
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 18px;
+  color: var(--sponsor-ink);
+}
+
+.sp-mark-ef {
+  background: var(--sponsor-ef);
+}
+
+.sp-mark-arkiv {
+  background: var(--sponsor-arkiv);
+}
+
+.sp-mark-swarm {
+  background: var(--sponsor-swarm);
+  color: var(--sponsor-swarm-ink);
+}
+
+.sp-name {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 22px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.sp-prize {
+  margin: 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-muted);
+}
+
+.sp-line {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+
+.sp-rows {
+  margin: 0;
+  border-top: 1px solid var(--border);
+}
+
+.sp-rows > div {
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.sp-rows dt {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 700;
+}
+
+.sp-rows dd {
+  margin: 0;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--text-muted);
+}
+
+.sp-rows dd .lk {
+  display: inline;
+  font-weight: 600;
+}
+
+.sp-rows dd .lk svg {
+  vertical-align: -2px;
+  margin-left: 2px;
+}
+
+.sp-link {
+  margin-top: auto;
+  min-height: 44px;
+  font-size: 14px;
+}
+
+/* 5. Install. */
+.inst-grid {
+  margin-bottom: var(--space-5);
+}
+
+.inst-step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2, 14px);
+}
+
+.inst-n {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.inst-title {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 22px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.inst-step p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.inst-note {
+  max-width: 38em;
+  margin: 0 0 var(--space-5);
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+
+.inst-note .lk {
+  display: inline;
+}
+
+.inst-note .lk svg {
+  vertical-align: -2px;
+  margin-left: 2px;
+}
+
+/* Tablet: the hero stacks before its columns get cramped. */
+@media (max-width: 900px) {
+  .hero-grid,
+  .try-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .sp-grid,
+  .inst-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Phone. */
+@media (max-width: 760px) {
+  .lsec {
+    padding: var(--space-8) 0;
+  }
+
+  .lsec-title,
+  .landing .lib-preview .section-title {
+    font-size: 28px;
+  }
+
+  .landing .lib-preview {
+    padding: var(--space-8) 0;
+  }
+
+  .hero {
+    padding: var(--space-7) 0 var(--space-8);
+    background: none;
+  }
+
+  .hero-ctas .land-btn {
+    flex: 1 1 auto;
+  }
+
+  .hero-panel {
+    padding: var(--space-4);
+  }
+
+  .hero-rail {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    row-gap: var(--space-3);
+  }
+
+  .try-action .land-btn,
+  #install > .land-btn {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .try-check.is-revealed .try-badge {
+    animation: none;
+  }
+
+  .hero-step,
+  .try-how > summary svg,
+  .more-ways > summary svg {
+    transition: none;
+  }
+}

@@ -2,8 +2,12 @@ import { canonicalPageUrl, decodeEvidence, urlHash } from '@recall/evidence';
 import { arkivPublic, listByUrl } from '@recall/net';
 import { useEffect, useState } from 'react';
 import { sha256 } from 'viem';
-import { TryIt } from '../components/TryIt';
 import { downloadEvidence } from '../download';
+import { Hero, scrollToId } from '../landing/Hero';
+import { Install } from '../landing/Install';
+import { LibraryPreview } from '../landing/LibraryPreview';
+import { SeeItWork, useExampleCheck } from '../landing/SeeItWork';
+import { Sponsors } from '../landing/Sponsors';
 import { errorText } from '../errors';
 import { getNetConfig } from '../net';
 import { DropZone } from '../ui/DropZone';
@@ -240,22 +244,33 @@ function CompareFile() {
 export function Home() {
   // The home page starts fresh: files from an earlier visit are forgotten.
   useEffect(() => clearHandoff(), []);
+  // One real check of the example capture, shared by the hero card and "See it work" (spec 12.1).
+  const check = useExampleCheck();
+  const [started, setStarted] = useState(false);
   return (
-    <>
-      <div className="home-hero">
-        <h1 tabIndex={-1}>Recall</h1>
-        <p className="lede">
-          Prove what a web page said, <mark className="hl">even after it changes.</mark>
-        </p>
-      </div>
-      <TryIt />
-      <div className="home-grid">
-        <Search />
-        <div className="home-side panel">
-          <VerifyEvidence />
-          <CompareFile />
+    <div className="landing">
+      <Hero
+        check={check}
+        onSeeProof={() => {
+          setStarted(true);
+          scrollToId('how-it-works');
+        }}
+        onGetExtension={() => scrollToId('install')}
+      />
+      <SeeItWork check={check} started={started} onStart={() => setStarted(true)}>
+        {/* The old Home tools, unchanged, under "More ways to check". */}
+        <div className="home-grid">
+          <Search />
+          <div className="home-side panel">
+            <VerifyEvidence />
+            <CompareFile />
+          </div>
         </div>
-      </div>
-    </>
+      </SeeItWork>
+      {/* Section 3 renders its own <section id="library-preview">. */}
+      <LibraryPreview />
+      <Sponsors />
+      <Install />
+    </div>
   );
 }
