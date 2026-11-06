@@ -37,14 +37,14 @@
   pointer-events: none;
 }
 
-.lib-search-input,
-.lib-sort-select {
+.lib-tools .lib-search-input,
+.lib-tools .lib-sort-select {
   min-height: 44px;
   border-radius: var(--radius-2);
   font-size: var(--text-md);
 }
 
-.lib-search-input {
+.lib-tools .lib-search-input {
   padding-left: calc(var(--space-4) + 18px + var(--space-2));
 }
 
@@ -74,7 +74,7 @@
   padding: 0 var(--space-4);
 }
 
-.lib-sort-select {
+.lib-tools .lib-sort-select {
   width: auto;
   padding: 0 var(--space-6) 0 var(--space-4);
   font-weight: 600;
@@ -314,7 +314,7 @@
     flex: 1 1 auto;
   }
 
-  .lib-sort-select {
+  .lib-tools .lib-sort-select {
     width: 100%;
   }
 }
@@ -323,4 +323,8 @@
 .lib-claim .ccard-title {
   color: var(--text-muted);
   font-weight: 600;
+}
+
+.lib-error-detail > summary {
+  padding: var(--space-2) 0;
 }

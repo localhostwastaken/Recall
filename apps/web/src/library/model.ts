@@ -29,12 +29,12 @@ export type PageEntry = {
 /** The longest address a card shows (a hostile record can carry kilobytes). */
 const MAX_ADDRESS = 200;
 
-/** host + path, without the scheme, `www.`, query or a trailing slash. */
+/** host + path + query, without the scheme, `www.` or a lone `/` path (two pages can differ only by their query). */
 export function hostPath(canonicalUrl: string, fallback: string): string {
   let out = typeof fallback === 'string' ? fallback : '';
   try {
     const u = new URL(canonicalUrl);
-    if (u.protocol === 'https:' || u.protocol === 'http:') out = `${u.host.replace(/^www\./, '')}${u.pathname === '/' ? '' : u.pathname}`;
+    if (u.protocol === 'https:' || u.protocol === 'http:') out = `${u.host.replace(/^www\./, '')}${u.pathname === '/' ? '' : u.pathname}${u.search}`;
   } catch {
     /* not a URL: the server name it claims */
   }

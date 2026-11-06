@@ -102,8 +102,9 @@ export function LibraryCardItem({
   const hintId = useId();
   const status = cardStatus(lib, entry.urlHash);
   const verified = status === 'verified';
-  // Unverified pages show host + path; the date is shown once the check proved the record's time.
-  const title = verified ? (lib.titles.get(entry.urlHash) ?? entry.address) : entry.address;
+  // Until verified the title is the claimed host (the address line has host + path); the date is
+  // shown once the check proved the record's time.
+  const title = (verified && lib.titles.get(entry.urlHash)) || entry.address.split('/')[0] || entry.address;
   const date = verified ? new Date(Number(entry.signedAt) * 1000) : undefined;
   return (
     <li ref={observe} data-url-hash={entry.urlHash} data-flip-id={entry.urlHash} className="lib-cell">
@@ -180,7 +181,12 @@ export function LibraryError({ lib }: { lib: Pick<LibraryData, 'error' | 'retry'
       }
     >
       <p>Arkiv may be busy or unreachable. Nothing here is marked verified until it can be read and checked.</p>
-      {lib.error ? <p className="lib-error-detail">{lib.error}</p> : null}
+      {lib.error ? (
+        <details className="tech-details lib-error-detail">
+          <summary>Technical details</summary>
+          <p>{lib.error}</p>
+        </details>
+      ) : null}
     </Notice>
   );
 }
