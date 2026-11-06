@@ -8,6 +8,8 @@ import { Steps, type StepState } from '../../recall/ui/Steps';
 import { CheckRow } from '../../recall/ui/CheckRow';
 import { CheckDetails } from '../../recall/ui/CheckDetails';
 import { MonoValue } from '../../recall/ui/MonoValue';
+import { Logo } from '../../recall/ui/Logo';
+import { SuccessArt } from '../../recall/ui/SuccessArt';
 import { loadSettings } from '../../recall/settings';
 import { focusOrOpenApproveTab } from '../../recall/appTabs';
 import { SettingsPanel } from './SettingsPanel';
@@ -288,7 +290,7 @@ export function Popup() {
     <div className="popup">
       <Onboarding />
       <header className="popup-header">
-        <h1 className="popup-title">Recall</h1>
+        <h1 className="popup-title"><Logo size={24} />Recall</h1>
         <div className="popup-header-tools">
           <WitnessChip state={witness} />
           {view === 'main' ? (
@@ -538,6 +540,7 @@ function CaptureResult({
             focus
             actions={up.actions.length ? up.actions.map((a) => upActions[a]) : undefined}
           >
+            {up.kind === 'success' ? <SuccessArt /> : null}
             {up.body}
           </Notice>
           {progress ? (

@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { StatusBadge, type Status } from './StatusBadge';
+import { Details } from './Details';
 
 /** One check (A-E): letter, title, badge and a one-line result; the method sits behind details. */
 export function CheckRow({
@@ -29,10 +30,9 @@ export function CheckRow({
       </div>
       <p className="check-result">{result}</p>
       {how ? (
-        <details className="check-how">
-          <summary>How this was checked</summary>
-          <div className="check-how-body">{how}</div>
-        </details>
+        <Details summary="How this was checked" className="check-how">
+          {how}
+        </Details>
       ) : null}
     </li>
   );

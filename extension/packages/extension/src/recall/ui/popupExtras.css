@@ -1,0 +1,116 @@
+/* Popup extras (Swarm Night): the logo in the header, the shared "Details" disclosure and the
+   success art. Kept out of entries/Popup/*.css so the popup's own files stay untouched. */
+
+/* Header: the logo replaces the old drawn mark; wordmark weight as in spec 5.1. */
+.popup-title:has(> .logo) {
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+
+.popup-title:has(> .logo)::before {
+  content: none;
+}
+
+/* Details: one quiet line that opens the technical facts. Orange text = pressable (spec 4.2). */
+.rc-details-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 32px;
+  padding: 0 var(--space-2);
+  margin-left: calc(-1 * var(--space-2));
+  border-radius: var(--radius-1);
+  color: var(--accent-text);
+  font-weight: 600;
+  list-style: none;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+.rc-details-summary::-webkit-details-marker {
+  display: none;
+}
+
+.rc-details-summary:hover {
+  background: var(--surface-sunken);
+}
+
+.rc-details-chevron {
+  flex: none;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.rc-details[open] > .rc-details-summary .rc-details-chevron {
+  transform: rotate(180deg);
+}
+
+.rc-details-body {
+  margin-top: var(--space-1);
+  display: grid;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+/* Success art: floats beside the "Continue in the Recall tab" text, level with the title, so the
+   notice barely grows. Skin tones from the duo (apps/web/src/brand/brand.css). */
+.popup-success-art {
+  --art-skin: #bcc2bc;
+  --art-skin-2: #9ba39b;
+  --art-skin-3: #848c85;
+  --art-ear-in: #e9a27a;
+  --art-receipt-shadow: rgba(16, 20, 17, 0.16);
+  float: right;
+  width: 80px;
+  height: auto;
+  margin: -32px 0 var(--space-1) var(--space-2);
+  animation: rc-art-in var(--dur-base) var(--ease-out) both;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .popup-success-art {
+    --art-skin: #c9cec8;
+    --art-skin-2: #a7aea7;
+    --art-skin-3: #8e968f;
+    --art-receipt-shadow: transparent;
+  }
+}
+
+[data-theme='dark'] .popup-success-art {
+  --art-skin: #c9cec8;
+  --art-skin-2: #a7aea7;
+  --art-skin-3: #8e968f;
+  --art-receipt-shadow: transparent;
+}
+
+.notice-body:has(> .popup-success-art) {
+  display: flow-root;
+}
+
+/* The title (and its focus ring) stops short of the art. */
+.notice-content:has(> .notice-body > .popup-success-art) > .notice-title {
+  width: fit-content;
+  max-width: calc(100% - 88px);
+}
+
+@keyframes rc-art-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .popup-success-art {
+    animation: none;
+  }
+
+  .rc-details-summary,
+  .rc-details-chevron {
+    transition: none;
+  }
+}
