@@ -40,6 +40,9 @@ jobs:
       - name: Build the app with the live network config
         env:
           VITE_RECALL_NET: live
+          # The Arkiv access key baked in as the app's default (R30). A repository secret;
+          # vite.config.ts reads it at build time and it is never committed.
+          ARKIV_ACCESS_KEY: ${{ secrets.ARKIV_ACCESS_KEY }}
         run: pnpm --filter web build
       # site/ holds the demo notice (/Recall/notice/); the app goes next to it (/Recall/app/).
       - name: Assemble the site

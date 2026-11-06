@@ -1,38 +1,209 @@
+import { ADDRESS_ERROR, URL_ERROR, checkAddress, checkUrl } from '@recall/net';
+import { useEffect, useState } from 'react';
+import type { Address } from 'viem';
+import { DEFAULT_WITNESS_LABEL, baseNetConfig, defaultWitnessAddress } from './defaults';
+
 export type Theme = 'system' | 'light' | 'dark';
-export type Settings = { extensionId: string; theme: Theme };
+export type PinnedWitness = { address: Address; label: string };
 
-// "Saved in this browser only." Reads and writes never throw: storage can be blocked.
-const KEY = 'recall.web.settings.v1';
-
-const DEFAULTS: Settings = {
-  extensionId: import.meta.env.VITE_RECALL_EXTENSION_ID ?? '',
-  theme: 'system',
+/**
+ * What the person chose, "Saved in this browser only". Every field has a default (the network's
+ * own configuration, see defaults.ts), so a missing or damaged value is replaced by its default.
+ */
+export type Settings = {
+  /** The witnesses check C trusts. An empty list trusts nobody. */
+  pinnedWitnesses: PinnedWitness[];
+  arkivRpcUrl: string;
+  /** The person's own Arkiv key. Empty means "use the built-in key" (R30), if the build has one. */
+  arkivAccessKey: string;
+  /** Swarm download gateways, tried in order. */
+  downloadUrls: string[];
+  uploadUrl: string;
+  gnosisRpcUrl: string;
+  extensionId: string;
+  theme: Theme;
 };
 
-export function getSettings(): Settings {
-  try {
-    const raw = window.localStorage.getItem(KEY);
-    if (raw) {
-      const p = JSON.parse(raw) as Partial<Settings>;
-      return {
-        extensionId: typeof p.extensionId === 'string' ? p.extensionId : DEFAULTS.extensionId,
-        theme: p.theme === 'light' || p.theme === 'dark' ? p.theme : 'system',
-      };
+const KEY = 'recall.web.settings.v1';
+const CHANGED = 'recall:settings-changed';
+
+/** A Chrome extension ID: 32 letters from a to p. */
+export const EXTENSION_ID = /^[a-p]{32}$/;
+export const MAX_LABEL = 40;
+export const DEFAULT_ADDED_LABEL = 'Added witness';
+
+export const EXTENSION_ID_ERROR = 'Enter the 32-letter ID shown on chrome://extensions.';
+export const DUPLICATE_WITNESS_ERROR = 'That witness is already in the list.';
+export const LABEL_ERROR = 'Enter a label for this witness.';
+export const DOWNLOAD_ERROR = 'Enter at least one gateway address.';
+export const KEY_ERROR = 'Paste only the key, without spaces and not as an address.';
+export { ADDRESS_ERROR, URL_ERROR };
+
+/** The text fields of the Settings page that are validated on blur. `downloadText` holds one gateway per line. */
+export type FieldKey = 'arkivRpcUrl' | 'arkivAccessKey' | 'downloadText' | 'uploadUrl' | 'gnosisRpcUrl' | 'extensionId';
+
+export const gatewayLines = (text: string) => text.split('\n').map((l) => l.trim()).filter(Boolean);
+
+/** The error for one field (undefined when it is fine). The value checked is the trimmed text. */
+export function fieldError(key: FieldKey, value: string): string | undefined {
+  switch (key) {
+    case 'arkivRpcUrl':
+    case 'uploadUrl':
+    case 'gnosisRpcUrl':
+      return checkUrl(value).ok ? undefined : URL_ERROR;
+    case 'downloadText': {
+      const list = gatewayLines(value);
+      if (list.length === 0) return DOWNLOAD_ERROR;
+      return list.every((l) => checkUrl(l).ok) ? undefined : URL_ERROR;
     }
-  } catch {
-    /* fall through to defaults */
+    case 'extensionId': {
+      const id = value.trim();
+      return id === '' || EXTENSION_ID.test(id) ? undefined : EXTENSION_ID_ERROR;
+    }
+    case 'arkivAccessKey': {
+      const key = value.trim();
+      return /\s/.test(key) || key.includes('://') ? KEY_ERROR : undefined;
+    }
   }
-  return { ...DEFAULTS };
 }
 
-export function saveSettings(patch: Partial<Settings>): Settings {
-  const next = { ...getSettings(), ...patch };
-  try {
-    window.localStorage.setItem(KEY, JSON.stringify(next));
-  } catch {
-    /* not persisted; the page keeps working */
+export function defaultSettings(): Settings {
+  const base = baseNetConfig();
+  const ext = import.meta.env.VITE_RECALL_EXTENSION_ID as string | undefined;
+  return {
+    pinnedWitnesses: [{ address: defaultWitnessAddress(), label: DEFAULT_WITNESS_LABEL }],
+    arkivRpcUrl: base.arkiv.rpcUrl,
+    arkivAccessKey: '',
+    downloadUrls: [...base.swarm.downloadUrls],
+    uploadUrl: base.swarm.uploadUrl,
+    gnosisRpcUrl: base.gnosis.rpcUrl,
+    extensionId: ext && EXTENSION_ID.test(ext) ? ext : '',
+    theme: 'system',
+  };
+}
+
+const sameAddress = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+
+/** Keeps only well-formed values of the stored JSON (storage is never trusted blindly). */
+function sanitize(p: unknown): Partial<Settings> {
+  if (!p || typeof p !== 'object' || Array.isArray(p)) return {};
+  const o = p as Record<string, unknown>;
+  const out: Partial<Settings> = {};
+  if (Array.isArray(o.pinnedWitnesses)) {
+    const list: PinnedWitness[] = [];
+    for (const w of o.pinnedWitnesses as unknown[]) {
+      const item = (w && typeof w === 'object' ? w : {}) as { address?: unknown; label?: unknown };
+      const a = checkAddress(item.address);
+      if (!a.ok || list.some((x) => sameAddress(x.address, a.value))) continue;
+      const label = typeof item.label === 'string' ? item.label.trim().slice(0, MAX_LABEL) : '';
+      list.push({ address: a.value, label: label || DEFAULT_ADDED_LABEL });
+    }
+    // A list in which nothing survived stays empty: when in doubt, trust nobody.
+    out.pinnedWitnesses = list;
   }
-  return next;
+  for (const k of ['arkivRpcUrl', 'uploadUrl', 'gnosisRpcUrl'] as const) {
+    const c = checkUrl(o[k]);
+    if (c.ok) out[k] = c.value;
+  }
+  if (Array.isArray(o.downloadUrls)) {
+    const urls = (o.downloadUrls as unknown[]).flatMap((u) => {
+      const c = checkUrl(u);
+      return c.ok ? [c.value] : [];
+    });
+    if (urls.length > 0) out.downloadUrls = urls;
+  }
+  if (typeof o.arkivAccessKey === 'string') out.arkivAccessKey = o.arkivAccessKey.trim();
+  if (typeof o.extensionId === 'string' && (o.extensionId === '' || EXTENSION_ID.test(o.extensionId))) {
+    out.extensionId = o.extensionId;
+  }
+  if (o.theme === 'light' || o.theme === 'dark' || o.theme === 'system') out.theme = o.theme;
+  return out;
+}
+
+/** The overrides kept when the browser will not store them (a blocked or full storage). */
+let memory: Partial<Settings> = {};
+
+function readStored(): Partial<Settings> {
+  let raw: string | null;
+  try {
+    raw = window.localStorage.getItem(KEY);
+  } catch {
+    return sanitize(memory); // storage is blocked: what was saved this session still applies
+  }
+  if (!raw) return {};
+  try {
+    return sanitize(JSON.parse(raw));
+  } catch {
+    return {}; // damaged JSON: the defaults
+  }
+}
+
+/** The effective settings: the defaults with the person's saved choices on top. Never throws. */
+export function getSettings(): Settings {
+  return { ...defaultSettings(), ...readStored() };
+}
+
+const sameValue = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * Saves `patch` on top of the saved choices. Only values that differ from the default are
+ * stored, so a default follows the app when it changes; a value of `undefined` clears that
+ * choice. Returns the effective settings and whether the browser really stored them (when it
+ * did not, they still apply until the page is closed).
+ */
+export function saveSettingsChecked(patch: Partial<Settings>): { settings: Settings; saved: boolean } {
+  const defaults = defaultSettings();
+  const next: Record<string, unknown> = { ...readStored() };
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === undefined || sameValue(v, defaults[k as keyof Settings])) delete next[k];
+    else next[k] = v;
+  }
+  memory = sanitize(next);
+  let saved = true;
+  try {
+    window.localStorage.setItem(KEY, JSON.stringify(memory));
+  } catch {
+    saved = false;
+  }
+  notify();
+  return { settings: getSettings(), saved };
+}
+
+export const saveSettings = (patch: Partial<Settings>): Settings => saveSettingsChecked(patch).settings;
+
+/** Forgets every saved choice (back to the defaults). */
+export function resetSettings(): Settings {
+  memory = {};
+  try {
+    window.localStorage.removeItem(KEY);
+  } catch {
+    /* nothing stored, nothing to remove */
+  }
+  notify();
+  return getSettings();
+}
+
+function notify(): void {
+  try {
+    window.dispatchEvent(new Event(CHANGED));
+  } catch {
+    /* no window: nobody is listening */
+  }
+}
+
+/** The effective settings, kept current when they change in this tab or another. */
+export function useSettings(): Settings {
+  const [s, setS] = useState(getSettings);
+  useEffect(() => {
+    const on = () => setS(getSettings());
+    window.addEventListener(CHANGED, on);
+    window.addEventListener('storage', on);
+    return () => {
+      window.removeEventListener(CHANGED, on);
+      window.removeEventListener('storage', on);
+    };
+  }, []);
+  return s;
 }
 
 /** `data-theme` on <html>; "system" removes it so the media query decides. */

@@ -1,0 +1,121 @@
+/* The Settings page. Tokens only (no raw colours or sizes). */
+.settings-section {
+  display: grid;
+  gap: var(--space-4);
+  max-width: var(--measure);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border);
+}
+
+.settings-section > h2 {
+  margin: 0;
+}
+
+.witness-list {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.witness-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+}
+
+.witness-name {
+  display: block;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.witness-form {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.field-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+
+.secret-row {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.secret-row .input {
+  flex: 1;
+  min-width: 0;
+}
+
+textarea.input {
+  min-height: calc(var(--control-h) * 1.6);
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+  resize: vertical;
+}
+
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border);
+  max-width: var(--measure);
+}
+
+.settings-dirty {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+}
+
+.confirm-dialog {
+  width: min(28rem, calc(100vw - var(--space-5)));
+  padding: var(--space-5);
+  color: var(--text);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-2);
+  box-shadow: var(--shadow-2);
+}
+
+.confirm-dialog::backdrop {
+  background: var(--scrim);
+}
+
+.confirm-dialog h2 {
+  margin: 0 0 var(--space-3);
+}
+
+.confirm-dialog .dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+}
+
+/* A field with its "Reset to default" under it: closer together than two separate fields. */
+.settings-field {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.settings-field .field-actions .btn-ghost {
+  margin-left: calc(-1 * var(--space-3));
+}

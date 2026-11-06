@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { WalletChip } from './components/WalletChip';
 import { routeId, useRoute, type Route } from './router';
@@ -9,7 +9,7 @@ import { Home } from './routes/Home';
 import { Settings } from './routes/Settings';
 import { Storage } from './routes/Storage';
 import { Timeline } from './routes/Timeline';
-import { applyTheme, getSettings, saveSettings, type Theme } from './settings';
+import { applyTheme, saveSettings, useSettings, type Theme } from './settings';
 import { ToastProvider } from './ui/Toast';
 
 function NotFound({ path }: { path: string }) {
@@ -47,7 +47,8 @@ function Page({ route }: { route: Route }) {
 }
 
 function ThemeMenu() {
-  const [theme, setTheme] = useState<Theme>(() => getSettings().theme);
+  // Follows the saved theme, so picking it on the Settings page updates this menu too.
+  const { theme } = useSettings();
   return (
     <label className="theme-menu">
       <span className="visually-hidden">Theme</span>
@@ -56,7 +57,6 @@ function ThemeMenu() {
         value={theme}
         onChange={(e) => {
           const next = e.target.value as Theme;
-          setTheme(next);
           saveSettings({ theme: next });
           applyTheme(next);
         }}

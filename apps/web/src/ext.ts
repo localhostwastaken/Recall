@@ -66,6 +66,17 @@ export async function getStampAddress(opts?: { extensionId?: string }): Promise<
   return res.address;
 }
 
+/**
+ * Asks the extension who it is: the stamp address and, when it says so, its version. Settings
+ * uses it to show "Connected · v<x>". An older extension answers without a version.
+ */
+export async function getExtensionInfo(opts?: { extensionId?: string }): Promise<{ address: Address; version?: string }> {
+  const res = await send<{ address?: string; version?: unknown }>({ type: 'recall.getStampAddress' }, opts);
+  if (!res?.address || !isAddress(res.address)) throw new ExtError('rejected', 'The extension returned no stamp address.');
+  const version = typeof res.version === 'string' && /^[0-9A-Za-z.+-]{1,32}$/.test(res.version) ? res.version : undefined;
+  return { address: res.address, ...(version ? { version } : {}) };
+}
+
 export type PoolEntry = { batchId: Hex; used: boolean };
 
 /** Hands bought batches to the extension's pool. */
