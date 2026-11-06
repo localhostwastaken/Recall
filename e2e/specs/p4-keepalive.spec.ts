@@ -912,3 +912,38 @@ test('@p4 offline dropped evidence verifies offline: A to C pass, E is not check
   expect(await page.evaluate(() => (window as unknown as { __unhandled: string[] }).__unhandled)).toEqual([]);
   await context.setOffline(false);
 });
+
+test('@p4 library keep-alive extends a card in place and its days go up', async ({ page }) => {
+  test.setTimeout(240_000);
+  const c = await rig.publish();
+  await withWallet(page);
+  const blockBefore = await arkivBlock(c.entityKey);
+
+  // Newest first: the capture just published is the first card, so it is in view and gets checked.
+  await page.goto(`${APP}/#/library?sort=newest`);
+  const card = page.locator('[data-library-grid] .ccard').filter({ has: page.locator(`a[href="#/c/${c.entityKey}"]`) });
+  await expect(card).toHaveCount(1, { timeout: 60_000 });
+  // Cards are checked when they come into view.
+  await card.scrollIntoViewIfNeeded();
+  await expect(card.locator('[data-status]').first()).toHaveAttribute('data-status', 'verified', { timeout: 90_000 });
+  const days = card.locator('.ccard-days');
+  const daysBefore = Number(await days.getAttribute('data-days'));
+
+  // The card's own Keep alive opens the dialog in place: the library stays behind it.
+  await card.getByRole('button', { name: 'Keep alive…' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Keep this capture available' });
+  await expect(dialog).toBeVisible();
+  await expect(page).toHaveURL(/#\/library/);
+  await dialog.getByRole('radio', { name: '30 days' }).check();
+  await expect(start(dialog)).toBeEnabled({ timeout: 30_000 });
+  await runAll(dialog);
+  // The newest capture's own record was extended (spec 12.3), read from the chain.
+  expect((await arkivBlock(c.entityKey)) - blockBefore).toBe(blocksForDays(30));
+
+  await dialog.getByRole('button', { name: 'Done' }).click();
+  await expect(dialog).toBeHidden();
+  // The card counts up to the record's new end, about 30 days later than before.
+  await expect.poll(async () => Number(await days.getAttribute('data-days')), { timeout: 30_000 }).toBeGreaterThanOrEqual(daysBefore + 29);
+  await expect.poll(async () => Number(await days.textContent()), { timeout: 10_000 }).toBeGreaterThanOrEqual(daysBefore + 29);
+  await expect(page).toHaveURL(/#\/library/);
+});
