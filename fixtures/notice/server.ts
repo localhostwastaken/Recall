@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { FIXTURE_OWNER, branchJson, buildFixtureRepos, repoJson, type FixtureRepo } from './gitRepo.ts';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const certDir = process.env.CERT_DIR ?? path.join(here, '.certs');
@@ -21,6 +22,51 @@ const big = (() => {
   while (Buffer.byteLength(body) < 100_500) body += row;
   return Buffer.from(body + '</body></html>\n');
 })();
+
+// GitHub-like routes for the .git adapter (R46), on any fixture host (api.github.recall.test,
+// codeload.github.recall.test or notice.recall.test):
+//   GET /repos/recall-fixture/<demo|tampered>/branches/main   the branch JSON (commit + tree ids)
+//   GET /repos/recall-fixture/<demo|tampered>                 { default_branch: "main" }
+//   GET /recall-fixture/<demo|tampered>/tar.gz/<commit>        the codeload-style tarball
+//   GET /recall-fixture/demo/tar.gz/<commit>/tampered          the demo commit with one file changed
+// "tampered" names the honest tree in its JSON but serves a tarball that does not hash to it.
+const git = buildFixtureRepos(path.join(here, 'content', 'repo'));
+const repos: Record<string, FixtureRepo> = { [git.good.repo]: git.good, [git.tampered.repo]: git.tampered };
+console.log(`git fixture: ${FIXTURE_OWNER}/${git.good.repo} commit ${git.good.commitSha} tree ${git.good.treeSha}`);
+
+function sendWith(res: ServerResponse, type: string, body: Buffer, extra: Record<string, string>): void {
+  res.writeHead(200, {
+    'Content-Type': type,
+    'Content-Length': body.length,
+    'Content-Encoding': 'identity',
+    'Cache-Control': 'no-store',
+    Connection: 'close',
+    ...extra,
+  });
+  res.end(body);
+}
+
+/** Serves a GitHub-like route, or returns false. */
+function serveGit(req: IncomingMessage, res: ServerResponse, url: string): boolean {
+  const host = (req.headers.host ?? 'api.github.recall.test').replace(/:\d+$/, '').toLowerCase();
+  const api = /^\/repos\/([^/]+)\/([^/]+)(\/branches\/main)?$/.exec(url);
+  if (api && api[1] === FIXTURE_OWNER && repos[api[2]!]) {
+    const r = repos[api[2]!]!;
+    const body = api[3] ? branchJson(r, host) : repoJson(r);
+    sendWith(res, 'application/json; charset=utf-8', body, { 'Access-Control-Allow-Origin': '*' });
+    return true;
+  }
+  const tgz = /^\/([^/]+)\/([^/]+)\/tar\.gz\/([0-9a-f]{40})(\/tampered)?$/.exec(url);
+  if (tgz && tgz[1] === FIXTURE_OWNER && repos[tgz[2]!] && repos[tgz[2]!]!.commitSha === tgz[3]) {
+    const r = repos[tgz[2]!]!;
+    const body = tgz[4] ? (r === git.good ? git.tamperedTarGzOfGood : r.tarGz) : r.tarGz;
+    sendWith(res, 'application/x-gzip', body, {
+      'Content-Disposition': `attachment; filename=${r.repo}-${r.commitSha}.tar.gz`,
+    });
+    return true;
+  }
+  return false;
+}
 
 const script = Buffer.from(
   '<!doctype html>\n<html><head><meta charset="utf-8"><title>Script</title></head>' +
@@ -74,6 +120,7 @@ const server = https.createServer(
       return send(res, 200, 'application/json', Buffer.from(JSON.stringify({ v }) + '\n'));
     }
     if (req.method !== 'GET') return send(res, 405, 'text/plain', Buffer.from('method not allowed\n'));
+    if (serveGit(req, res, url)) return;
     switch (url) {
       case '/notice':
         return send(res, 200, H, html[version]);

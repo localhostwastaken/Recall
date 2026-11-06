@@ -37,7 +37,9 @@ services:
     ports:
       - "127.0.0.1:1643:1643"
   # TLS 1.2-only fixture website the witness captures; reachable on the
-  # `recall` network as notice.recall.test:443 and on the host at :443.
+  # `recall` network as notice.recall.test:443 and on the host at :443. It also
+  # plays GitHub for the .git adapter (R46) as api.github.recall.test and
+  # codeload.github.recall.test (same server, same cert).
   notice:
     build: ../fixtures/notice
     ports:
@@ -48,9 +50,11 @@ services:
       recall:
         aliases:
           - notice.recall.test
+          - api.github.recall.test
+          - codeload.github.recall.test
   # Recall witness (witness/, patched TLSNotary verifier) on :7047. Dev CA mode:
-  # trusts ONLY the fixture CA, and /proxy may dial notice.recall.test at its
-  # private Docker address. The key is Hardhat account #2: public and test-only
+  # trusts ONLY the fixture CA, and /proxy may dial notice.recall.test and
+  # api.github.recall.test at their private Docker address. The key is Hardhat account #2: public and test-only
   # (DEVNET_WITNESS_KEY in e2e/fixtures/keys.ts). Never put a real key here.
   witness:
     build: ../witness
@@ -59,7 +63,7 @@ services:
     environment:
       WITNESS_PRIVATE_KEY: "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a"
       WITNESS_DEV_CA_DER: /certs/ca.der
-      WITNESS_DEV_ALLOW_HOSTS: notice.recall.test
+      WITNESS_DEV_ALLOW_HOSTS: notice.recall.test,api.github.recall.test
     volumes:
       - ../fixtures/notice/.certs:/certs:ro
     networks:
