@@ -4,7 +4,7 @@ import { expect, test, type Page, type Worker } from '@playwright/test';
 import { createWalletClient, http, type Address, type Hex } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { gnosis } from 'viem/chains';
-import { launchWithExtension, NOTICE_HOST, type ExtensionSession } from '../fixtures/extension';
+import { dumpTabsOnFailure, launchWithExtension, NOTICE_HOST, type ExtensionSession } from '../fixtures/extension';
 import { fundWallet } from '../fixtures/fund';
 import { BEE_COMPOSE_FAUCET_KEY, DEVNET_WITNESS_ADDRESS } from '../fixtures/keys';
 import { installMockWallet } from '../fixtures/mockWallet';
@@ -212,6 +212,10 @@ test.describe('@p2 capture first', () => {
     walletKey = generatePrivateKey();
     await fundWallet(privateKeyToAccount(walletKey).address, 10n * 10n ** 16n);
     stamp = (await api<{ address: Address }>({ type: 'recall.getStampAddress' })).address;
+  });
+
+  test.afterEach(async ({}, testInfo) => {
+    await dumpTabsOnFailure(ext?.context, testInfo);
   });
 
   test.afterAll(async () => {

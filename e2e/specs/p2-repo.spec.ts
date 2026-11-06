@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { expect, test, type Page, type Worker } from '@playwright/test';
 import { http, sha256, type Address, type Hex } from 'viem';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
-import { launchWithExtension, type ExtensionSession } from '../fixtures/extension';
+import { dumpTabsOnFailure, launchWithExtension, type ExtensionSession } from '../fixtures/extension';
 import { ensureArkivGas, fundWallet } from '../fixtures/fund';
 import { DEVNET_WITNESS_ADDRESS } from '../fixtures/keys';
 import { installMockWallet } from '../fixtures/mockWallet';
@@ -192,14 +192,7 @@ test.describe('@p2 repo', () => {
   });
 
   test.afterEach(async ({}, testInfo) => {
-    if (testInfo.status === testInfo.expectedStatus || !ext) return;
-    // The persistent context gets no automatic screenshots: keep what each open tab shows.
-    for (const [i, p] of ext.context.pages().entries()) {
-      if (p.isClosed() || !/^(http|chrome-extension)/.test(p.url())) continue;
-      const text = await p.locator('body').innerText({ timeout: 5_000 }).catch((e) => String(e));
-      console.log(`--- tab ${i} ${p.url()}\n${text.slice(0, 4_000)}`);
-      await p.screenshot({ path: testInfo.outputPath(`tab-${i}.png`), fullPage: true }).catch(() => undefined);
-    }
+    await dumpTabsOnFailure(ext?.context, testInfo);
   });
 
   test.afterAll(async () => {

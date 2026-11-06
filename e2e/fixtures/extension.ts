@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { chromium, type BrowserContext, type Worker } from '@playwright/test';
+import { chromium, type BrowserContext, type TestInfo, type Worker } from '@playwright/test';
 
 /** Output of `npm run build` in `extension/` (see extension/README.md). */
 export const EXTENSION_BUILD_DIR = resolve(
@@ -103,4 +103,19 @@ export async function tabIdFor(serviceWorker: Worker, urlPattern: string): Promi
   }, urlPattern);
   if (id === null) throw new Error(`no tab matches ${urlPattern}`);
   return id;
+}
+
+/**
+ * For an afterEach hook: when the test failed, prints what each open tab shows and saves a
+ * screenshot of it (a persistent context gets no automatic screenshots). Every step is bounded:
+ * a background tab in headed Chrome may never paint, so a screenshot must not wait for it.
+ */
+export async function dumpTabsOnFailure(context: BrowserContext | undefined, testInfo: TestInfo): Promise<void> {
+  if (!context || testInfo.status === testInfo.expectedStatus) return;
+  for (const [i, p] of context.pages().entries()) {
+    if (p.isClosed() || !/^(http|chrome-extension)/.test(p.url())) continue;
+    const text = await p.locator('body').innerText({ timeout: 3_000 }).catch((e) => String(e));
+    console.log(`--- tab ${i} ${p.url()}\n${text.slice(0, 4_000)}`);
+    await p.screenshot({ path: testInfo.outputPath(`tab-${i}.png`), timeout: 5_000 }).catch(() => undefined);
+  }
 }
