@@ -267,8 +267,21 @@
   min-width: 0;
 }
 
+/* The verdict answers the button: it fades in where the dashed slot was. */
 .try-left .verdict {
   max-width: none;
+  animation: try-fade 250ms var(--ease-out);
+}
+
+@keyframes try-fade {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 /* Where the verdict lands: dashed until the checks have run (never a colour before a result). */
@@ -375,6 +388,17 @@
   cursor: pointer;
 }
 
+/* "How?" looks compact (36 px) but takes a 44 px tap. */
+.try-how > summary {
+  position: relative;
+}
+
+.try-how > summary::after {
+  content: '';
+  position: absolute;
+  inset: -4px -8px;
+}
+
 .try-how > summary::-webkit-details-marker,
 .more-ways > summary::-webkit-details-marker {
   display: none;
@@ -427,6 +451,29 @@
 
 .more-ways-body {
   margin-top: var(--space-4);
+}
+
+/* The older tools under "More ways to check": two cards of equal size, with quieter titles
+   than the section's own. */
+.more-ways-body .home-grid {
+  align-items: stretch;
+}
+
+.more-ways-body .panel {
+  padding: var(--space-5);
+}
+
+.more-ways-body .section-title {
+  margin: 0;
+  font-size: 20px;
+  line-height: 28px;
+}
+
+@media (min-width: 900px) {
+  .more-ways-body .home-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-5);
+  }
 }
 
 /* 3. Library preview (LibraryPreview renders its own section): the same rhythm as the others. */
@@ -714,7 +761,8 @@
     margin-bottom: var(--space-6);
   }
 
-  .sp-card {
+  .sp-card,
+  .more-ways-body .panel {
     padding: var(--space-4);
   }
 
@@ -725,7 +773,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .try-check.is-revealed .try-badge {
+  .try-check.is-revealed .try-badge,
+  .try-left .verdict {
     animation: none;
   }
 
