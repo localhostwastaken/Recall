@@ -154,16 +154,16 @@ export function Capture({ entityKey }: { entityKey: Hex }) {
         />
       ) : null}
       <div className="page-actions">
-        <button type="button" className="btn btn-secondary" disabled={!v.evidenceBytes} onClick={() => downloadEvidence(v)}>
-          <Download size={16} strokeWidth={1.75} aria-hidden="true" />
-          Download evidence file
-        </button>
         {v.facts ? (
           <a className="btn btn-primary" href={`#/u/${v.facts.urlHash}`}>
             <History size={16} strokeWidth={1.75} aria-hidden="true" />
             View timeline
           </a>
         ) : null}
+        <button type="button" className="btn btn-secondary" disabled={!v.evidenceBytes} onClick={() => downloadEvidence(v)}>
+          <Download size={16} strokeWidth={1.75} aria-hidden="true" />
+          Download evidence file
+        </button>
         {v.record && isVerifiedReport(v.report) ? (
           <KeepAlive
             target={{ entityKeys: [v.record.entityKey], batchId: v.record.batchId }}
