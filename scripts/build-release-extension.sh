@@ -65,6 +65,15 @@ name="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(proc
 connectable="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).externally_connectable.matches.join(" "))' "$OUT/manifest.json")"
 [ "$connectable" = "https://localhostwastaken.github.io/*" ] || fail "externally_connectable is '$connectable', expected only https://localhostwastaken.github.io/*"
 
+# The release manifest carries the fixed public key (utils/recallManifest.js), so every "Load unpacked"
+# of the release gets the same extension ID, the one the web app defaults to.
+ext_id="$(node -e '
+  const m = require(process.argv[1]);
+  const manifest = JSON.parse(require("fs").readFileSync(process.argv[2], "utf8"));
+  if (manifest.key !== m.RELEASE_KEY) { console.error("manifest key is missing or is not the release key"); process.exit(1); }
+  process.stdout.write(m.extensionIdFromKey(manifest.key));
+' "$EXT/packages/extension/utils/recallManifest.js" "$OUT/manifest.json")" || fail "the release manifest has no fixed key"
+
 # Dev-only markers: the Playwright test hook, the dev build object, the dev label.
 for marker in captureForTest __RECALL_DEV__ __RECALL_DEV_CA_DER_B64__ devCa 'Recall (dev)'; do
   if grep -rlF -- "$marker" "$OUT" >/dev/null; then
@@ -77,4 +86,4 @@ if [ -f "$DEV_CA" ]; then
   if grep -rlF -- "${ca_b64:0:64}" "$OUT" >/dev/null; then fail "the dev CA is embedded"; fi
 fi
 
-echo "Release build OK: $OUT (name \"$name\", Mozilla roots, no dev hook)"
+echo "Release build OK: $OUT (name \"$name\", extension ID $ext_id, Mozilla roots, no dev hook)"

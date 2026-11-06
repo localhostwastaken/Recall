@@ -477,18 +477,27 @@ export function Settings() {
           <h2 id="extension-heading" className="section-title">
             Extension
           </h2>
-          <Field
-            label="Extension ID"
-            data-settings-field=""
-            value={draft.extensionId}
-            error={errors.extensionId}
-            reserveError
-            spellCheck={false}
-            autoComplete="off"
-            helper="Find it on chrome://extensions."
-            onChange={(e) => setField('extensionId', e.target.value)}
-            onBlur={(e) => validate('extensionId', e.target.value)}
-          />
+          <div className="settings-field">
+            <Field
+              label="Extension ID"
+              data-settings-field=""
+              value={draft.extensionId}
+              error={errors.extensionId}
+              reserveError
+              spellCheck={false}
+              autoComplete="off"
+              helper={
+                defaults.extensionId
+                  ? 'Advanced. The Recall extension you load from the release is found automatically. Change this only for a build you made yourself; its ID is on chrome://extensions.'
+                  : 'Find it on chrome://extensions.'
+              }
+              onChange={(e) => setField('extensionId', e.target.value)}
+              onBlur={(e) => validate('extensionId', e.target.value)}
+            />
+            <div className="field-actions">
+              <ResetButton what="Extension ID" onClick={() => setField('extensionId', defaults.extensionId)} />
+            </div>
+          </div>
           <p className="muted" role="status" data-testid="extension-status">
             {ext.kind === 'checking' ? 'Checking the extension…' : null}
             {ext.kind === 'connected' ? (

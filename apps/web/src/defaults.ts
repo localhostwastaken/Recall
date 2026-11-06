@@ -30,6 +30,26 @@ export function getNetName(): NetName {
 export const DEVNET_WITNESS: Address = '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC';
 /** The live Recall witness (its key stays on the operator's machine). */
 export const LIVE_WITNESS: Address = '0xC9319e18e86cd7EB653c0Ed0693c0cf5B63db37D';
+/**
+ * The fixed ID of the release extension. Its manifest carries a public key (extension/packages/
+ * extension/utils/recallManifest.js), and Chrome derives the ID from that key, so every
+ * "Load unpacked" of the release gets this ID. test/extensionId.test.ts recomputes it from the key.
+ */
+export const RELEASE_EXTENSION_ID = 'mgpclfpdgpinofgpgfeodcbmlfaglmnp';
+/** A Chrome extension ID: 32 letters from a to p. */
+export const EXTENSION_ID = /^[a-p]{32}$/;
+
+/**
+ * The extension the app talks to unless the person names another in Settings: the release
+ * extension on the live network. `VITE_RECALL_EXTENSION_ID` overrides it at build time. The local
+ * devnet has none, because its extension is a dev build with a random ID (each test profile has its own).
+ */
+export function defaultExtensionId(): string {
+  const env = import.meta.env.VITE_RECALL_EXTENSION_ID as string | undefined;
+  if (env && EXTENSION_ID.test(env)) return env;
+  return getNetName() === 'live' ? RELEASE_EXTENSION_ID : '';
+}
+
 /** The label of the default witness. The Settings list adds "(default)" after it. */
 export const DEFAULT_WITNESS_LABEL = 'Recall Witness';
 

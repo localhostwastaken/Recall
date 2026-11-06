@@ -1,7 +1,7 @@
 import { ADDRESS_ERROR, URL_ERROR, checkAddress, checkUrl } from '@recall/net';
 import { useEffect, useState } from 'react';
 import type { Address } from 'viem';
-import { DEFAULT_WITNESS_LABEL, baseNetConfig, defaultWitnessAddress } from './defaults';
+import { DEFAULT_WITNESS_LABEL, EXTENSION_ID, baseNetConfig, defaultExtensionId, defaultWitnessAddress } from './defaults';
 
 /** Kept for settings saved by older versions; the app itself is light only (see applyTheme). */
 export type Theme = 'system' | 'light' | 'dark';
@@ -21,6 +21,7 @@ export type Settings = {
   downloadUrls: string[];
   uploadUrl: string;
   gnosisRpcUrl: string;
+  /** The extension to talk to. The default is the release extension's fixed ID (defaults.ts). */
   extensionId: string;
   theme: Theme;
 };
@@ -28,8 +29,7 @@ export type Settings = {
 const KEY = 'recall.web.settings.v1';
 const CHANGED = 'recall:settings-changed';
 
-/** A Chrome extension ID: 32 letters from a to p. */
-export const EXTENSION_ID = /^[a-p]{32}$/;
+export { EXTENSION_ID };
 export const MAX_LABEL = 40;
 export const DEFAULT_ADDED_LABEL = 'Added witness';
 
@@ -155,7 +155,6 @@ export function fieldError(key: FieldKey, value: string): string | undefined {
 
 export function defaultSettings(): Settings {
   const base = baseNetConfig();
-  const ext = import.meta.env.VITE_RECALL_EXTENSION_ID as string | undefined;
   return {
     pinnedWitnesses: [{ address: defaultWitnessAddress(), label: DEFAULT_WITNESS_LABEL }],
     arkivRpcUrl: base.arkiv.rpcUrl,
@@ -163,7 +162,7 @@ export function defaultSettings(): Settings {
     downloadUrls: [...base.swarm.downloadUrls],
     uploadUrl: base.swarm.uploadUrl,
     gnosisRpcUrl: base.gnosis.rpcUrl,
-    extensionId: ext && EXTENSION_ID.test(ext) ? ext : '',
+    extensionId: defaultExtensionId(),
     theme: 'system',
   };
 }
@@ -201,9 +200,8 @@ function sanitize(p: unknown): Partial<Settings> {
     if (urls.length > 0) out.downloadUrls = urls;
   }
   if (typeof o.arkivAccessKey === 'string') out.arkivAccessKey = o.arkivAccessKey.trim();
-  if (typeof o.extensionId === 'string' && (o.extensionId === '' || EXTENSION_ID.test(o.extensionId))) {
-    out.extensionId = o.extensionId;
-  }
+  // An empty or malformed ID is no choice: the default applies (never "no extension" by accident).
+  if (typeof o.extensionId === 'string' && EXTENSION_ID.test(o.extensionId)) out.extensionId = o.extensionId;
   if (o.theme === 'light' || o.theme === 'dark' || o.theme === 'system') out.theme = o.theme;
   return out;
 }

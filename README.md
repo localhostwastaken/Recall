@@ -177,8 +177,9 @@ Download `recall-extension.zip` from the
 pnpm extension:zip     # release build (Mozilla roots, no dev hooks) -> dist/recall-extension.zip
 ```
 1. Unzip it, open `chrome://extensions`, turn on Developer mode, "Load unpacked", pick the folder.
-2. Copy the extension's ID from `chrome://extensions` into the app's **Settings > Extension ID**
-   (the Storage page needs it to hand batches to the extension).
+2. Nothing to paste: the release extension always has the ID `mgpclfpdgpinofgpgfeodcbmlfaglmnp` (its
+   manifest carries a fixed public key), and the app talks to that ID by default. Only for a build you
+   made yourself, copy its ID from `chrome://extensions` into **Settings > Extension ID** (advanced).
 3. Funds: tGLM for Arkiv writes from <https://hub.arkiv.network/faucet>; xBZZ and a little xDAI on
    Gnosis for storage. There is no public xBZZ faucet: we used a Swarm booth gift, or ask the team.
 4. Buy storage once on the app's **Storage** page: it offers 7 or 30 days (about 0.32 xBZZ per batch
