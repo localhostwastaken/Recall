@@ -10,7 +10,27 @@ export type Route =
   | { name: 'storage' }
   | { name: 'settings' }
   | { name: 'approve'; captureId: string | null }
+  | { name: 'library'; q: string; type: LibraryType; sort: LibrarySort }
   | { name: 'not-found'; path: string };
+
+export type LibraryType = 'all' | 'page' | 'repo';
+export type LibrarySort = 'time' | 'newest' | 'ending';
+export type LibraryView = { q: string; type: LibraryType; sort: LibrarySort };
+
+const LIBRARY_TYPES: readonly LibraryType[] = ['all', 'page', 'repo'];
+const LIBRARY_SORTS: readonly LibrarySort[] = ['time', 'newest', 'ending'];
+const oneOf = <T extends string>(v: string | null, allowed: readonly T[], fallback: T): T =>
+  allowed.includes(v as T) ? (v as T) : fallback;
+
+/** `#/library?q=&type=&sort=`: the library view in the address, so a view can be shared. Defaults are left out. */
+export function libraryHash(p: Partial<LibraryView>): string {
+  const params = new URLSearchParams();
+  if (p.q) params.set('q', p.q);
+  if (p.type && p.type !== 'all') params.set('type', p.type);
+  if (p.sort && p.sort !== 'time') params.set('sort', p.sort);
+  const qs = params.toString();
+  return qs ? `#/library?${qs}` : '#/library';
+}
 
 const KEY = /^0x[0-9a-fA-F]{64}$/;
 
@@ -27,6 +47,15 @@ export function parseHash(hash: string): Route {
       return { name: 'settings' };
     case '/approve':
       return { name: 'approve', captureId: null };
+    case '/library': {
+      const params = new URLSearchParams(hash.replace(/^#/, '').split('?').slice(1).join('?'));
+      return {
+        name: 'library',
+        q: params.get('q') ?? '',
+        type: oneOf(params.get('type'), LIBRARY_TYPES, 'all'),
+        sort: oneOf(params.get('sort'), LIBRARY_SORTS, 'time'),
+      };
+    }
   }
   // `#/approve/:captureId` (the extension's 128-bit id; `?ext=` names the extension).
   const approve = /^\/approve\/([0-9a-f]{32})$/.exec(path);
@@ -49,6 +78,8 @@ export function routeId(route: Route): string {
       return `url:${route.urlHash}`;
     case 'approve':
       return `approve:${route.captureId ?? ''}`;
+    case 'library':
+      return `library:${libraryHash(route)}`;
     default:
       return route.name;
   }
