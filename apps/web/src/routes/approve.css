@@ -4,7 +4,8 @@
 }
 
 .approve-proves,
-.approve-save {
+.approve-save,
+.approve-checks {
   display: grid;
   gap: var(--space-2);
   max-width: var(--measure);
@@ -137,5 +138,63 @@
 @media (max-width: 599px) {
   .approve-choices {
     min-height: calc(2 * var(--control-h) + var(--space-2));
+  }
+}
+
+/* Layout of the actions (user feedback, 7 Nov): a sticky bar across the bottom cut the scrolling
+   content in half. Desktop: the content scrolls at full height on the left and the actions live in
+   a sticky side panel. Narrower screens: the actions sit at the end of the page like any form, so
+   nothing is covered. CSS only; the page's markup is unchanged. */
+@media (min-width: 1024px) {
+  .approve:has(> .approve-bar) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(18rem, 22rem);
+    column-gap: var(--space-6);
+    align-items: start;
+  }
+
+  .approve:has(> .approve-bar) > * {
+    grid-column: 1;
+  }
+
+  .approve:has(> .approve-bar) > h1 {
+    grid-column: 1 / -1;
+  }
+
+  .approve:has(> .approve-bar) > .approve-bar {
+    grid-column: 2;
+    grid-row: 2 / span 40;
+    position: sticky;
+    top: calc(var(--header-h, 64px) + var(--space-5));
+    bottom: auto;
+    margin-top: var(--space-5);
+    max-width: none;
+    padding: var(--space-5);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-2);
+    background: var(--surface);
+  }
+
+  .approve-bar .approve-choices,
+  .approve-bar .approve-more {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .approve-bar .approve-choices .btn,
+  .approve-bar .approve-more .btn {
+    width: 100%;
+  }
+
+  .approve-bar .approve-more .btn-ghost {
+    width: auto;
+    align-self: center;
+  }
+}
+
+@media (max-width: 1023px) {
+  .approve-bar {
+    position: static;
+    border-top: 1px solid var(--border);
   }
 }
