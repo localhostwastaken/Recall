@@ -292,6 +292,11 @@ now on show `"readonly":true`.
 - **64 KB response cap, static HTML only.** A capture holds at most about 64 KB of response. What is
   captured is the HTML the server sent: pages that build their content with JavaScript capture
   nearly empty, and previews never run the page's JavaScript (sandboxed iframe).
+- **Repositories GitHub's archive changes are refused.** A repo capture rebuilds the git tree hash
+  from GitHub's download of the commit, so it fails closed when that archive differs from the tree:
+  `.gitattributes` with `export-ignore`, `export-subst` or line-ending conversion (e.g. `eol=crlf`),
+  and submodules. A repo must be captured under its current name (a renamed repo's old name answers
+  301). Code archives are capped at 25 MB.
 - **About 77 MB of upload per capture.** MPC setup sends roughly 77 MB from the browser to the
   witness (measured: 77.0 MB in / 3.7 MB out). On a fast link a capture takes 5 to 30 s; on a slow
   link (a 5 Mbps venue uplink, in our case) it times out.
