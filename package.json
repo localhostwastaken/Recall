@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "license": "MIT",
+  "packageManager": "pnpm@10.20.0",
   "scripts": {
     "devnet:up": "bash devnet/up.sh",
     "devnet:down": "bash devnet/down.sh",

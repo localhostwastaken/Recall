@@ -25,14 +25,17 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-      - uses: actions/setup-node@v4
+      # First-party actions are pinned to full commit SHAs (the tag is the trailing comment).
+      # pnpm comes from corepack, at the version in the root package.json "packageManager"
+      # field; there is no third-party action in this job.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-          cache: pnpm
+      - name: Enable pnpm (corepack)
+        run: |
+          corepack enable
+          pnpm --version
       # Only the app and the workspace packages it uses.
       - run: pnpm install --frozen-lockfile --filter 'web...'
       # The app is served at /Recall/app/ here and at /bzz/<ref>/ on Swarm. Its asset URLs are
@@ -53,8 +56,8 @@ jobs:
           touch _site/.nojekyll
           test -f _site/notice/index.html
           test -f _site/app/index.html
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:
           path: _site
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
