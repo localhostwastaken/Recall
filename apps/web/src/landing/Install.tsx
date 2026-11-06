@@ -5,10 +5,27 @@ import { OutLink } from './Sponsors';
 
 export const ARKIV_FAUCET_URL = 'https://hub.arkiv.network/faucet';
 
+// Each step shows a real, cropped screenshot (760 x 475, drawn at 2x) with the control to press
+// ringed in orange. Relative paths: the app is served from a subfolder and from Swarm.
 const STEPS = [
-  { title: 'Download', text: 'Get the zip from the GitHub release and unzip it.' },
-  { title: 'Load it', text: 'Open chrome://extensions, turn on Developer mode, choose Load unpacked.' },
-  { title: 'Capture', text: 'Open any public page and press Capture in the Recall popup.' },
+  {
+    title: 'Download',
+    text: 'Get the zip from the GitHub release and unzip it.',
+    shot: './install/step-1.webp',
+    alt: 'The GitHub release page, with recall-extension.zip highlighted under Assets',
+  },
+  {
+    title: 'Load it',
+    text: 'Open chrome://extensions, turn on Developer mode, choose Load unpacked.',
+    shot: './install/step-2.webp',
+    alt: 'chrome://extensions with Developer mode on and Load unpacked highlighted',
+  },
+  {
+    title: 'Capture',
+    text: 'Open any public page and press Capture in the Recall popup.',
+    shot: './install/step-3.webp',
+    alt: 'The Recall popup with the Capture this page button highlighted',
+  },
 ] as const;
 
 /** Section 5, "Capture your own in two minutes": three steps and the download. */
@@ -22,6 +39,7 @@ export function Install() {
       <ol className="inst-grid">
         {STEPS.map((s, i) => (
           <li key={s.title} className="inst-step">
+            <img className="inst-shot" src={s.shot} alt={s.alt} width={760} height={475} loading="lazy" decoding="async" />
             <span className="inst-n" aria-hidden="true">
               {i + 1}
             </span>

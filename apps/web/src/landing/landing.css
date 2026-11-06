@@ -571,6 +571,25 @@
   border-radius: var(--radius-2, 14px);
 }
 
+/* A real screenshot of the step, light-themed; the ring around the control is in the image. */
+.inst-shot {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+  margin-bottom: var(--space-2);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2, 14px);
+}
+
+/* Dark: a firmer frame and a touch less brightness, so the light screenshots don't glare. */
+[data-theme='dark'] .inst-shot {
+  border-color: var(--border-strong);
+  filter: brightness(0.92);
+}
+
 .inst-n {
   font-family: var(--font-display);
   font-weight: 800;
