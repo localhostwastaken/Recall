@@ -15,7 +15,6 @@ use axum::{
 };
 use bytes::BytesMut;
 use futures_util::SinkExt;
-use rangeset::prelude::RangeSet;
 use serde::{Deserialize, Serialize};
 use alloy_signer_local::PrivateKeySigner;
 use recall_witness::{attest, gates};
@@ -26,7 +25,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tlsn::transcript::PartialTranscript;
 use tlsn::webpki::{CertificateDer, RootCertStore};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::{oneshot, Mutex};
+use futures_util::future::{AbortHandle, Abortable};
+use tokio::sync::{oneshot, Mutex, OwnedSemaphorePermit, Semaphore};
 use tokio::time::timeout;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tower_http::cors::CorsLayer;
@@ -39,6 +39,13 @@ use ws_stream_tungstenite::WsStream;
 /// Recall: how long a registered session (and its single /proxy relay) may
 /// live: 30 s to connect the prover + 120 s verification + 30 s reveal config.
 const SESSION_TTL: Duration = Duration::from_secs(180);
+
+/// Recall: how long a new /session socket may take to send `register`.
+const REGISTER_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Recall: cap on each incoming /session message and frame (register and
+/// reveal_config are small JSON; the tungstenite default is 64 MiB).
+const SESSION_MAX_MESSAGE: usize = 64 * 1024;
 
 /// Reads an env var, treating an empty value as unset.
 fn env_var(name: &str) -> Option<String> {
@@ -118,9 +125,14 @@ async fn main() {
         max_sent: env_usize("MAX_SENT_DATA", 4096),
         max_recv: env_usize("MAX_RECV_DATA", 65536),
     };
+    let max_sessions = env_usize("MAX_SESSIONS", 3);
+    if max_sessions == 0 {
+        error!("MAX_SESSIONS must be at least 1");
+        std::process::exit(1);
+    }
     info!(
-        "Limits: maxSentData <= {}, maxRecvData <= {}",
-        limits.max_sent, limits.max_recv
+        "Limits: maxSentData <= {}, maxRecvData <= {}, concurrent sessions <= {}",
+        limits.max_sent, limits.max_recv, max_sessions
     );
 
     // Create application state with session storage and the witness config
@@ -130,6 +142,7 @@ async fn main() {
         root_store: Arc::new(root_store),
         dev_allow_hosts: Arc::new(dev_allow_hosts),
         limits,
+        session_slots: Arc::new(Semaphore::new(max_sessions)),
     });
 
     // Build router with routes
@@ -296,6 +309,11 @@ pub(crate) struct SessionData {
     pub(crate) created_at: Instant,
     /// Recall: a session may open exactly one /proxy relay.
     pub(crate) proxy_used: bool,
+    /// Recall: aborts that relay when the session is cleaned up.
+    pub(crate) proxy_abort: Option<AbortHandle>,
+    /// Recall: the registered transcript sizes (they bound the relay bytes).
+    pub(crate) max_sent: usize,
+    pub(crate) max_recv: usize,
 }
 
 // Application state for sharing data between handlers
@@ -310,6 +328,8 @@ pub(crate) struct AppState {
     pub(crate) dev_allow_hosts: Arc<Vec<String>>,
     /// Recall: server caps on maxSentData/maxRecvData.
     pub(crate) limits: gates::Limits,
+    /// Recall: admission control, one permit per live session (MAX_SESSIONS).
+    pub(crate) session_slots: Arc<Semaphore>,
 }
 
 // Query parameters for verifier WebSocket connection
@@ -411,7 +431,8 @@ pub(crate) async fn session_ws_handler(
     ws: WsUpgrade,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_session_websocket(socket, state))
+    ws.max_incoming(SESSION_MAX_MESSAGE)
+        .on_upgrade(move |socket| handle_session_websocket(socket, state))
 }
 
 /// Helper to send typed server messages
@@ -444,8 +465,17 @@ async fn handle_session_websocket(mut socket: TungsteniteStream, state: Arc<AppS
     let session_id = Uuid::new_v4().to_string();
     info!("[{}] New session WebSocket connected", session_id);
 
-    // Wait for "register" message first
-    let register_msg = match socket.next().await {
+    // Wait for "register" message first (Recall: within REGISTER_TIMEOUT)
+    let first = match timeout(REGISTER_TIMEOUT, socket.next()).await {
+        Ok(first) => first,
+        Err(_) => {
+            warn!("[{}] No register message within {:?}", session_id, REGISTER_TIMEOUT);
+            send_error(&mut socket, gates::REGISTER_TIMEOUT).await;
+            let _ = socket.close(None).await;
+            return;
+        }
+    };
+    let register_msg = match first {
         Some(Ok(Message::Text(text))) => text,
         Some(Ok(msg)) => {
             error!("[{}] Expected text message, got: {:?}", session_id, msg);
@@ -486,12 +516,19 @@ async fn handle_session_websocket(mut socket: TungsteniteStream, state: Arc<AppS
         }
     };
 
+    // Recall: the keys are client-controlled; log a few, truncated.
+    let keys: Vec<String> = session_data
+        .keys()
+        .take(4)
+        .map(|k| k.chars().take(32).collect())
+        .collect();
     info!(
-        "[{}] Received registration: maxRecvData={}, maxSentData={}, sessionData keys: {:?}",
+        "[{}] Received registration: maxRecvData={}, maxSentData={}, sessionData: {} key(s) {:?}",
         session_id,
         max_recv_data,
         max_sent_data,
-        session_data.keys().collect::<Vec<_>>()
+        session_data.len(),
+        keys
     );
 
     // Recall gates at registration: server caps on the transcript sizes, and a
@@ -503,6 +540,18 @@ async fn handle_session_websocket(mut socket: TungsteniteStream, state: Arc<AppS
         Err(msg) => {
             warn!("[{}] Registration rejected: {}", session_id, msg);
             send_error(&mut socket, &msg).await;
+            let _ = socket.close(None).await;
+            return;
+        }
+    };
+
+    // Recall: admission control. The permit lives as long as the verifier
+    // task, so at most MAX_SESSIONS MPC sessions run at once.
+    let permit = match state.session_slots.clone().try_acquire_owned() {
+        Ok(permit) => permit,
+        Err(_) => {
+            warn!("[{}] Registration rejected: witness busy", session_id);
+            send_error(&mut socket, gates::BUSY).await;
             let _ = socket.close(None).await;
             return;
         }
@@ -542,6 +591,9 @@ async fn handle_session_websocket(mut socket: TungsteniteStream, state: Arc<AppS
                 prover_socket_tx: Some(prover_socket_tx),
                 created_at: Instant::now(),
                 proxy_used: false,
+                proxy_abort: None,
+                max_sent: max_sent_data,
+                max_recv: max_recv_data,
             },
         );
     }
@@ -563,6 +615,7 @@ async fn handle_session_websocket(mut socket: TungsteniteStream, state: Arc<AppS
             prover_socket_rx,
             result_tx,
             state_clone,
+            permit,
         )
         .await;
     });
@@ -781,13 +834,23 @@ pub(crate) async fn proxy_ws_handler(
     let Some(session_id) = query.session_id else {
         return Err(forbidden(gates::PROXY_SESSION));
     };
-    {
+    // Recall: one relay per active session; cleanup_session aborts it, and its
+    // bytes are bounded by the session's registered sizes plus RELAY_SLACK.
+    let (abort, abort_reg) = AbortHandle::new_pair();
+    let caps = {
         let mut sessions = state.sessions.lock().await;
         match sessions.get_mut(&session_id) {
-            Some(s) if !s.proxy_used && s.created_at.elapsed() < SESSION_TTL => s.proxy_used = true,
+            Some(s) if !s.proxy_used && s.created_at.elapsed() < SESSION_TTL => {
+                s.proxy_used = true;
+                s.proxy_abort = Some(abort.clone());
+                RelayCaps {
+                    up: (s.max_sent + gates::RELAY_SLACK) as u64,
+                    down: (s.max_recv + gates::RELAY_SLACK) as u64,
+                }
+            }
             _ => return Err(forbidden(gates::PROXY_SESSION)),
         }
-    }
+    };
 
     let resolved: Vec<SocketAddr> = match tokio::net::lookup_host((host.as_str(), port)).await {
         Ok(addrs) => addrs.collect(),
@@ -800,13 +863,36 @@ pub(crate) async fn proxy_ws_handler(
         "[Proxy] Session {} relaying to {}:{} via {:?}",
         session_id, host, port, addrs
     );
-    Ok(ws.on_upgrade(move |socket| handle_proxy_connection(socket, host, addrs)))
+    // No single message may exceed the whole client->server budget.
+    Ok(ws
+        .max_incoming(caps.up as usize)
+        .on_upgrade(move |socket| async move {
+            let relay = handle_proxy_connection(socket, host, addrs, caps);
+            if Abortable::new(relay, abort_reg).await.is_err() {
+                info!("[Proxy] Session {} relay aborted at session cleanup", session_id);
+            }
+        }))
+}
+
+/// Recall: byte budgets for one /proxy relay.
+#[derive(Debug, Clone, Copy)]
+struct RelayCaps {
+    /// client -> server (maxSentData + slack)
+    up: u64,
+    /// server -> client (maxRecvData + slack)
+    down: u64,
 }
 
 // Handle the proxy WebSocket connection by bridging to TCP
-// Recall: dials only the pre-checked `addrs` (port 443) and the relay lives at
-// most SESSION_TTL.
-async fn handle_proxy_connection(ws: TungsteniteStream, host: String, addrs: Vec<SocketAddr>) {
+// Recall: dials only the pre-checked `addrs` (port 443), lives at most
+// SESSION_TTL, closes when either direction exceeds its byte cap, and runs as
+// one future (no spawned halves) so aborting it closes both sockets.
+async fn handle_proxy_connection(
+    ws: TungsteniteStream,
+    host: String,
+    addrs: Vec<SocketAddr>,
+    caps: RelayCaps,
+) {
     use futures_util::StreamExt;
 
     let proxy_id = Uuid::new_v4().to_string();
@@ -855,116 +941,116 @@ async fn handle_proxy_connection(ws: TungsteniteStream, host: String, addrs: Vec
     // Split the TCP stream into read and write halves
     let (mut tcp_read, mut tcp_write) = tokio::io::split(tcp_stream);
 
-    // Spawn task to forward WebSocket -> TCP
-    // Read WebSocket Binary messages and write payload to TCP
-    let proxy_id_clone = proxy_id.clone();
-    let ws_to_tcp = tokio::spawn(async move {
+    // WebSocket -> TCP: write Binary payloads to TCP. Ok(total) on a normal
+    // end, Err(total) when the client exceeds caps.up.
+    let ws_to_tcp = async {
         let mut total_bytes = 0u64;
-
         loop {
             match ws_stream.next().await {
-                Some(Ok(msg)) => {
-                    match msg {
-                        Message::Binary(data) => {
-                            let len = data.len();
-                            total_bytes += len as u64;
-
-                            if let Err(e) = tcp_write.write_all(&data).await {
-                                error!("[{}] Failed to write to TCP: {}", proxy_id_clone, e);
-                                break;
-                            }
-                        }
-                        Message::Close(_) => {
-                            info!(
-                                "[{}] WebSocket close frame received, forwarded {} bytes total",
-                                proxy_id_clone, total_bytes
-                            );
-                            break;
-                        }
-                        _ => {
-                            // Ignore Text, Ping, Pong messages for now
-                        }
+                Some(Ok(Message::Binary(data))) => {
+                    total_bytes += data.len() as u64;
+                    if total_bytes > caps.up {
+                        warn!(
+                            "[{}] Client sent more than {} bytes, closing relay",
+                            proxy_id, caps.up
+                        );
+                        return Err(total_bytes);
+                    }
+                    if let Err(e) = tcp_write.write_all(&data).await {
+                        error!("[{}] Failed to write to TCP: {}", proxy_id, e);
+                        break;
                     }
                 }
+                Some(Ok(Message::Close(_))) => {
+                    info!(
+                        "[{}] WebSocket close frame received, forwarded {} bytes total",
+                        proxy_id, total_bytes
+                    );
+                    break;
+                }
+                Some(Ok(_)) => {
+                    // Ignore Text, Ping, Pong messages
+                }
                 Some(Err(e)) => {
-                    error!("[{}] WebSocket read error: {}", proxy_id_clone, e);
+                    error!("[{}] WebSocket read error: {}", proxy_id, e);
                     break;
                 }
                 None => {
                     info!(
                         "[{}] WebSocket stream ended, forwarded {} bytes total",
-                        proxy_id_clone, total_bytes
+                        proxy_id, total_bytes
                     );
                     break;
                 }
             }
         }
+        Ok(total_bytes)
+    };
 
-        total_bytes
-    });
-
-    // Spawn task to forward TCP -> WebSocket
-    // Read from TCP and wrap in WebSocket Binary messages
-    let proxy_id_clone = proxy_id.clone();
-    let tcp_to_ws = tokio::spawn(async move {
+    // TCP -> WebSocket: wrap TCP reads in Binary messages. Err(total) when the
+    // server exceeds caps.down.
+    let tcp_to_ws = async {
         const CHUNK: usize = 8192;
         let mut buf = BytesMut::with_capacity(CHUNK);
         let mut total_bytes = 0u64;
-
         loop {
             buf.reserve(CHUNK);
             match tcp_read.read_buf(&mut buf).await {
                 Ok(0) => {
                     info!(
                         "[{}] TCP read EOF (server closed), forwarded {} bytes to WebSocket",
-                        proxy_id_clone, total_bytes
+                        proxy_id, total_bytes
                     );
                     // Send WebSocket close frame to signal EOF to client
                     if let Err(e) = ws_sink.send(Message::Close(None)).await {
-                        error!("[{}] Failed to send WebSocket close frame: {}", proxy_id_clone, e);
+                        error!("[{}] Failed to send WebSocket close frame: {}", proxy_id, e);
                     }
                     break;
                 }
                 Ok(n) => {
                     total_bytes += n as u64;
+                    if total_bytes > caps.down {
+                        warn!(
+                            "[{}] Server sent more than {} bytes, closing relay",
+                            proxy_id, caps.down
+                        );
+                        let _ = ws_sink.send(Message::Close(None)).await;
+                        return Err(total_bytes);
+                    }
                     let chunk = buf.split().freeze();
-
                     if let Err(e) = ws_sink.send(Message::Binary(chunk)).await {
-                        error!("[{}] Failed to send to WebSocket: {}", proxy_id_clone, e);
+                        error!("[{}] Failed to send to WebSocket: {}", proxy_id, e);
                         break;
                     }
                 }
                 Err(e) => {
-                    error!("[{}] TCP read error: {}", proxy_id_clone, e);
+                    error!("[{}] TCP read error: {}", proxy_id, e);
                     // Send close frame on error too
                     let _ = ws_sink.send(Message::Close(None)).await;
                     break;
                 }
             }
         }
+        Ok(total_bytes)
+    };
 
-        total_bytes
-    });
-
-    // Wait for both tasks to complete (Recall: at most SESSION_TTL)
-    let aborts = [ws_to_tcp.abort_handle(), tcp_to_ws.abort_handle()];
-    let (ws_total, tcp_total) =
-        match timeout(SESSION_TTL, async { tokio::join!(ws_to_tcp, tcp_to_ws) }).await {
-            Ok((ws_result, tcp_result)) => (ws_result.unwrap_or(0), tcp_result.unwrap_or(0)),
-            Err(_) => {
-                warn!("[{}] Proxy relay exceeded {:?}, closing", proxy_id, SESSION_TTL);
-                aborts.iter().for_each(|a| a.abort());
-                (0, 0)
-            }
-        };
-
-    info!(
-        "[{}] Proxy closed: WS→TCP {} bytes, TCP→WS {} bytes",
-        proxy_id, ws_total, tcp_total
-    );
+    // Both directions run until they end normally (like upstream's join); a
+    // cap breach ends both at once. The whole relay lives at most SESSION_TTL.
+    match timeout(SESSION_TTL, async { tokio::try_join!(ws_to_tcp, tcp_to_ws) }).await {
+        Ok(Ok((up, down))) => info!(
+            "[{}] Proxy closed: WS→TCP {} bytes, TCP→WS {} bytes",
+            proxy_id, up, down
+        ),
+        Ok(Err(total)) => warn!(
+            "[{}] Proxy closed: byte cap exceeded ({} bytes in one direction)",
+            proxy_id, total
+        ),
+        Err(_) => warn!("[{}] Proxy relay exceeded {:?}, closing", proxy_id, SESSION_TTL),
+    }
 }
 
 // Verifier task that waits for WebSocket and runs verification
+#[allow(clippy::too_many_arguments)]
 async fn run_verifier_task(
     session_id: String,
     config: SessionConfig,
@@ -973,6 +1059,8 @@ async fn run_verifier_task(
     socket_rx: oneshot::Receiver<TungsteniteStream>,
     result_tx: oneshot::Sender<VerificationResult>,
     state: Arc<AppState>,
+    // Recall: held until this task ends (admission control).
+    _permit: OwnedSemaphorePermit,
 ) {
     info!(
         "[{}] Verifier task started, waiting for WebSocket connection...",
@@ -1192,49 +1280,36 @@ fn statement_digest_hex(statement: &attest::CaptureStatement) -> String {
         })
 }
 
-/// Validates that all ranges in reveal config are fully within authenticated transcript ranges.
+/// Validates the client's reveal config against the verified transcript.
 ///
 /// Recall: transcript commitments are rejected before `accept()`, so HASH
-/// handlers can never be satisfied and are refused here; "authenticated"
-/// means revealed as plaintext.
+/// handlers can never be satisfied and are refused here. Every byte is
+/// already revealed (`gates::check_full_reveal`), so each range only needs a
+/// bounds check (no per-byte walk), and at most `gates::MAX_REVEAL_RANGES`
+/// ranges per direction are accepted (else `recall: reveal config too large`).
 fn verify_reveal_config(
     reveal_config: &RevealConfig,
     transcript: &PartialTranscript,
 ) -> Result<(), String> {
-    fn validate_ranges_against_auth_set(
-        ranges: &[RangeWithHandler],
-        auth_set: &RangeSet<usize>,
-        direction: &str,
-    ) -> Result<(), String> {
-        for range in ranges {
-            if let HandlerAction::Hash { .. } = range.handler.action {
-                return Err(gates::COMMITMENTS.to_string());
-            }
-            if !(range.start..range.end).all(|i| auth_set.contains(&i)) {
-                return Err(format!(
-                    "Invalid {} range [{}, {}) - not fully within authenticated ranges",
-                    direction, range.start, range.end
-                ));
-            }
-
-            debug!(
-                "✅ {} range [{}, {}) validated - fully within authenticated ranges",
-                direction, range.start, range.end
-            );
+    for range in reveal_config.sent.iter().chain(&reveal_config.recv) {
+        if let HandlerAction::Hash { .. } = range.handler.action {
+            return Err(gates::COMMITMENTS.to_string());
         }
-        Ok(())
     }
-
-    validate_ranges_against_auth_set(&reveal_config.sent, transcript.sent_authed(), "sent")?;
-    validate_ranges_against_auth_set(&reveal_config.recv, transcript.received_authed(), "recv")?;
-
+    let sent = reveal_config.sent.iter().map(|r| (r.start, r.end));
+    gates::check_reveal_ranges(sent, transcript.len_sent(), "sent")?;
+    let recv = reveal_config.recv.iter().map(|r| (r.start, r.end));
+    gates::check_reveal_ranges(recv, transcript.len_received(), "recv")?;
     Ok(())
 }
 
-// Helper function to clean up session from state
+// Recall: also aborts the session's /proxy relay, if one is still running.
 async fn cleanup_session(state: &Arc<AppState>, session_id: &str) {
     let mut sessions = state.sessions.lock().await;
-    if sessions.remove(session_id).is_some() {
+    if let Some(session) = sessions.remove(session_id) {
+        if let Some(abort) = session.proxy_abort {
+            abort.abort();
+        }
         info!("[{}] Session removed from state", session_id);
     }
 }

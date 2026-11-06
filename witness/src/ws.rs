@@ -33,9 +33,21 @@ pub type TungsteniteStream =
 pub struct WsUpgrade {
     key: HeaderValue,
     on_upgrade: hyper::upgrade::OnUpgrade,
+    config: WebSocketConfig,
 }
 
 impl WsUpgrade {
+    /// Recall: caps the size of each incoming message and frame (the
+    /// tungstenite defaults are 64 MiB / 16 MiB). Outgoing messages are not
+    /// limited by this.
+    pub fn max_incoming(mut self, bytes: usize) -> Self {
+        self.config = self
+            .config
+            .max_message_size(Some(bytes))
+            .max_frame_size(Some(bytes));
+        self
+    }
+
     #[must_use = "to set up the WebSocket connection, this response must be returned"]
     pub fn on_upgrade<F, Fut>(self, callback: F) -> Response
     where
@@ -53,7 +65,7 @@ impl WsUpgrade {
             let stream = WebSocketStream::from_raw_socket(
                 TokioAdapter::new(TokioIo::new(upgraded)),
                 Role::Server,
-                Some(WebSocketConfig::default()),
+                Some(self.config),
             )
             .await;
             callback(stream).await;
@@ -137,7 +149,11 @@ impl<S: Send + Sync> FromRequestParts<S> for WsUpgrade {
             .extensions
             .remove::<hyper::upgrade::OnUpgrade>()
             .ok_or(WsRejection::ConnectionNotUpgradable)?;
-        Ok(Self { key, on_upgrade })
+        Ok(Self {
+            key,
+            on_upgrade,
+            config: WebSocketConfig::default(),
+        })
     }
 }
 

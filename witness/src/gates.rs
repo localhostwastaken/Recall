@@ -20,6 +20,21 @@ pub const MALFORMED_REQUEST: &str = "recall: malformed request";
 pub const METHOD_NOT_ALLOWED: &str = "recall: only GET requests allowed";
 pub const PARTIAL_CONTENT: &str = "recall: partial content not allowed";
 pub const MALFORMED_RESPONSE: &str = "recall: malformed response";
+pub const COMPRESSED_RESPONSE: &str = "recall: compressed response not allowed";
+pub const INTERIM_RESPONSE: &str = "recall: interim response not allowed";
+pub const SERVER_NAME_CASE: &str = "recall: server name must be lowercase";
+pub const REVEAL_TOO_LARGE: &str = "recall: reveal config too large";
+pub const BUSY: &str = "recall: witness busy, try again shortly";
+pub const REGISTER_TIMEOUT: &str = "recall: register timed out";
+
+/// Most reveal ranges a client may send per direction (a Recall capture
+/// reveals everything, normally as one range).
+pub const MAX_REVEAL_RANGES: usize = 8;
+
+/// Extra bytes a `/proxy` relay may carry beyond the session's
+/// `maxSentData` / `maxRecvData` (TLS handshake, certificates, record
+/// overhead).
+pub const RELAY_SLACK: usize = 64 * 1024;
 pub const NONCE: &str = "recall: nonce missing or malformed";
 
 /// Server-side caps on the transcript sizes a client may register.
@@ -131,8 +146,10 @@ pub fn check_request(sent: &[u8], server_name: &str) -> Result<(), String> {
 }
 
 /// Checks the (fully revealed) HTTP response: it must start with a status line
-/// `HTTP/1.x SP 3DIGIT`, and must not be partial content (status 206, or a
-/// `Content-Range` header anywhere in the head). Header lines are split on LF
+/// `HTTP/1.x SP 3DIGIT` that is not 1xx (an interim response before the final
+/// one), and must not be partial content (status 206, or a `Content-Range`
+/// header anywhere in the head) or compressed (`Content-Encoding` other than
+/// `identity`, case-insensitive). The first offending header in order wins. Header lines are split on LF
 /// with an optional CR, like the prover's HTTP parser, and the head ends at the
 /// first empty line; a response with no end of head is malformed.
 pub fn check_response(recv: &[u8]) -> Result<(), String> {
@@ -158,14 +175,55 @@ pub fn check_response(recv: &[u8]) -> Result<(), String> {
     {
         return Err(malformed());
     }
+    if code.starts_with('1') {
+        return Err(INTERIM_RESPONSE.to_string());
+    }
     if code == "206" {
         return Err(PARTIAL_CONTENT.to_string());
     }
     for line in lines {
-        if let Some((name, _)) = line.split_once(':') {
-            if name.trim().eq_ignore_ascii_case("content-range") {
+        if let Some((name, value)) = line.split_once(':') {
+            let name = name.trim();
+            if name.eq_ignore_ascii_case("content-range") {
                 return Err(PARTIAL_CONTENT.to_string());
             }
+            if name.eq_ignore_ascii_case("content-encoding")
+                && !value.trim().eq_ignore_ascii_case("identity")
+            {
+                return Err(COMPRESSED_RESPONSE.to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The proven server name must be lowercase with no trailing dot, so one site
+/// has one spelling in the index (the extension sends `URL.hostname`).
+pub fn check_server_name(name: &str) -> Result<(), String> {
+    if name.is_empty() || name.ends_with('.') || name.bytes().any(|b| b.is_ascii_uppercase()) {
+        Err(SERVER_NAME_CASE.to_string())
+    } else {
+        Ok(())
+    }
+}
+
+/// Checks one direction of the client's `reveal_config`: at most
+/// [`MAX_REVEAL_RANGES`] ranges, each `start <= end <= len`. A bounds check
+/// is enough because [`check_full_reveal`] already requires every byte to be
+/// revealed. (Empty ranges stay allowed as upstream allowed them; they map to
+/// no bytes.)
+pub fn check_reveal_ranges<I>(ranges: I, len: usize, direction: &str) -> Result<(), String>
+where
+    I: ExactSizeIterator<Item = (usize, usize)>,
+{
+    if ranges.len() > MAX_REVEAL_RANGES {
+        return Err(REVEAL_TOO_LARGE.to_string());
+    }
+    for (start, end) in ranges {
+        if !(start <= end && end <= len) {
+            return Err(format!(
+                "Invalid {direction} range [{start}, {end}) - outside the transcript ({len} bytes)"
+            ));
         }
     }
     Ok(())
@@ -740,6 +798,32 @@ mod tests {
     }
 
     #[test]
+    fn interim_response_rejected() {
+        for r in [
+            &b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"[..],
+            b"HTTP/1.1 103 Early Hints\r\nLink: </a.css>; rel=preload\r\n\r\nHTTP/1.1 200 OK\r\n\r\n",
+        ] {
+            assert_eq!(check_response(r), Err(INTERIM_RESPONSE.to_string()));
+        }
+    }
+
+    #[test]
+    fn compressed_response_rejected() {
+        for enc in ["gzip", "br", "identity, gzip", "deflate", ""] {
+            let r = format!("HTTP/1.1 200 OK\r\nContent-Encoding: {enc}\r\n\r\nxx");
+            assert_eq!(
+                check_response(r.as_bytes()),
+                Err(COMPRESSED_RESPONSE.to_string()),
+                "{enc:?}"
+            );
+        }
+        for enc in ["identity", "Identity", " identity "] {
+            let r = format!("HTTP/1.1 200 OK\r\nContent-Encoding: {enc}\r\n\r\nok");
+            assert_eq!(check_response(r.as_bytes()), Ok(()), "{enc:?}");
+        }
+    }
+
+    #[test]
     fn malformed_response_rejected() {
         for r in [
             &b""[..],
@@ -755,6 +839,43 @@ mod tests {
                 String::from_utf8_lossy(r)
             );
         }
+    }
+
+    // --- server name -------------------------------------------------------
+
+    #[test]
+    fn server_name_must_be_lowercase() {
+        assert_eq!(check_server_name("notice.recall.test"), Ok(()));
+        assert_eq!(check_server_name("xn--bcher-kva.example"), Ok(()));
+        for n in ["Notice.recall.test", "NOTICE.RECALL.TEST", "notice.recall.test.", ""] {
+            assert_eq!(check_server_name(n), Err(SERVER_NAME_CASE.to_string()), "{n:?}");
+        }
+    }
+
+    // --- reveal config ----------------------------------------------------
+
+    #[test]
+    fn oversized_reveal_config_rejected() {
+        let many: Vec<(usize, usize)> = (0..MAX_REVEAL_RANGES + 1).map(|_| (0, 10)).collect();
+        assert_eq!(
+            check_reveal_ranges(many.into_iter(), 10, "recv"),
+            Err(REVEAL_TOO_LARGE.to_string())
+        );
+        // The amplification shape: a huge range is refused in O(1), not walked.
+        let huge = vec![(0, usize::MAX)];
+        let e = check_reveal_ranges(huge.into_iter(), 10, "recv").unwrap_err();
+        assert!(e.contains("outside the transcript"), "{e}");
+        let ok: Vec<(usize, usize)> = (0..MAX_REVEAL_RANGES).map(|_| (0, 10)).collect();
+        assert_eq!(check_reveal_ranges(ok.into_iter(), 10, "recv"), Ok(()));
+    }
+
+    #[test]
+    fn reveal_range_bounds() {
+        assert_eq!(check_reveal_ranges([(0, 10)].into_iter(), 10, "sent"), Ok(()));
+        assert_eq!(check_reveal_ranges([(4, 4)].into_iter(), 10, "sent"), Ok(()));
+        assert!(check_reveal_ranges([(0, 11)].into_iter(), 10, "sent").is_err());
+        assert!(check_reveal_ranges([(5, 4)].into_iter(), 10, "sent").is_err());
+        assert!(check_reveal_ranges([(11, 11)].into_iter(), 10, "sent").is_err());
     }
 
     // --- check_proxy_target --------------------------------------------

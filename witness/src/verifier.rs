@@ -70,18 +70,43 @@ pub async fn verifier<T: AsyncWrite + AsyncRead + Send + Unpin + 'static>(
 
     // Create a session with the prover
     let session = Session::new(socket.compat());
-    let (driver, mut handle) = session.split();
+    let (driver, handle) = session.split();
 
-    // Spawn the session driver to run in the background
+    // Spawn the session driver to run in the background. Recall: if it fails
+    // (the prover hung up), tlsn's protocol futures are not woken, so the
+    // protocol below races a "driver failed" signal instead of hanging until
+    // the 120 s timeout while holding a session slot.
+    let (driver_failed_tx, driver_failed_rx) = tokio::sync::oneshot::channel::<String>();
     let driver_task = tokio::spawn(async move {
         let result = driver.await;
         match &result {
             Ok(_) => tracing::info!("verifier session driver completed normally (mux closed)"),
-            Err(e) => tracing::error!("verifier session driver error: {e}"),
+            Err(e) => {
+                tracing::error!("verifier session driver error: {e}");
+                let _ = driver_failed_tx.send(e.to_string());
+            }
         }
         result
     });
 
+    tokio::select! {
+        result = run_protocol(handle, driver_task, max_sent_data, max_recv_data, root_store) => result,
+        Ok(err) = driver_failed_rx => Err(eyre!("prover connection lost: {}", err)),
+    }
+}
+
+/// The verifier protocol and the Recall gates, run while the session driver
+/// is alive (see [`verifier`]).
+async fn run_protocol<O, E>(
+    mut handle: SessionHandle,
+    driver_task: JoinHandle<Result<O, E>>,
+    max_sent_data: usize,
+    max_recv_data: usize,
+    root_store: RootCertStore,
+) -> Result<VerifiedSession, eyre::ErrReport>
+where
+    E: std::fmt::Display,
+{
     let verifier_config = VerifierConfig::builder()
         .root_store(root_store)
         .build()
@@ -216,6 +241,7 @@ pub async fn verifier<T: AsyncWrite + AsyncRead + Send + Unpin + 'static>(
     let ServerName::Dns(dns_name) = server_name;
     info!("Server name verified: {:?}", dns_name);
 
+    gates::check_server_name(dns_name.as_str()).map_err(Rejection)?;
     gates::check_request(transcript.sent_unsafe(), dns_name.as_str()).map_err(Rejection)?;
     gates::check_response(transcript.received_unsafe()).map_err(Rejection)?;
 
@@ -223,11 +249,13 @@ pub async fn verifier<T: AsyncWrite + AsyncRead + Send + Unpin + 'static>(
     info!("Verification successful!");
     info!("============================================");
 
-    info!(
+    // Recall: the full transcript is DEBUG only (page content stays out of
+    // INFO logs).
+    debug!(
         "Sent data: {:?}",
         bytes_to_redacted_string(transcript.sent_unsafe(), "\u{2588}")
     );
-    info!(
+    debug!(
         "Received data: {:?}",
         bytes_to_redacted_string(transcript.received_unsafe(), "\u{2588}")
     );

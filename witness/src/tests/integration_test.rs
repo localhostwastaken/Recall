@@ -67,6 +67,15 @@ fn dev_ca() -> RootCertStore {
 
 /// Starts an in-process witness on an ephemeral port; returns its address.
 async fn start_witness(root_store: RootCertStore, dev_allow_hosts: Vec<String>) -> SocketAddr {
+    start_witness_with(root_store, dev_allow_hosts, 3).await
+}
+
+/// Like [`start_witness`], with `MAX_SESSIONS` = `max_sessions`.
+async fn start_witness_with(
+    root_store: RootCertStore,
+    dev_allow_hosts: Vec<String>,
+    max_sessions: usize,
+) -> SocketAddr {
     let _ = tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .try_init();
@@ -79,6 +88,7 @@ async fn start_witness(root_store: RootCertStore, dev_allow_hosts: Vec<String>) 
             max_sent: MAX_SENT,
             max_recv: MAX_RECV,
         },
+        session_slots: Arc::new(tokio::sync::Semaphore::new(max_sessions)),
     });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -185,6 +195,59 @@ async fn register_over_limit_rejected() {
     assert_eq!(reply["type"], "error");
     let msg = reply["message"].as_str().unwrap();
     assert!(msg.starts_with("recall: maxRecvData too large"), "{msg}");
+}
+
+#[tokio::test]
+async fn busy_witness_rejects_then_frees_slot() {
+    let addr = start_witness_with(RootCertStore::empty(), vec![], 1).await;
+    let (_a, reply) = register(addr, json!({"nonce": NONCE}), MAX_RECV).await;
+    let sid = reply["sessionId"].as_str().expect("first session registered").to_string();
+
+    // The only slot is taken: the next client is told to come back later.
+    let (_b, reply) = register(addr, json!({"nonce": NONCE}), MAX_RECV).await;
+    assert_eq!(reply, json!({"type": "error", "message": gates::BUSY}));
+
+    // A prover that connects and hangs up ends session A's verifier task,
+    // which releases the slot.
+    drop(connect_ws(&format!("ws://{addr}/verifier?sessionId={sid}")).await.unwrap());
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let (_c, reply) = register(addr, json!({"nonce": NONCE}), MAX_RECV).await;
+        if reply["type"] == "session_registered" {
+            break;
+        }
+        assert_eq!(reply["message"], gates::BUSY);
+        assert!(tokio::time::Instant::now() < deadline, "slot never freed");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+#[tokio::test]
+async fn silent_session_socket_times_out() {
+    let addr = start_witness(RootCertStore::empty(), vec![]).await;
+    let mut ws = connect_ws(&format!("ws://{addr}/session")).await.unwrap();
+    let reply = tokio::time::timeout(Duration::from_secs(15), next_json(&mut ws))
+        .await
+        .expect("witness answers within REGISTER_TIMEOUT")
+        .unwrap();
+    assert_eq!(reply, json!({"type": "error", "message": gates::REGISTER_TIMEOUT}));
+}
+
+#[tokio::test]
+async fn oversized_session_message_closes_socket() {
+    let addr = start_witness(RootCertStore::empty(), vec![]).await;
+    let mut ws = connect_ws(&format!("ws://{addr}/session")).await.unwrap();
+    let msg = json!({
+        "type": "register",
+        "maxRecvData": MAX_RECV,
+        "maxSentData": MAX_SENT,
+        "sessionData": {"nonce": NONCE, "pad": "x".repeat(70 * 1024)},
+    });
+    let _ = ws.send(Message::Text(msg.to_string().into())).await;
+    let reply = tokio::time::timeout(Duration::from_secs(5), next_json(&mut ws))
+        .await
+        .expect("socket closes promptly");
+    assert!(reply.is_err(), "expected the socket to close, got {reply:?}");
 }
 
 #[tokio::test]

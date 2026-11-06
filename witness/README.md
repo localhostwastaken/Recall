@@ -13,18 +13,24 @@ extension as `{"type":"error","message":"recall: …"}`.
 | When | Gate | Message |
 | --- | --- | --- |
 | register | `sessionData.nonce` is 32 bytes of hex | `recall: nonce missing or malformed` |
+| register | `register` arrives within 10 s; each /session message ≤ 64 KiB (else the socket closes) | `recall: register timed out` |
 | register | `maxSentData` ≤ `MAX_SENT_DATA`, `maxRecvData` ≤ `MAX_RECV_DATA` | `recall: maxRecvData too large (limit N)` |
+| register | a free session slot (`MAX_SESSIONS`, held until the verifier task ends) | `recall: witness busy, try again shortly` |
 | commit | MPC mode only | `recall: proxy mode not allowed` |
 | before `accept()` | server identity proven | `recall: server identity required` |
 | before `accept()` | no transcript commitments | `recall: commitments not allowed` |
 | after verify | every sent and received byte revealed | `recall: partial reveal not allowed` |
+| after verify | proven server name is lowercase, no trailing dot | `recall: server name must be lowercase` |
 | after verify | request line exactly `GET /origin-form HTTP/1.1` | `recall: only GET requests allowed` / `recall: malformed request` |
 | after verify | one well-formed HTTP request: CRLF lines, token header names, no control bytes in values, no obs-fold, nothing after the head | `recall: malformed request` |
 | after verify | no `Cookie` or `Authorization` header | `recall: cookies/auth not allowed` |
 | after verify | only `Host`, `Accept`, `Accept-Encoding` (exactly `identity`), `Accept-Language`, `User-Agent`, `Connection` | `recall: header not allowed: <name>` |
 | after verify | exactly one `Host`, equal to the server name (case-insensitive, optional `:443`) | `recall: host mismatch` |
 | after verify | response has a `HTTP/1.x NNN` status line | `recall: malformed response` |
+| after verify | response is not an interim 1xx | `recall: interim response not allowed` |
 | after verify | response is not partial: no status 206, no `Content-Range` | `recall: partial content not allowed` |
+| after verify | response `Content-Encoding` absent or `identity` | `recall: compressed response not allowed` |
+| reveal config | at most 8 ranges per direction, each within the transcript; no HASH handlers | `recall: reveal config too large` / `recall: commitments not allowed` |
 
 On success, `session_completed` gains `attestation: {message, signature, signer}`
 and a `{"type":"RECALL_ATTESTATION","value":"<attestation JSON>"}` entry in
@@ -36,7 +42,9 @@ and a `{"type":"RECALL_ATTESTATION","value":"<attestation JSON>"}` entry in
 relay per session, otherwise 403), port 443 only (400 `recall: proxy port must
 be 443`), and a host that resolves to public addresses only (an allowlist: public IPv4,
 IPv6 `2000::/3` minus Teredo/6to4/documentation ranges; IPv4-mapped addresses
-are judged by their IPv4; otherwise 403 `recall: proxy target not allowed`). It dials the checked addresses. CORS is off on `/proxy`.
+are judged by their IPv4; otherwise 403 `recall: proxy target not allowed`). It dials the checked addresses, carries at most `maxSentData` + 64 KiB up and
+`maxRecvData` + 64 KiB down (then closes), and is aborted when its session ends.
+CORS is off on `/proxy`.
 The webhook feature and `config.yaml` are removed.
 
 ## Configuration
@@ -46,6 +54,7 @@ The webhook feature and `config.yaml` are removed.
 | `WITNESS_PRIVATE_KEY` | required | 32-byte hex, `0x` optional. Never logged; only the address is |
 | `PORT` | `7047` | |
 | `MAX_RECV_DATA` / `MAX_SENT_DATA` | `65536` / `4096` | caps on what a client may register |
+| `MAX_SESSIONS` | `3` | concurrent MPC sessions; more get `recall: witness busy, try again shortly` |
 | `WITNESS_DEV_CA_DER` | unset | dev only: trust ONLY this CA (DER or PEM) instead of the Mozilla roots |
 | `WITNESS_DEV_ALLOW_HOSTS` | unset | dev CA mode only: comma-separated hosts `/proxy` may dial at private addresses |
 
