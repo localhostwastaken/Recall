@@ -4,7 +4,7 @@ import type { CheckResult, EvidenceFile } from '@recall/evidence';
 import type { Status } from './ui/StatusBadge';
 import type { NoticeKind } from './ui/Notice';
 import { middle } from './ui/MonoValue';
-import { formatSize, type CaptureErrorCode } from './captureParts';
+import { captureTarget, formatSize, type CaptureErrorCode } from './captureParts';
 import type { CheckSummary } from './jobState';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -171,6 +171,13 @@ export function errorCopy(
         body: `New captures are paused until the witness is back. Existing captures can still be verified by anyone. ${NOTHING}`,
         actions: ['retry', 'witnessSettings'],
       };
+    case 'busy':
+      return {
+        kind: 'warn',
+        title: 'Witness busy',
+        body: `The witness is busy. Try again in a minute. ${NOTHING}`,
+        actions: ['retry'],
+      };
     case 'cancelled':
       return { kind: 'info', title: `Capture cancelled. ${NOTHING}`, actions: [] };
     default:
@@ -184,3 +191,13 @@ export function errorCopy(
 }
 
 export type { CheckResult };
+
+/**
+ * Why the current page cannot be captured, as helper text ("Only https:// pages can be
+ * captured."), or null when it can. Same rules as the capture itself (captureTarget).
+ */
+export function pageBlockedReason(url: string): string | null {
+  const t = captureTarget(url);
+  if (t instanceof URL) return null;
+  return t.error.charAt(0).toUpperCase() + t.error.slice(1) + '.';
+}

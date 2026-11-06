@@ -24,6 +24,10 @@ type CaptureOverrides = {
 type ExtensionChecks = Record<'A' | 'B' | 'C', { status: string; detail: string }>;
 type CaptureResult = { evidence: EvidenceFile; checks: ExtensionChecks } | { error: string };
 
+/** Ruling R26: every capture sends this User-Agent (captureParts.ts CAPTURE_USER_AGENT). */
+const CAPTURE_USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
+
 const url = (path: string) => `https://${NOTICE_HOST}${path}`;
 const text = (b: Uint8Array) => new TextDecoder().decode(b);
 
@@ -168,6 +172,8 @@ test.describe('@p1 capture', () => {
     expect(sent).toMatch(/^get \/notice http\/1\.1\r\n/);
     expect(sent).toContain('\r\naccept-encoding: identity\r\n');
     expect(sent).toContain('\r\nhost: notice.recall.test\r\n');
+    // R26: a fixed User-Agent, never the capturer's own browser string.
+    expect(sent).toContain(`\r\nuser-agent: ${CAPTURE_USER_AGENT.toLowerCase()}\r\n`);
     expect(sent).not.toContain('cookie');
   });
 

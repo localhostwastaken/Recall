@@ -29,7 +29,13 @@ export type CaptureOverrides = {
   hostHeader?: string;
 };
 
-export type CaptureErrorCode = 'too_large' | 'tls' | 'witness_offline' | 'cancelled' | 'failed';
+export type CaptureErrorCode =
+  | 'too_large'
+  | 'tls'
+  | 'witness_offline'
+  | 'busy'
+  | 'cancelled'
+  | 'failed';
 
 export type CaptureFailure = {
   error: string;
@@ -57,25 +63,35 @@ export function captureTarget(raw: string): URL | CaptureFailure {
   }
   if (u.username || u.password)
     return { error: 'addresses with a user name or password cannot be captured', code: 'failed' };
+  // "example.org." is the same name as "example.org"; the witness signs the name
+  // without the trailing dot, so the request and the statement use that form.
+  if (u.hostname.endsWith('.')) u.hostname = u.hostname.replace(/\.+$/, '');
+  if (!u.hostname || u.hostname.endsWith('.'))
+    return { error: 'this is not a web address', code: 'failed' };
   u.hash = '';
   return u;
 }
 
 /**
- * The request headers (ruling R20): only Host, Accept, Accept-Encoding: identity,
- * Accept-Language, User-Agent and Connection. No cookies, no auth, no Range.
+ * The User-Agent every capture sends (ruling R26). Evidence is public and permanent,
+ * so it must not carry the capturer's real browser and OS version; one fixed,
+ * common desktop string also keeps captures by different people comparable.
  */
-export function requestHeaders(
-  target: URL,
-  userAgent: string,
-  overrides?: CaptureOverrides,
-): Record<string, string> {
+export const CAPTURE_USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
+
+/**
+ * The request headers (ruling R20): only Host, Accept, Accept-Encoding: identity,
+ * Accept-Language, User-Agent and Connection. No cookies, no auth, no Range. All
+ * values are fixed, so nothing about the capturer's browser leaks into the evidence.
+ */
+export function requestHeaders(target: URL, overrides?: CaptureOverrides): Record<string, string> {
   return {
     Host: overrides?.hostHeader ?? target.hostname,
     Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf;q=0.9,*/*;q=0.8',
     'Accept-Encoding': 'identity',
     'Accept-Language': 'en-US,en;q=0.9',
-    'User-Agent': userAgent,
+    'User-Agent': CAPTURE_USER_AGENT,
     Connection: 'close',
     ...overrides?.extraHeaders,
   };
@@ -228,6 +244,18 @@ export function witnessMessageIn(text: string): string | null {
   return msg.replace(/[.,;:]+$/, '');
 }
 
+/** Witness messages that mean "try again shortly" (admission control and connect timeout). */
+const WITNESS_BUSY = /witness busy|too many sessions|prover did not connect in time/;
+
+/** Rejects with `message` if `p` has not settled after `ms`. */
+export function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+}
+
 /**
  * Maps a failed capture to one message and a code for the popup. The witness's
  * `recall: ...` message wins (verbatim), then the prover's error text.
@@ -237,9 +265,9 @@ export function classifyFailure(err: unknown, witnessError: string | null): Capt
   const fromWitness =
     (witnessError ? witnessMessageIn(witnessError) : null) ?? witnessMessageIn(raw);
   if (fromWitness) {
-    return /maxRecvData too large/.test(fromWitness)
-      ? { error: fromWitness, code: 'too_large' }
-      : { error: fromWitness, code: 'failed' };
+    if (/maxRecvData too large/.test(fromWitness)) return { error: fromWitness, code: 'too_large' };
+    if (WITNESS_BUSY.test(fromWitness)) return { error: fromWitness, code: 'busy' };
+    return { error: fromWitness, code: 'failed' };
   }
   const text = witnessError ? `${witnessError} (${raw})` : raw;
   if (/WebSocket connection failed|closed the session before registering/i.test(raw)) {

@@ -7,6 +7,7 @@ import { loadSettings } from './settings';
 import { ensureOffscreen } from './offscreen';
 import {
   MAX_RECV_DATA,
+  withTimeout,
   type CaptureErrorCode,
   type CaptureOutcome,
   type CaptureOverrides,
@@ -24,6 +25,9 @@ import {
 
 export { CAPTURE_STATE_KEY, STALE_AFTER_MS } from './jobState';
 export type { CaptureState, CheckSummary, FinalState } from './jobState';
+
+/** How long checks A-C may take in the service worker (they normally take milliseconds). */
+export const CHECKS_TIMEOUT_MS = 15_000;
 
 export function summarizeChecks(r: CheckReport): CheckSummary {
   const s: CheckSummary = { A: r.A, B: r.B, C: r.C };
@@ -153,7 +157,12 @@ export function onCaptureResult(id: string, outcome: CaptureOutcome): Promise<vo
       await area().set({ [CAPTURE_STATE_KEY]: { ...s, step: 3 } satisfies CaptureState });
       try {
         const { pinnedWitnesses } = await loadSettings();
-        const report = await runChecks(outcome.evidence, { pinnedWitnesses });
+        // Bounded: a hung check must not leave the job "running" and block later captures.
+        const report = await withTimeout(
+          runChecks(outcome.evidence, { pinnedWitnesses }),
+          CHECKS_TIMEOUT_MS,
+          `the checks did not finish within ${CHECKS_TIMEOUT_MS / 1000} s`,
+        );
         await finish({
           ...base,
           status: 'done',
@@ -162,7 +171,8 @@ export function onCaptureResult(id: string, outcome: CaptureOutcome): Promise<vo
           checks: summarizeChecks(report),
         });
       } catch (err) {
-        await finish(failure(base, `the evidence could not be checked: ${String(err)}`, 'failed'));
+        const why = err instanceof Error ? err.message : String(err);
+        await finish(failure(base, `the evidence could not be checked: ${why}`, 'failed'));
       }
     } else if (outcome.code === 'cancelled') {
       await finish({ ...base, status: 'cancelled', finishedAt: Date.now() });
@@ -211,7 +221,9 @@ export function waitForCapture(id: string): Promise<FinalState> {
 export async function captureForTest(
   url: string,
   overrides?: CaptureOverrides,
-): Promise<{ evidence: EvidenceFile; checks: CheckSummary } | { error: string; code?: CaptureErrorCode }> {
+): Promise<
+  { evidence: EvidenceFile; checks: CheckSummary } | { error: string; code?: CaptureErrorCode }
+> {
   const started = await startCapture(url, overrides);
   if ('error' in started) return started;
   const s = await waitForCapture(started.id);

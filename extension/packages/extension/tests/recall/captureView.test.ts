@@ -5,6 +5,7 @@ import {
   errorCopy,
   formatElapsed,
   formatUtc,
+  pageBlockedReason,
   plainReason,
   verdict,
 } from '../../src/recall/captureView';
@@ -113,5 +114,27 @@ describe('capture view copy', () => {
     expect(plainReason('the witness returned no signature')).toBe(
       'The witness returned no signature',
     );
+  });
+
+  it('busy witness: retry, not a failure', () => {
+    expect(errorCopy('busy', 'recall: witness busy, try again shortly', 'a.example')).toEqual({
+      kind: 'warn',
+      title: 'Witness busy',
+      body: 'The witness is busy. Try again in a minute. Nothing was published.',
+      actions: ['retry'],
+    });
+  });
+
+  it('explains why a page cannot be captured, with the capture rules', () => {
+    expect(pageBlockedReason('https://a.example/x')).toBeNull();
+    expect(pageBlockedReason('https://a.example./x')).toBeNull();
+    expect(pageBlockedReason('http://a.example/')).toBe('Only https:// pages can be captured.');
+    expect(pageBlockedReason('https://a.example:8443/')).toBe(
+      'Only pages on the standard https port (443) can be captured.',
+    );
+    expect(pageBlockedReason('https://u:p@a.example/')).toBe(
+      'Addresses with a user name or password cannot be captured.',
+    );
+    expect(pageBlockedReason('chrome://extensions')).toBe('Only https:// pages can be captured.');
   });
 });

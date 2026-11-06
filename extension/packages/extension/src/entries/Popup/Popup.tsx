@@ -15,6 +15,7 @@ import {
   errorCopy,
   formatElapsed,
   verdict,
+  pageBlockedReason,
 } from '../../recall/captureView';
 
 /** The page the popup acts on. `?tab=<id>` picks a tab explicitly (used by tests). */
@@ -27,7 +28,7 @@ async function resolveTab(): Promise<chrome.tabs.Tab | undefined> {
   return tab;
 }
 
-type PageInfo = { url: string; host: string; https: boolean };
+type PageInfo = { url: string; host: string };
 
 function pageInfo(rawUrl: string | undefined): PageInfo | null {
   if (!rawUrl) return null;
@@ -36,10 +37,9 @@ function pageInfo(rawUrl: string | undefined): PageInfo | null {
     return {
       url: rawUrl,
       host: u.host || u.protocol.replace(/:$/, ''),
-      https: u.protocol === 'https:',
     };
   } catch {
-    return { url: rawUrl, host: rawUrl, https: false };
+    return { url: rawUrl, host: rawUrl };
   }
 }
 
@@ -122,9 +122,11 @@ export function Popup() {
   const openSettings = useCallback(() => void chrome.runtime.openOptionsPage(), []);
 
   let disabledReason: string | null = null;
+  let blocked: string | null;
   if (running) disabledReason = mine ? null : 'Another capture is running. Wait for it to finish.';
   else if (page === undefined) disabledReason = 'Reading the current tab…';
-  else if (page === null || !page.https) disabledReason = 'Only https:// pages can be captured.';
+  else if (page === null) disabledReason = 'Only https:// pages can be captured.';
+  else if ((blocked = pageBlockedReason(page.url))) disabledReason = blocked;
   else if (witness === 'checking') disabledReason = 'Checking the witness…';
   else if (witness === 'offline')
     disabledReason = 'The witness is offline, so new captures are paused.';

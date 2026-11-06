@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ALLOWED_REQUEST_HEADERS } from '@recall/evidence';
 import {
   CAPTURE_HANDLERS,
+  CAPTURE_USER_AGENT,
   captureTarget,
   classifyFailure,
   formatSize,
@@ -11,23 +12,33 @@ import {
   requestHeaders,
   revealPlan,
   tooLarge,
+  withTimeout,
   witnessMessageIn,
 } from '../../src/recall/captureParts';
 
 describe('capture request', () => {
   it('sends only the allowlisted headers (R20), identity encoding, Connection: close', () => {
-    const h = requestHeaders(new URL('https://notice.recall.test/notice?a=1'), 'UA/1');
+    const h = requestHeaders(new URL('https://notice.recall.test/notice?a=1'));
     expect(Object.keys(h).sort()).toEqual([...ALLOWED_REQUEST_HEADERS].sort());
     expect(h.Host).toBe('notice.recall.test');
     expect(h['Accept-Encoding']).toBe('identity');
     expect(h.Connection).toBe('close');
-    expect(h['User-Agent']).toBe('UA/1');
+    expect(h['Accept-Language']).toBe('en-US,en;q=0.9');
+  });
+
+  it('sends the fixed User-Agent, never the browser one (R26: evidence is public)', () => {
+    expect(CAPTURE_USER_AGENT).toBe(
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+    );
+    const h = requestHeaders(new URL('https://notice.recall.test/'));
+    expect(h['User-Agent']).toBe(CAPTURE_USER_AGENT);
+    expect(h['User-Agent']).not.toBe(navigator.userAgent);
   });
 
   it('dev overrides can add headers or change Host', () => {
     const u = new URL('https://notice.recall.test/');
-    expect(requestHeaders(u, 'UA', { extraHeaders: { Cookie: 'a=1' } }).Cookie).toBe('a=1');
-    expect(requestHeaders(u, 'UA', { hostHeader: 'evil.example' }).Host).toBe('evil.example');
+    expect(requestHeaders(u, { extraHeaders: { Cookie: 'a=1' } }).Cookie).toBe('a=1');
+    expect(requestHeaders(u, { hostHeader: 'evil.example' }).Host).toBe('evil.example');
   });
 
   it('accepts https on port 443 only and drops the fragment', () => {
@@ -36,6 +47,14 @@ describe('capture request', () => {
     expect(captureTarget('http://a.example/')).toMatchObject({ code: 'failed' });
     expect(captureTarget('https://a.example:8443/')).toMatchObject({ code: 'failed' });
     expect(captureTarget('not a url')).toMatchObject({ code: 'failed' });
+    expect(captureTarget('https://u:p@a.example/')).toMatchObject({ code: 'failed' });
+  });
+
+  it('drops a trailing dot in the host (the witness signs the name without it)', () => {
+    const t = captureTarget('https://Notice.Recall.Test./notice') as URL;
+    expect(t.hostname).toBe('notice.recall.test');
+    expect(t.href).toBe('https://notice.recall.test/notice');
+    expect(requestHeaders(t).Host).toBe('notice.recall.test');
   });
 
   it('builds the witness proxy URL with the session id', () => {
@@ -78,6 +97,23 @@ describe('capture request', () => {
 });
 
 describe('size pre-check', () => {
+  it('fetches without cookies, redirects or referrer', async () => {
+    const fetchSpy = vi.fn(async () => new Response('ok', { status: 200 }));
+    await precheckSize('https://a.example/page', 65536, fetchSpy as unknown as typeof fetch);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('https://a.example/page');
+    expect(init).toMatchObject({
+      method: 'GET',
+      credentials: 'omit',
+      cache: 'no-store',
+      redirect: 'manual',
+      referrerPolicy: 'no-referrer',
+    });
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect(init.headers).toBeUndefined();
+  });
+
   const respond = (body: Uint8Array, headers: Record<string, string>) =>
     (async () => new Response(body, { status: 200, headers })) as unknown as typeof fetch;
 
@@ -113,6 +149,21 @@ describe('size pre-check', () => {
 });
 
 describe('failure classification', () => {
+  it('maps the witness busy messages to a retryable busy code', () => {
+    for (const m of [
+      'recall: witness busy, try again shortly',
+      'recall: too many sessions from this client',
+      'recall: prover did not connect in time',
+    ]) {
+      expect(classifyFailure(new Error('x'), m)).toEqual({ error: m, code: 'busy' });
+    }
+  });
+
+  it('withTimeout rejects a promise that never settles', async () => {
+    await expect(withTimeout(new Promise(() => {}), 20, 'too slow')).rejects.toThrow('too slow');
+    await expect(withTimeout(Promise.resolve(7), 1_000, 'too slow')).resolves.toBe(7);
+  });
+
   it('prefers the witness message verbatim', () => {
     expect(classifyFailure(new Error('reveal failed'), 'recall: cookies/auth not allowed')).toEqual(
       {

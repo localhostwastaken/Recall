@@ -40,9 +40,16 @@ export function proveManager(): Promise<ProveManager> {
     const pm = new ProveManager();
     await pm.init();
     return pm;
-  })();
+  })().catch((err) => {
+    // Never cache a failed init: the next capture tries again.
+    manager = undefined;
+    throw err;
+  });
   return manager;
 }
+
+/** Failure when the prover could not hand over its transcript bytes. */
+export const TRANSCRIPT_UNAVAILABLE = 'capture failed: transcript unavailable';
 
 const cancelled = (): CaptureFailure => ({ error: 'capture cancelled', code: 'cancelled' });
 
@@ -107,11 +114,18 @@ export async function captureUrl(url: string, opts: CaptureOptions): Promise<Cap
     await pm.sendRequest(proverId, proxyUrl, {
       url: target.href,
       method: 'GET',
-      headers: requestHeaders(target, navigator.userAgent, overrides),
+      headers: requestHeaders(target, overrides),
     });
+    // The transcript snapshot is what the evidence is built from; without it there
+    // is nothing to prove (and empty bytes must never become an evidence file).
+    const sent = pm.getSentBytes(proverId);
+    const recv = pm.getRecvBytes(proverId);
+    if (sent.length === 0 || recv.length === 0) {
+      return { error: TRANSCRIPT_UNAVAILABLE, code: 'failed' };
+    }
 
     const computed = await pm.computeReveal(proverId, CAPTURE_HANDLERS);
-    const plan = revealPlan(computed, pm.getRecvBytes(proverId).length, overrides);
+    const plan = revealPlan(computed, recv.length, overrides);
     await pm.sendRevealConfig(proverId, {
       sent: plan.sentWithHandlers,
       recv: plan.recvWithHandlers,
@@ -132,8 +146,8 @@ export async function captureUrl(url: string, opts: CaptureOptions): Promise<Cap
       statement,
       signature: attestation.signature,
       signer: attestation.signer,
-      sent: pm.getSentBytes(proverId),
-      recv: pm.getRecvBytes(proverId),
+      sent,
+      recv,
       capturedUrl: target.href,
     });
     return { evidence };
