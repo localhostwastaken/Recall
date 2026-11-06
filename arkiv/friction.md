@@ -112,6 +112,13 @@ it, and what would have helped.
   opt-in "accept transfer" for recipients; and a flag that also forbids delete and transfer, for
   records meant to be permanent while paid for.
 
+## Also, on the Swarm side
+
+- **bzz.link and the upload gateway moderate HTML of non-allowlisted hashes; the hosting docs don't
+  mention it.** Our published app answered `302 -> bzz.link/forbidden` on api.gateway.ethswarm.org
+  and bzz.link, and was served only by download.gateway.ethswarm.org, until the Swarm team allowlists
+  the hash. Details, with the hashes, in [swarm.md](swarm.md#what-got-in-our-way-with-swarm).
+
 ## What worked well
 
 - Keyset paging (`gt('$key', last)` + `orderBy(asc('$key'))`) is stable while rows are being written,

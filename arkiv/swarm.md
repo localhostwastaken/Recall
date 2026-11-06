@@ -5,7 +5,7 @@
 | Swarm | Arkiv |
 |---|---|
 | The **evidence file** of each capture: a JSON file (`recall.evidence.v1`) with the witness's signed EIP-712 statement, the signature and signer, and the full TLS transcript (request and response bytes). A few KB; at most about 64 KB of page | The **index**: one `recall.v1.capture` entity per capture, with the page's `urlHash`, `bodySha256`, `serverName`, `witness`, `signedAt`, `httpStatus`, and the two Swarm fields below ([schema.md](schema.md)) |
-| The Recall **web app** itself, as a Swarm website (`pnpm publish:swarm`), so the verifier keeps working if GitHub Pages goes away | The **witness profile** (where to reach the witness) |
+| The Recall **web app** itself, live as a Swarm website (`pnpm publish:swarm`), so the verifier keeps working if GitHub Pages goes away: see [The web app on Swarm](#the-web-app-on-swarm) | The **witness profile** (where to reach the witness) |
 
 The entity field that holds the Swarm reference is **`evidenceRef`** (a 32-byte key attribute) on
 `recall.v1.capture`. Next to it, **`batchId`** names the postage batch the evidence was stamped with,
@@ -72,6 +72,38 @@ The batch is paid until about 2026-11-16 05:12 UTC. On 2026-11-06 the treasury a
 0.319 xBZZ; the same keep-alive added 7 days to the Arkiv record). After that the evidence stays only
 if someone tops the batch up: anyone can, with **Keep alive** on the capture's page in the app.
 
+## The web app on Swarm
+
+The built web app is a Swarm website, published on 2026-11-06 with
+`pnpm publish:swarm --net live --feed --days 14 --max-xbzz 1.5 --yes`. It is a copy of the GitHub
+Pages app for **browsing and verifying**, and it is a second place the verifier survives. Capturing
+and publishing use the GitHub Pages app: the extension only accepts messages from its listed origins
+(the Pages app, `*.bzz.link`, localhost), and the download gateway is not one of them.
+
+- **Working link:** <https://download.gateway.ethswarm.org/bzz/e002e9ab0bee50f874a8ee461fe053aca71c7e3be502b941d8933008e357f9e0/>
+- **Site manifest** (the mantaray manifest of the build; 276 chunks uploaded): `7d1e73275798f6e0e69a08804bda4b582182e51456c41182637e8240cfad45a8`. It
+  changes with every build.
+- **Feed manifest** (the address to share): `e002e9ab0bee50f874a8ee461fe053aca71c7e3be502b941d8933008e357f9e0`. A feed is a pointer its owner can move, and
+  the feed manifest is an address that always follows it. In one line: the feed keeps one address
+  across republishes, as in
+  [docs.ethswarm.org/docs/develop/host-your-website](https://docs.ethswarm.org/docs/develop/host-your-website/).
+  Feed owner `0x3c221Ba84864c187DaA72e9A861b20aAdE1F89C1`, topic `website`; update index 0
+  points at the site manifest above.
+- **Hosting batch ID:** `0x50c1a8d51231595606ea8730f14554c4cdbb5d64280e82063e9a24347dd1f3b9`
+  (depth 18, immutable, 14 days from 2026-11-06, 1.276 xBZZ). Batch owner and payer: the treasury
+  `0xd46480d1Ec02B8ce92aE383914026efD5F73f835`: approve tx
+  [`0x75eca45a...eae0`](https://gnosisscan.io/tx/0x75eca45ad0e6e332e4bece6bfe29ca931469b20dd775fd07618c2e8ef500eae0),
+  createBatch tx
+  [`0xbf73fc40...32dc`](https://gnosisscan.io/tx/0xbf73fc4064e2e2bf534433abf26caff292960e951c23c43c8860b2f824a132dc).
+  The feed update is stamped from the same batch.
+- **Uploaded through the gateway** `https://api.gateway.ethswarm.org` (`POST /chunks`, client-stamped,
+  as for evidence). The script reads the site back through
+  `https://download.gateway.ethswarm.org` and writes the feed only after the read-back matched.
+- **bzz.link does not serve it yet.** <https://bzz.link/bzz/e002e9ab0bee50f874a8ee461fe053aca71c7e3be502b941d8933008e357f9e0/> and the CID form
+  <https://bah5qcgza4abotkyl5zipq5fi5zdb7yctvstry7r34ublsqoysmyary2x7hqa.bzz.link/> redirect to
+  `/forbidden` until the Swarm team allowlists the hash; we have asked. The download gateway link
+  above works meanwhile. See the last item of [What got in our way](#what-got-in-our-way-with-swarm).
+
 ## The files that upload to Swarm and read from it
 
 | File | What it does |
@@ -106,7 +138,8 @@ pnpm --filter @recall/net exec vitest run test/swarm.test.ts -t "stamped upload"
 This buys a batch on the Gnosis fork, stamps a payload on the client, uploads it to node A with
 `POST /chunks` and downloads it byte-identical from node B. To publish a whole site instead:
 `pnpm publish:swarm --net local` prints the reference, and `http://localhost:1633/bzz/<ref>/` serves
-the app.
+the app. The live publish above is the same command with `--net live --feed` (it pays from the
+treasury key in `.env.local`).
 
 **Upload (live, the product path):** load the extension (`pnpm extension:zip`) and paste its ID
 into the app's Settings, buy a batch on the app's Storage page (7 or 30 days; about 0.32 xBZZ for 7
@@ -139,3 +172,13 @@ view downloading the evidence from a different gateway and checking its root.
 - **The local cluster needs three full Bee nodes.** With a light node, or only two nodes, Bee never
   marks peers healthy: `POST /chunks` takes 30 s per chunk and the second node cannot retrieve
   anything.
+- **bzz.link and the upload gateway moderate HTML of non-allowlisted hashes; the hosting docs don't
+  mention it.** Publishing the app (276 chunks, the site manifest above) worked, and the JS asset
+  read back fine, but the `index.html` of our hash answered `302 -> https://bzz.link/forbidden?hash=...`
+  on api.gateway.ethswarm.org and on bzz.link, for the site manifest and later for the feed manifest.
+  `download.gateway.ethswarm.org` served the exact bytes (200). Raw `/bytes/<ref>` evidence is not
+  affected. Nothing in the hosting docs (docs.ethswarm.org/docs/develop/host-your-website) says a hash
+  must be allowlisted first. We read back through the download gateway instead
+  (the publish script now classifies a forbidden redirect as "held by gateway moderation") and asked
+  the Swarm team to allowlist the feed manifest. **Would help:** a line in the hosting docs, and a
+  way to see a hash's moderation status before publishing.

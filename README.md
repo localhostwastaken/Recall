@@ -6,6 +6,12 @@ person who captured it: you trust the witness key you pin, and by default that i
 > **Judges: start here**
 > - **See a verified capture (no install, no wallet):** open the capture in the app:
 >   <https://localhostwastaken.github.io/Recall/app/#/c/0xc50021a907dbd1d511d2e4a1482614647cbbb4a0dd2d4bf26ad70065b3611244>
+> - **Install the extension and capture a page yourself:** download `recall-extension.zip` from the
+>   [v0.1.0-mumbai release](https://github.com/localhostwastaken/Recall/releases/tag/v0.1.0-mumbai), unzip it and "Load unpacked" in `chrome://extensions`
+>   (steps under [Run it](#run-it)).
+> - **The app on Swarm (browse and verify):**
+>   <https://download.gateway.ethswarm.org/bzz/e002e9ab0bee50f874a8ee461fe053aca71c7e3be502b941d8933008e357f9e0/>
+>   (one address that survives republishing; details under [The web app](#the-web-app)).
 > - **Run the Arkiv query:** `pnpm install && pnpm arkiv:query` (see [Writer wallets](#writer-wallets)),
 >   or the keyless `curl` there.
 > - **Arkiv prize docs:** [arkiv/](arkiv/): [schema](arkiv/schema.md), [how we use Arkiv](arkiv/how-you-use-arkiv.md),
@@ -28,8 +34,9 @@ offline, what the page said:
 2. **Store.** The signed evidence file (request, response, signature) goes to **Swarm**, stamped in
    your browser with a postage batch you paid for.
 3. **Index.** A small record (which page, which body hash, which witness, when, where the evidence
-   is) goes to **Arkiv**, written from your own MetaMask. Records are created read-only: nobody,
-   not even the person who wrote one, can change its content later.
+   is) goes to **Arkiv**, written from your own MetaMask. Records the product writes are created read-only:
+   nobody, not even the person who wrote one, can change its content later (our live demo records
+   were written before that rule and are not read-only).
 4. **Verify.** The Recall web app (or `pnpm arkiv:query`) finds every capture of a URL on Arkiv,
    downloads the evidence from any Swarm gateway, recomputes the Swarm hash, and re-runs every
    check itself: transcript hashes (A), the request and response (B), and the witness signature
@@ -38,8 +45,27 @@ offline, what the page said:
    downloaded evidence file can be dropped into the app and verified with the network switched off.
 
 Live: the app at <https://localhostwastaken.github.io/Recall/app/>, the demo notice at
-<https://localhostwastaken.github.io/Recall/notice/>. A copy of the app on Swarm is being
-published. <!-- TODO: the app's Swarm reference and bzz.link URL after the live publish -->
+<https://localhostwastaken.github.io/Recall/notice/>.
+
+The app is also live on Swarm, so the verifier survives if GitHub Pages goes away:
+
+- **Working link:** <https://download.gateway.ethswarm.org/bzz/e002e9ab0bee50f874a8ee461fe053aca71c7e3be502b941d8933008e357f9e0/>
+- **Feed manifest (the address to share):**
+  `e002e9ab0bee50f874a8ee461fe053aca71c7e3be502b941d8933008e357f9e0`. It names a Swarm feed (owner
+  `0x3c221Ba84864c187DaA72e9A861b20aAdE1F89C1`, topic `website`): the feed keeps one address across
+  republishes by pointing at the current site, as in
+  [docs.ethswarm.org/docs/develop/host-your-website](https://docs.ethswarm.org/docs/develop/host-your-website/).
+  The site manifest it points at today is `7d1e73275798f6e0e69a08804bda4b582182e51456c41182637e8240cfad45a8`.
+- **Storage:** postage batch `0x50c1a8d51231595606ea8730f14554c4cdbb5d64280e82063e9a24347dd1f3b9`
+  (depth 18, 14 days, 1.276 xBZZ, paid by the treasury). Every transaction and value is in
+  [arkiv/swarm.md](arkiv/swarm.md) and the [evidence log](docs/evidence-log.md).
+- **bzz.link is not working yet:** <https://bzz.link/bzz/e002e9ab0bee50f874a8ee461fe053aca71c7e3be502b941d8933008e357f9e0/> and
+  <https://bah5qcgza4abotkyl5zipq5fi5zdb7yctvstry7r34ublsqoysmyary2x7hqa.bzz.link/> show
+  `/forbidden` until the Swarm team allowlists the hash; we have asked. The download gateway above
+  is unaffected.
+- **Browse and verify only.** Capturing and publishing use the GitHub Pages app: the extension only
+  accepts messages from its listed origins (the Pages app, `*.bzz.link`, localhost), and the
+  download gateway is not one of them.
 
 ## Demo
 
@@ -96,7 +122,7 @@ runs is needed to find it, fetch it or check it.
 
 - **C: Censorship resistance.** We run the witness (needed only for new captures; anyone can run
   another from `witness/`, and readers pin the keys they trust) and the GitHub Pages copy of the app.
-  If either goes away, existing captures still verify from Arkiv, Swarm, any copy of the app or an
+  If either goes away, existing captures still verify from Arkiv, Swarm, any copy of the app (one is on Swarm) or an
   offline file, as long as the Arkiv record and the Swarm batch are paid for and the testnet runs.
 - **O: Open source.** MIT ([LICENSE](LICENSE)); the forked TLSNotary code keeps its MIT/Apache-2.0
   notices. Extension, witness, app, scripts and the local devnet all build and run from this repo.
@@ -135,6 +161,8 @@ pnpm devnet:down
 Details: [devnet/README.md](devnet/README.md).
 
 ### The extension (live)
+Download `recall-extension.zip` from the
+[v0.1.0-mumbai release](https://github.com/localhostwastaken/Recall/releases/tag/v0.1.0-mumbai), or build the same thing yourself:
 ```bash
 pnpm extension:zip     # release build (Mozilla roots, no dev hooks) -> dist/recall-extension.zip
 ```
@@ -151,9 +179,12 @@ pnpm extension:zip     # release build (Mozilla roots, no dev hooks) -> dist/rec
 
 ### The web app
 - Hosted: <https://localhostwastaken.github.io/Recall/app/> (live networks).
+- On Swarm: <https://download.gateway.ethswarm.org/bzz/e002e9ab0bee50f874a8ee461fe053aca71c7e3be502b941d8933008e357f9e0/> (same build; see "Live" above). Use
+  it to browse and verify; capture and publish from the GitHub Pages app.
 - From source: `pnpm --filter web dev` (local devnet) or `VITE_RECALL_NET=live pnpm --filter web dev`
   (live networks). A build is plain static files (`pnpm --filter web build`), so it can be served
-  from anywhere, including Swarm: `pnpm publish:swarm --net live`.
+  from anywhere, including Swarm: `pnpm publish:swarm --net live --feed` (that is how the copy above
+  was published).
 
 ### Your own witness
 Copy `.env.example` to `.env.local`, run `pnpm witness:keygen` (writes the key, prints only the
@@ -220,8 +251,12 @@ now on show `"readonly":true`.
   link (a 5 Mbps venue uplink, in our case) it times out.
 - **Testnet.** The index is on Arkiv **Rabdi**, a testnet. Swarm and Gnosis are mainnet.
 - **Public gateway moderation.** By default evidence is uploaded and read through the public Swarm
-  gateways (api/download.gateway.ethswarm.org, bzz.link), which can refuse or take content down. The
-  data stays on Swarm while its batch is paid; any Bee node or gateway can be set in Settings.
+  gateways (api/download.gateway.ethswarm.org, bzz.link), which can refuse or take content down. We
+  met this ourselves: api.gateway and bzz.link redirect the HTML of a hash that is not allowlisted
+  to `/forbidden`, which is why our Swarm copy of the app is only reachable through
+  download.gateway.ethswarm.org for now. Raw evidence bytes (`/bytes/<ref>`) were served by
+  download.gateway and bzz.link. The data stays on Swarm while its batch is paid; any Bee node or gateway can be set in
+  Settings.
 - **The Arkiv access key ships in the client, by design.** It is a public rate-limit key baked into
   the app and extension builds (never committed); anyone can read it from the bundle, and it travels
   in the Rabdi URL path, so it shows in network logs. Users can replace it in Settings.
@@ -241,7 +276,8 @@ now on show `"readonly":true`.
   depth 17 or 18) before anyone pays to top it up.
 - **Storage lasts as long as someone pays.** A postage batch and an Arkiv record expire unless someone
   uses Keep alive (permissionless). The demo capture's batch is paid until about 2026-11-16 (kept
-  alive by 7 days on 2026-11-06); anyone can extend it with Keep alive on the capture's page.
+  alive by 7 days on 2026-11-06); anyone can extend it with Keep alive on the capture's page. The app's own Swarm batch is paid
+  for 14 days from 2026-11-06 (until about 2026-11-20); topping a batch up is permissionless.
 - **Install and keys.** The extension installs only in developer mode ("Load unpacked"); it is not
   in the Chrome Web Store. Its stamp key (which can only stamp chunks into batches it owns) is stored
   unencrypted in `chrome.storage.local`.
@@ -250,7 +286,7 @@ now on show `"readonly":true`.
 ## AI use
 
 We used AI coding assistants to write code and tests; all design decisions were the team's. The
-specification and plan we wrote to drive the build are in [docs/superpowers/](docs/superpowers/)
+specification and plan that record those decisions are in [docs/superpowers/](docs/superpowers/)
 (25 recorded decisions).
 
 ## Licence and credits

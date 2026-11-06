@@ -178,3 +178,40 @@ Spend, from the treasury balances: 0.319010944057344 xBZZ, 1.6e-11 xDAI and 0.00
 - The same for …/notice/?run=xbvmqf0p: entity 0x6c488161621f449b4b21f165f9717a9c2da183ea45a7da28a4eb3084ca88123c
   (block 1575565), verified A-C, 2735 B.
 - The bare notice URL https://localhostwastaken.github.io/Recall/notice/ has no capture rows (every live run used a fresh `?run=`).
+
+## 2026-11-06 P5 live publish: the web app on Swarm (UTC, batch bought about 11:11Z)
+
+Command: `pnpm publish:swarm --net live --feed --days 14 --max-xbzz 1.5 --yes` (`scripts/publish-swarm.ts`), paid by the treasury 0xd46480d1Ec02B8ce92aE383914026efD5F73f835. The app is the live build (`VITE_RECALL_NET=live`), built after the read-only and `$creator` code fixes (0084efa).
+
+Postage batch (bought for this site):
+- batchId 0x50c1a8d51231595606ea8730f14554c4cdbb5d64280e82063e9a24347dd1f3b9, depth 18, immutable, 14 days, owner and payer the treasury (the payer key is the stamp key).
+- Cost 1.276 xBZZ (a 30-day batch would have cost 2.734 xBZZ in the dry run; the run was capped at `--max-xbzz 1.5`).
+- approve tx 0x75eca45ad0e6e332e4bece6bfe29ca931469b20dd775fd07618c2e8ef500eae0, createBatch tx 0xbf73fc4064e2e2bf534433abf26caff292960e951c23c43c8860b2f824a132dc (https://gnosisscan.io/tx/0xbf73fc4064e2e2bf534433abf26caff292960e951c23c43c8860b2f824a132dc).
+- Paid for 14 days from 2026-11-06, so until about 2026-11-20.
+
+Result:
+- 276 chunks uploaded with client-side stamps (`POST https://api.gateway.ethswarm.org/chunks`).
+- Site manifest: 7d1e73275798f6e0e69a08804bda4b582182e51456c41182637e8240cfad45a8. All 4 files of the build were checked byte-identical to the published site.
+- Feed: owner 0x3c221Ba84864c187DaA72e9A861b20aAdE1F89C1 (`HOSTING_FEED_KEY`), topic `website`, index 0 points at the site manifest. The feed is written only after the site read back correctly.
+- FEED MANIFEST: e002e9ab0bee50f874a8ee461fe053aca71c7e3be502b941d8933008e357f9e0. A feed keeps one address across republishes, as in docs.ethswarm.org/docs/develop/host-your-website. It is byte for byte what bee-js `createFeedManifest` stores.
+- Working link: https://download.gateway.ethswarm.org/bzz/e002e9ab0bee50f874a8ee461fe053aca71c7e3be502b941d8933008e357f9e0/ (HTTP 200; the site manifest path /bzz/7d1e…45a8/ is 200 there too, rechecked after the publish).
+- The extension's `externally_connectable` does not list download.gateway.ethswarm.org (it lists the Pages app, `*.bzz.link` and localhost). The Swarm copy is therefore for browsing and verifying; capturing and publishing use the GitHub Pages app.
+
+## Finding: public gateways moderate HTML of non-allowlisted hashes
+
+- The first run (the one that bought the batch) uploaded and verified the JS asset, then failed on `index.html`: https://api.gateway.ethswarm.org/bzz/<site>/ and https://bzz.link/bzz/<site>/ answered `302` to `https://bzz.link/forbidden?hash=<site>`. The feed was not written (verify-before-feed worked as designed).
+- https://download.gateway.ethswarm.org/bzz/<site>/ served the exact `index.html` (200).
+- The same holds for the feed manifest, rechecked after the publish:
+  - `GET https://bzz.link/bzz/e002…f9e0/`: 302 to `https://bzz.link/forbidden?hash=e002e9ab…f9e0`.
+  - `GET https://bah5qcgza4abotkyl5zipq5fi5zdb7yctvstry7r34ublsqoysmyary2x7hqa.bzz.link/` (the CID form): 302 to the same /forbidden URL.
+  - `GET https://api.gateway.ethswarm.org/bzz/7d1e…45a8/`: 302 to `https://bzz.link/forbidden?hash=7d1e7327…45a8`.
+  - `GET https://download.gateway.ethswarm.org/bzz/e002…f9e0/`: 200.
+- Raw bytes are not affected: `/bytes/<ref>` evidence is served by download.gateway and bzz.link (P2 above).
+- The hosting docs (docs.ethswarm.org/docs/develop/host-your-website) do not mention that hashes must be allowlisted. We asked the Swarm team to allowlist the feed manifest; until then bzz.link shows /forbidden.
+- Fix (29b6f94): on live, `publish:swarm` reads the site back through download.gateway (`--read` overrides), and a redirect to /forbidden is reported as "held by gateway moderation", not as other bytes. The run was resumed with `--batch` on the same build (no rebuild; the dist was checked byte-identical to the published site first), so no second batch was bought.
+
+## 2026-11-06 extension release
+
+- https://github.com/localhostwastaken/Recall/releases/tag/v0.1.0-mumbai, asset `recall-extension.zip` (7,336,204 bytes, sha256 01b2428381bf032bab678e359936ecb69edfd48eaf87783814a77f1988c0d64f).
+- Release build (Mozilla roots, no developer hooks), built from commit a9c97a5.
+- Install: unzip, `chrome://extensions`, Developer mode, Load unpacked, then paste the extension ID in the app's Settings.
