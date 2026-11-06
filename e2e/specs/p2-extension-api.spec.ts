@@ -192,7 +192,12 @@ test.describe('@p2 extension api', () => {
       const opened = ext.context.waitForEvent('page');
       await popup.getByRole('button', { name: 'Buy storage' }).click();
       const storagePage = await opened;
-      await expect.poll(() => storagePage.url()).toBe(`${APP}/#/storage`);
+      // The link names this extension, so Buy storage finds its stamp key without Settings.
+      await expect.poll(() => storagePage.url()).toBe(`${APP}/#/storage?ext=${ext.extensionId}`);
+      await expect(storagePage.locator('.owner-row')).toContainText('Owner (extension):');
+      await expect(storagePage.locator('.owner-row .mono-value')).toHaveAttribute('title', stampAddress);
+      // Used for that page only: nothing was written to the app's settings.
+      expect(await storagePage.evaluate(() => localStorage.getItem('recall.web.settings.v1'))).toBeNull();
       await storagePage.close();
 
       // Only an expired batch left: a distinct notice (the popup follows the pool live).

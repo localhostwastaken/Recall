@@ -1,5 +1,5 @@
 import { isAddress, type Address, type Hex } from 'viem';
-import { getSettings } from './settings';
+import { EXTENSION_ID, getSettings } from './settings';
 
 /** Why a message to the extension failed. */
 export class ExtError extends Error {
@@ -58,6 +58,25 @@ function send<T>(msg: unknown, opts: { extensionId?: string; timeoutMs?: number 
 }
 
 export const ext = { send };
+
+/**
+ * The extension the link names (`?ext=<id>` after the hash route), which the extension adds when
+ * it opens the app, else undefined. It is used for that page only and never stored, so a link on
+ * a shared /bzz/ origin cannot change anyone's settings (R38).
+ */
+export function extensionIdFromLink(hash?: string): string | undefined {
+  let h = hash;
+  if (h === undefined) {
+    try {
+      h = window.location.hash;
+    } catch {
+      return undefined;
+    }
+  }
+  const q = h.split('?')[1];
+  const id = q ? new URLSearchParams(q).get('ext') : null;
+  return id && EXTENSION_ID.test(id) ? id : undefined;
+}
 
 /** The address of the extension's stamp key; it owns the batches the page buys. */
 export async function getStampAddress(opts?: { extensionId?: string }): Promise<Address> {

@@ -22,7 +22,7 @@ import { custom, type Account, type Address, type Hex } from 'viem';
 import { ExhibitCard } from '../components/ExhibitCard';
 import { downloadEvidence } from '../download';
 import { errorText, shortErrorText } from '../errors';
-import { ExtError, ext } from '../ext';
+import { ExtError, ext, extensionIdFromLink } from '../ext';
 import { formatDay, formatUtc } from '../format';
 import { getNetConfig } from '../net';
 import { MonoValue } from '../ui/MonoValue';
@@ -71,7 +71,6 @@ type PendingRecord = {
 /** Evidence inline in an Arkiv record must stay within this size (spec 3.2). */
 const INLINE_EVIDENCE_MAX = 128 * 1024;
 const KEY = /^0x[0-9a-fA-F]{64}$/;
-const EXTENSION_ID = /^[a-p]{32}$/;
 const RECORD_DAYS = 30;
 
 type Ready = {
@@ -109,13 +108,6 @@ const sentence = (s: string) => {
   const t = s.trim().replace(/\.+$/, '');
   return t.charAt(0).toUpperCase() + t.slice(1);
 };
-
-/** The extension to ask: the `?ext=` the extension put in the link, else the one in Settings. */
-function extensionIdFromLink(): string | undefined {
-  const q = window.location.hash.split('?')[1];
-  const id = q ? new URLSearchParams(q).get('ext') : null;
-  return id && EXTENSION_ID.test(id) ? id : undefined;
-}
 
 /** Loads the pending capture and checks everything the record will say. */
 async function loadPending(captureId: string, extensionId: string | undefined, onStep: (s: string) => void): Promise<Load> {

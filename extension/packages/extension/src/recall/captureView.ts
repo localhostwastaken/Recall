@@ -369,6 +369,11 @@ export function approveUrl(appUrl: string, captureId: string, extensionId: strin
   return new URL(`#/approve/${captureId}?ext=${extensionId}`, appUrl).href;
 }
 
+/** The web app's Buy storage page; `ext` tells the page which extension owns the batches. */
+export function storageUrl(appUrl: string, extensionId: string): string {
+  return new URL(`#/storage?ext=${extensionId}`, appUrl).href;
+}
+
 /** The web app's timeline of a page. */
 export function timelineUrl(appUrl: string, urlHash: string): string {
   return new URL(`#/u/${urlHash}`, appUrl).href;

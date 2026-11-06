@@ -14,6 +14,7 @@ import { POOL_KEY, parsePool, storageState, type StorageState } from '../../reca
 import type { PopupRequest } from '../../recall/messages';
 import {
   approveUrl,
+  storageUrl,
   captureHelper,
   captureUrl,
   earlierCopy,
@@ -115,10 +116,10 @@ function useUploadMode(): UploadMode | undefined {
   return mode;
 }
 
-/** Opens the web app's Buy storage page in a new tab. */
+/** Opens the web app's Buy storage page in a new tab, naming this extension (`?ext=`). */
 async function openBuyStorage(): Promise<void> {
   const { appUrl } = await loadSettings();
-  await chrome.tabs.create({ url: new URL('#/storage', appUrl).href });
+  await chrome.tabs.create({ url: storageUrl(appUrl, chrome.runtime.id) });
 }
 
 /** Opens a page of the web app (built from the app URL in settings) in a new tab. */

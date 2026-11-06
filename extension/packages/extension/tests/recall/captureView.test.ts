@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { EvidenceFile } from '@recall/evidence';
 import {
   approveUrl,
+  storageUrl,
   checkLines,
   jobSteps,
   earlierCopy,
@@ -148,6 +149,10 @@ describe('capture view copy', () => {
     expect(approveUrl('http://localhost:5173', id, ext)).toBe(`http://localhost:5173/#/approve/${id}?ext=${ext}`);
     expect(approveUrl('https://localhostwastaken.github.io/Recall/app/', id, ext)).toBe(
       `https://localhostwastaken.github.io/Recall/app/#/approve/${id}?ext=${ext}`,
+    );
+    // Buy storage names the extension too, so the page finds the stamp key without Settings.
+    expect(storageUrl('https://localhostwastaken.github.io/Recall/app/', ext)).toBe(
+      `https://localhostwastaken.github.io/Recall/app/#/storage?ext=${ext}`,
     );
   });
 

@@ -1,7 +1,7 @@
 import { XBZZ, batchFromTx, batchTtlSeconds, buyBatch, costFor, waitBatchUsable } from '@recall/net';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPublicClient, erc20Abi, http, isAddress, type Address, type Hex } from 'viem';
-import { addBatches, getStampAddress } from '../ext';
+import { addBatches, extensionIdFromLink, getStampAddress } from '../ext';
 import { ceilSig, formatBzz, formatBzzCeil, formatTtl, formatXdaiCeil } from '../format';
 import { GAS_PER_BATCH } from '../gas';
 import { getNetConfig } from '../net';
@@ -93,19 +93,23 @@ export function Storage() {
     [cfg],
   );
 
-  // Owner: the extension's stamp address when the extension answers, else typed by hand.
-  const [extLink, setExtLink] = useState<ExtLink>(() => (getSettings().extensionId ? { kind: 'checking' } : { kind: 'absent' }));
+  // Owner: the extension's stamp address when the extension answers, else typed by hand. The
+  // extension is the one the link names (the popup opens `#/storage?ext=<id>`; used for this page
+  // only, never stored), else the one in Settings.
+  const [extensionId] = useState(() => extensionIdFromLink() ?? (getSettings().extensionId || undefined));
+  const extOpts = extensionId ? { extensionId } : undefined;
+  const [extLink, setExtLink] = useState<ExtLink>(() => (extensionId ? { kind: 'checking' } : { kind: 'absent' }));
   useEffect(() => {
-    if (!getSettings().extensionId) return;
+    if (!extensionId) return;
     let live = true;
-    getStampAddress().then(
+    getStampAddress({ extensionId }).then(
       (address) => live && setExtLink({ kind: 'connected', address }),
       () => live && setExtLink({ kind: 'absent' }),
     );
     return () => {
       live = false;
     };
-  }, []);
+  }, [extensionId]);
   const [ownerText, setOwnerText] = useState('');
   const [ownerTouched, setOwnerTouched] = useState(false);
   const typedOwner = isAddress(ownerText.trim()) ? (ownerText.trim() as Address) : null;
@@ -287,7 +291,7 @@ export function Storage() {
       const fresh = plan.flatMap((s) => (s.batchId && !registered.has(s.batchId) ? [s.batchId] : []));
       if (extLink.kind === 'connected' && fresh.length > 0) {
         try {
-          await addBatches(fresh);
+          await addBatches(fresh, extOpts);
           fresh.forEach((id) => registered.add(id));
         } catch (err) {
           setExtWarning(reason(err));
@@ -471,7 +475,7 @@ export function Storage() {
                   onClick={async () => {
                     const ids = slots.flatMap((s) => (s.batchId && !registered.has(s.batchId) ? [s.batchId] : []));
                     try {
-                      await addBatches(ids);
+                      await addBatches(ids, extOpts);
                       ids.forEach((id) => registered.add(id));
                       setExtWarning(null);
                       setHandedOver(allHandedOver(slots));
