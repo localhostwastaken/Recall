@@ -8,14 +8,14 @@
   padding: var(--space-2) 0;
   font-size: var(--text-sm);
   line-height: var(--lh-sm);
-  color: var(--accent);
+  color: var(--accent-text);
   text-decoration: none;
   overflow-wrap: anywhere;
 }
 
 .outside-link:hover,
 .outside-link:focus-visible {
-  color: var(--accent-hover);
+  color: var(--text);
   text-decoration: underline;
 }
 
