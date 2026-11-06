@@ -1,6 +1,7 @@
 // The extension's API for the Recall web app (chrome.runtime.onMessageExternal). Only
-// origins in the manifest's externally_connectable can call it, but those include
-// gateways that serve anyone's content, so nothing here trusts the caller (ruling R27):
+// origins in the manifest's externally_connectable can call it (a release build: the GitHub
+// Pages app; dev builds also localhost and *.bzz.link, gateways that serve anyone's content),
+// and any page there may call it, so nothing here trusts the caller (ruling R27):
 // - recall.getStampAddress  -> {address, version}        public, read-only (version: the extension's)
 // - recall.addBatches       -> {pool} | {error, pool, rejected}  each batch checked on Gnosis
 // - recall.getPending       -> PendingRecord | {error}   exact unguessable captureId only

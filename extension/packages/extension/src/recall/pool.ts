@@ -23,6 +23,14 @@ export const USABLE_AFTER_BLOCKS = 12n;
 export const MAX_BATCH_IDS = 50;
 /** A refused batch is answered from memory for this long (no chain reads for repeats). */
 export const REFUSED_CACHE_MS = 2 * 60_000;
+/**
+ * "Not found" is remembered for less time: a batch bought a moment ago may not be visible on
+ * every RPC node yet. Long enough that a page repeating unknown ids cannot turn each request
+ * into Gnosis RPC reads.
+ */
+export const NOT_FOUND_CACHE_MS = 20_000;
+/** At most this many refusals are remembered (the oldest go first). */
+export const REFUSED_CACHE_MAX = 500;
 
 export type PoolArea = {
   get(key: string): Promise<Record<string, unknown>>;
@@ -123,12 +131,26 @@ function oneAdd<T>(fn: () => Promise<T>): Promise<T> {
   return next;
 }
 
-/** Recent refusals: batch id -> reason, until. "Not found" and read errors are not kept. */
+/** Recent on-chain refusals: batch id -> reason, until (insertion order: oldest first). Read errors are not kept. */
 const refused = new Map<string, { reason: string; until: number }>();
+
+function rememberRefusal(batchId: string, reason: string, until: number, now: number): void {
+  refused.delete(batchId);
+  if (refused.size >= REFUSED_CACHE_MAX) {
+    for (const [k, v] of refused) if (v.until <= now) refused.delete(k);
+  }
+  while (refused.size >= REFUSED_CACHE_MAX) refused.delete(refused.keys().next().value!);
+  refused.set(batchId, { reason, until });
+}
 
 /** Test hook: forget remembered refusals. */
 export function clearRefusedCache(): void {
   refused.clear();
+}
+
+/** Test hook: how many refusals are remembered. */
+export function refusedCacheSize(): number {
+  return refused.size;
 }
 
 export async function loadPool(area: PoolArea = defaultArea()): Promise<PoolBatch[]> {
@@ -176,8 +198,10 @@ export function addBatches(
           const info = await readBatch(deps.pub, batchId, deps.stampAddress, price);
           const problem = batchProblem(info, deps.stampAddress);
           // Only an on-chain verdict is remembered, never a read error (caught below).
-          if (problem && info)
-            refused.set(batchId, { reason: problem, until: now + REFUSED_CACHE_MS });
+          if (problem) {
+            const ttl = info ? REFUSED_CACHE_MS : NOT_FOUND_CACHE_MS;
+            rememberRefusal(batchId, problem, now + ttl, now);
+          }
           return { batchId, info, problem };
         } catch (err) {
           const why = err instanceof Error ? err.message.split('\n')[0] : String(err);

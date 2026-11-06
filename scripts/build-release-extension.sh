@@ -61,6 +61,9 @@ fail() { echo "release build check FAILED: $*" >&2; exit 1; }
 [ -f "$OUT/manifest.json" ] || fail "no $OUT/manifest.json"
 name="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).name)' "$OUT/manifest.json")"
 [ "$name" = "Recall" ] || fail "manifest name is '$name', expected 'Recall'"
+# Only the GitHub Pages app may message a release build (no localhost, no shared bzz.link origins).
+connectable="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).externally_connectable.matches.join(" "))' "$OUT/manifest.json")"
+[ "$connectable" = "https://localhostwastaken.github.io/*" ] || fail "externally_connectable is '$connectable', expected only https://localhostwastaken.github.io/*"
 
 # Dev-only markers: the Playwright test hook, the dev build object, the dev label.
 for marker in captureForTest __RECALL_DEV__ __RECALL_DEV_CA_DER_B64__ devCa 'Recall (dev)'; do

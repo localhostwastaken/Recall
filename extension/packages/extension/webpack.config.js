@@ -7,6 +7,7 @@ var { CleanWebpackPlugin } = require('clean-webpack-plugin');
 var ReactRefreshWebpackPlugin = require('@pmmmwh/react-refresh-webpack-plugin');
 var ReactRefreshTypeScript = require('react-refresh-typescript');
 var NodeProtocolResolvePlugin = require('./utils/NodeProtocolResolvePlugin');
+var { recallManifest } = require('./utils/recallManifest');
 
 const ASSET_PATH = process.env.ASSET_PATH || '/';
 
@@ -229,10 +230,9 @@ var options = {
           force: true,
           transform: function (content, path) {
             // generates the manifest file using the package.json informations
-            const manifest = JSON.parse(content.toString());
-            // Recall: a dev build (test CA, devnet defaults) is labelled so it is never
-            // mistaken for the release build in chrome://extensions.
-            if (RECALL_DEV) manifest.name = `${manifest.name} (dev)`;
+            // Recall: a dev build is labelled "(dev)"; a release build accepts messages
+            // from the GitHub Pages app only (utils/recallManifest.js).
+            const manifest = recallManifest(JSON.parse(content.toString()), { dev: RECALL_DEV });
             return Buffer.from(
               JSON.stringify({
                 description: process.env.npm_package_description,

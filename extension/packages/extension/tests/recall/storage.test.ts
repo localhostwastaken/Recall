@@ -32,6 +32,9 @@ import {
   applyBatchUpdates,
   batchProblem,
   clearRefusedCache,
+  NOT_FOUND_CACHE_MS,
+  REFUSED_CACHE_MAX,
+  refusedCacheSize,
   parseBatchIds,
   type BatchInfo,
 } from '../../src/recall/pool';
@@ -296,17 +299,38 @@ describe('batch ids and checks', () => {
     expect((area.data[POOL_KEY] as PoolBatch[])[2]).toMatchObject({ depth: 18, startBlock: '150' });
   });
 
-  it('remembers refusals briefly (no chain reads), but never "not found"', async () => {
+  it('remembers refusals briefly (no chain reads); "not found" for a shorter time', async () => {
     const other = privateKeyToAddress(generatePrivateKey());
     const pub = fakeChain({ [id(2)]: [other, 17, 16, true] });
     const area = memArea();
     await addBatches([id(2), id(3)], { pub, stampAddress: stamp, area, now: 1_000 });
     const before = calls(pub, 'batches');
+    // A page repeating unknown ids cannot make each request a Gnosis RPC read.
     const r = await addBatches([id(2), id(3)], { pub, stampAddress: stamp, area, now: 2_000 });
-    expect(r.rejected.map((x) => x.batchId)).toEqual([id(2), id(3)]);
+    expect(r.rejected.map((x) => [x.batchId, x.reason])).toEqual([
+      [id(2), expect.stringMatching(/owner/)],
+      [id(3), 'batch not found on Gnosis'],
+    ]);
+    expect(calls(pub, 'batches') - before).toBe(0);
+    // A just-bought batch may not be visible yet: "not found" is forgotten sooner.
+    await addBatches([id(2), id(3)], { pub, stampAddress: stamp, area, now: 1_000 + NOT_FOUND_CACHE_MS + 1 });
     expect(calls(pub, 'batches') - before).toBe(1); // only id(3) read again
     await addBatches([id(2)], { pub, stampAddress: stamp, area, now: 1_000 + 3 * 60_000 });
     expect(calls(pub, 'batches') - before).toBe(2); // expired from the cache
+  });
+
+  it('keeps at most REFUSED_CACHE_MAX refusals', async () => {
+    const pub = fakeChain({});
+    const area = memArea();
+    const many = Array.from({ length: REFUSED_CACHE_MAX + 10 }, (_, i) => id(1000 + i));
+    for (let i = 0; i < many.length; i += 50) {
+      await addBatches(many.slice(i, i + 50), { pub, stampAddress: stamp, area, now: 1_000 });
+    }
+    expect(refusedCacheSize()).toBe(REFUSED_CACHE_MAX);
+    // The oldest were dropped, so they are read again; the newest are still remembered.
+    const before = calls(pub, 'batches');
+    await addBatches([many[0]!, many[many.length - 1]!], { pub, stampAddress: stamp, area, now: 2_000 });
+    expect(calls(pub, 'batches') - before).toBe(1);
   });
 
   it('runs one addBatches call at a time', async () => {
