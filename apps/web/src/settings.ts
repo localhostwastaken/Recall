@@ -37,7 +37,45 @@ export const DUPLICATE_WITNESS_ERROR = 'That witness is already in the list.';
 export const LABEL_ERROR = 'Enter a label for this witness.';
 export const DOWNLOAD_ERROR = 'Enter at least one gateway address.';
 export const KEY_ERROR = 'Paste only the key, without spaces and not as an address.';
+export const LABEL_DEFAULT_ERROR = 'That label can\'t include the word "default". It is kept for the built-in witness.';
 export { ADDRESS_ERROR, URL_ERROR };
+
+/** A label for a witness the person adds: needed, and never imitating the built-in "(default)". */
+export function labelError(label: string): string | undefined {
+  const t = label.trim();
+  if (!t) return LABEL_ERROR;
+  return IMITATES_DEFAULT.test(t) ? LABEL_DEFAULT_ERROR : undefined;
+}
+
+/** The word "default" on its own (not "undefaulted"): only the built-in witness may carry it. */
+const IMITATES_DEFAULT = /\bdefault\b/i;
+
+/**
+ * R38. On a shared gateway origin (`https://<gateway>/bzz/<ref>/`) every Swarm site shares one
+ * origin and so one localStorage: another site could plant a witness or an endpoint here. There
+ * the app ignores stored settings except the theme and uses its built-in defaults. A path with
+ * `/bzz/` anywhere in it counts (a prefix before it too), compared case-insensitively and after
+ * percent-decoding. The app's own addresses (bzz.link subdomains, GitHub Pages, localhost) are
+ * not shared.
+ */
+export function isSharedOrigin(pathname?: string): boolean {
+  let path = pathname;
+  if (path === undefined) {
+    try {
+      path = window.location.pathname;
+    } catch {
+      return false;
+    }
+  }
+  let decoded = path;
+  try {
+    decoded = decodeURIComponent(path);
+  } catch {
+    /* an undecodable path is tested as written */
+  }
+  return /(^|\/)bzz\//i.test(decoded.replace(/\/{2,}/g, '/'));
+}
+
 
 /** The text fields of the Settings page that are validated on blur. `downloadText` holds one gateway per line. */
 export type FieldKey = 'arkivRpcUrl' | 'arkivAccessKey' | 'downloadText' | 'uploadUrl' | 'gnosisRpcUrl' | 'extensionId';
@@ -96,7 +134,9 @@ function sanitize(p: unknown): Partial<Settings> {
       const a = checkAddress(item.address);
       if (!a.ok || list.some((x) => sameAddress(x.address, a.value))) continue;
       const label = typeof item.label === 'string' ? item.label.trim().slice(0, MAX_LABEL) : '';
-      list.push({ address: a.value, label: label || DEFAULT_ADDED_LABEL });
+      // Only the built-in witness may be called "default": a stored label that says so is replaced.
+      const isBuiltIn = sameAddress(a.value, defaultWitnessAddress());
+      list.push({ address: a.value, label: !label || (!isBuiltIn && IMITATES_DEFAULT.test(label)) ? DEFAULT_ADDED_LABEL : label });
     }
     // A list in which nothing survived stays empty: when in doubt, trust nobody.
     out.pinnedWitnesses = list;
@@ -123,7 +163,17 @@ function sanitize(p: unknown): Partial<Settings> {
 /** The overrides kept when the browser will not store them (a blocked or full storage). */
 let memory: Partial<Settings> = {};
 
+/** On a shared gateway origin only the theme is taken from storage (R38). */
+function trusted(stored: Partial<Settings>): Partial<Settings> {
+  if (!isSharedOrigin()) return stored;
+  return stored.theme ? { theme: stored.theme } : {};
+}
+
 function readStored(): Partial<Settings> {
+  return trusted(readStoredRaw());
+}
+
+function readStoredRaw(): Partial<Settings> {
   let raw: string | null;
   try {
     raw = window.localStorage.getItem(KEY);
@@ -153,8 +203,12 @@ const sameValue = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringi
  */
 export function saveSettingsChecked(patch: Partial<Settings>): { settings: Settings; saved: boolean } {
   const defaults = defaultSettings();
+  // On a shared gateway origin only the theme is read, kept and changed: whatever else is in the
+  // storage there was put by some other site, and a save writes it away.
   const next: Record<string, unknown> = { ...readStored() };
+  const shared = isSharedOrigin();
   for (const [k, v] of Object.entries(patch)) {
+    if (shared && k !== 'theme') continue;
     if (v === undefined || sameValue(v, defaults[k as keyof Settings])) delete next[k];
     else next[k] = v;
   }

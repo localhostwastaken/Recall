@@ -1,18 +1,19 @@
 import { checkAddress, checkUrl } from '@recall/net';
 import { CircleCheck, TriangleAlert } from 'lucide-react';
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { DEFAULT_WITNESS_LABEL, defaultWitnessAddress, hasBuiltInArkivKey } from '../defaults';
+import { hasBuiltInArkivKey } from '../defaults';
 import { getExtensionInfo } from '../ext';
 import {
   ADDRESS_ERROR,
   DUPLICATE_WITNESS_ERROR,
-  LABEL_ERROR,
   MAX_LABEL,
   applyTheme,
   defaultSettings,
   fieldError,
   gatewayLines,
   getSettings,
+  isSharedOrigin,
+  labelError,
   resetSettings,
   saveSettingsChecked,
   useSettings,
@@ -26,6 +27,7 @@ import { MonoValue } from '../ui/MonoValue';
 import { Notice } from '../ui/Notice';
 import { Segmented } from '../ui/Segmented';
 import { useToast } from '../ui/Toast';
+import { displayName } from '../witness';
 import './settings.css';
 
 // §4.8 Settings. Everything on the page is a draft until [Save settings]; "Saved in this browser
@@ -206,6 +208,8 @@ export function Settings() {
   const resetTrigger = useRef<HTMLButtonElement>(null);
   const defaults = defaultSettings();
   const builtInKey = hasBuiltInArkivKey();
+  // R38: on a shared gateway address the saved settings are not used and cannot be changed.
+  const shared = isSharedOrigin();
 
   const dirty = JSON.stringify(draft) !== JSON.stringify(draftFrom(saved));
 
@@ -242,7 +246,7 @@ export function Settings() {
     else if (draft.witnesses.some((w) => w.address.toLowerCase() === a.value.toLowerCase())) {
       next.newAddress = DUPLICATE_WITNESS_ERROR;
     }
-    if (!label) next.newLabel = LABEL_ERROR;
+    next.newLabel = labelError(label);
     setErrors((e) => ({ ...e, newAddress: next.newAddress, newLabel: next.newLabel }));
     if (next.newAddress || next.newLabel || !a.ok) {
       setFocusInvalid((f) => ({ n: f.n + 1, scope: '.witness-form ' }));
@@ -297,15 +301,23 @@ export function Settings() {
     applyTheme(theme);
   };
 
-  const label = (w: PinnedWitness) =>
-    w.address.toLowerCase() === defaultWitnessAddress().toLowerCase() && w.label === DEFAULT_WITNESS_LABEL ? `${w.label} (default)` : w.label;
+  const label = displayName;
 
   return (
     <>
       <h1 tabIndex={-1}>Settings</h1>
       <p className="lede muted">Saved in this browser only.</p>
 
+      {shared ? (
+        <Notice kind="warn" title="Shared address">
+          Settings can&apos;t be changed on a shared gateway address. Open the app from its own address (bzz.link or GitHub Pages) to
+          change them.
+        </Notice>
+      ) : null}
+
       <div ref={form} className="stack settings-form">
+        <fieldset className="settings-fieldset" disabled={shared}>
+        <legend className="visually-hidden">Witnesses, endpoints and extension</legend>
         <section className="settings-section" aria-labelledby="witnesses-heading">
           <h2 id="witnesses-heading" className="section-title">
             Trusted witnesses
@@ -356,7 +368,10 @@ export function Settings() {
               reserveError
               maxLength={MAX_LABEL}
               autoComplete="off"
-              helper="A name you will recognise, such as the operator."
+              helper="A name you will recognise, such as the operator. It is shown with “(added in this browser)”."
+              onBlur={() => {
+                if (newLabel.trim()) setErrors((x) => ({ ...x, newLabel: labelError(newLabel) }));
+              }}
               onChange={(e) => {
                 setNewLabel(e.target.value);
                 setErrors((x) => (x.newLabel ? { ...x, newLabel: undefined } : x));
@@ -501,6 +516,8 @@ export function Settings() {
           </p>
         </section>
 
+        </fieldset>
+
         <section className="settings-section" aria-labelledby="appearance-heading">
           <h2 id="appearance-heading" className="section-title">
             Appearance
@@ -525,10 +542,10 @@ export function Settings() {
       ) : null}
 
       <div className="settings-actions">
-        <button type="button" className="btn btn-primary" onClick={save}>
+        <button type="button" className="btn btn-primary" disabled={shared} onClick={save}>
           Save settings
         </button>
-        <button type="button" className="btn btn-secondary" ref={resetTrigger} onClick={() => setConfirmReset(true)}>
+        <button type="button" className="btn btn-secondary" ref={resetTrigger} disabled={shared} onClick={() => setConfirmReset(true)}>
           Reset all
         </button>
         <p className="settings-dirty muted" role="status">

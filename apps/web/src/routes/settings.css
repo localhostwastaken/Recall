@@ -119,3 +119,17 @@ textarea.input {
 .settings-field .field-actions .btn-ghost {
   margin-left: calc(-1 * var(--space-3));
 }
+
+/* Groups the editable sections so a shared gateway address can disable them in one go. */
+.settings-fieldset {
+  display: grid;
+  gap: var(--space-5);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.settings-fieldset[disabled] {
+  opacity: 0.6;
+}

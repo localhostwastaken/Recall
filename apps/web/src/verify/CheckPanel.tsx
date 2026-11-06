@@ -2,13 +2,14 @@ import type { CheckResult } from '@recall/evidence';
 import { isFreeBatch } from '@recall/net';
 import { CircleCheck, CircleDashed, CircleX, LoaderCircle, TriangleAlert, type LucideIcon } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { sha256 } from 'viem';
+import { sha256, type Address } from 'viem';
+import { DEFAULT_WITNESS_LABEL } from '../defaults';
 import { formatBytes, formatTtl } from '../format';
 import { CheckRow } from '../ui/CheckRow';
 import { DropZone } from '../ui/DropZone';
 import { MonoValue, middle } from '../ui/MonoValue';
 import type { Status } from '../ui/StatusBadge';
-import { witnessLabel } from '../witness';
+import { isDefaultWitness, trustedWitness } from '../witness';
 import type { GivenFile } from './handoff';
 import type { StorageInfo, StorageState } from './useVerifiedCapture';
 import type { Verdict, VerdictKind, VerifiedReport } from './verify';
@@ -112,19 +113,25 @@ function rowB(report: VerifiedReport | null): RowModel {
   }
 }
 
+/**
+ * The pass line of check C. The built-in witness reads as in the design brief. A witness the
+ * person (or their browser's settings) added reads differently, so it is never taken for the
+ * built-in one: it still passes, but says where the trust came from (R38).
+ */
+function signedByTrusted(signer: Address | undefined): string {
+  if (!signer) return 'Signed by a witness in your trusted list.';
+  const w = trustedWitness(signer);
+  if (w && !isDefaultWitness(signer)) return `Signed by a witness added in this browser: ${w.label} (${middle(signer)}).`;
+  return `Signed by ${w ? DEFAULT_WITNESS_LABEL : 'a pinned witness'} (${middle(signer)}), which is in your trusted list.`;
+}
+
 function rowC(report: VerifiedReport | null): RowModel {
   if (!report) return PENDING('Checking the witness signature.');
   const { C, signer } = report;
   const detail = how(`Result: ${C.detail}`, signer ? <>Signer: <MonoValue value={signer} /></> : null);
   switch (C.status) {
     case 'pass':
-      return {
-        status: 'pass',
-        result: signer
-          ? `Signed by ${witnessLabel(signer) ?? 'a pinned witness'} (${middle(signer)}), which is in your trusted list.`
-          : 'Signed by a witness in your trusted list.',
-        how: detail,
-      };
+      return { status: 'pass', result: signedByTrusted(signer), how: detail };
     case 'warn':
       return {
         status: 'warn',

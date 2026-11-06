@@ -235,12 +235,12 @@ describe('what the rest of the app reads', () => {
   it('removing a pinned witness takes effect on the very next read', async () => {
     const { saveSettings } = await settings();
     const { trustedWitnesses, witnessLabel, DEVNET_WITNESS } = await witness();
-    expect(witnessLabel(DEVNET_WITNESS)).toBe('Recall Witness');
+    expect(witnessLabel(DEVNET_WITNESS)).toBe('Recall Witness (default)');
     saveSettings({ pinnedWitnesses: [] });
     expect(trustedWitnesses()).toEqual([]);
     expect(witnessLabel(DEVNET_WITNESS)).toBeUndefined();
     saveSettings({ pinnedWitnesses: [{ address: OTHER, label: 'Neighbour' }] });
-    expect(witnessLabel(OTHER.toLowerCase() as `0x${string}`)).toBe('Neighbour');
+    expect(witnessLabel(OTHER.toLowerCase() as `0x${string}`)).toBe('Neighbour (added in this browser)');
     expect(witnessLabel(DEVNET_WITNESS)).toBeUndefined();
   });
 });

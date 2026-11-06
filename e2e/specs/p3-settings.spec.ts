@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { createServer, request as httpRequest, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { createPublicClient, createWalletClient, erc20Abi, http, parseEther, sha256, type Address, type Hex } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
+import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { gnosis } from 'viem/chains';
 import { canonicalUrl, encodeEvidence, parseResponse, urlHash as hashUrl, type EvidenceFile } from '../../packages/evidence/src/index';
 import {
@@ -304,16 +304,20 @@ test.describe('@p3 settings web', () => {
     await page.getByRole('switch', { name: /Show unverified/ }).click();
     await expect(page.getByText('Unknown witness').first()).toBeVisible();
 
-    // Pin it again under another label (lower-case input is accepted and shown checksummed).
+    // Pin it again (lower-case input is accepted and shown checksummed). It is the built-in
+    // witness's address, so it is named by code whatever label is typed, never by the person (R38).
     await openSettings(page);
     await page.getByLabel('Witness address (0x…)').fill(DEVNET_WITNESS_ADDRESS.toLowerCase());
     await page.getByLabel('Label', { exact: true }).fill('Neighbour witness');
     await page.getByRole('button', { name: 'Add witness' }).click();
-    await expect(page.getByRole('list', { name: 'Trusted witnesses' })).toContainText('Neighbour witness');
+    const pinned = page.getByRole('list', { name: 'Trusted witnesses' });
+    await expect(pinned).toContainText('Recall Witness (default)');
+    await expect(pinned).not.toContainText('Neighbour witness');
     await saveButton(page).click();
     await page.goto(capturePage(free.entityKey));
     await expect(status(page, 'C')).toHaveAttribute('data-status', 'pass');
-    await expect(check(page, 'C')).toContainText('Signed by Neighbour witness (');
+    await expect(check(page, 'C')).toContainText('Signed by Recall Witness (');
+    await expect(check(page, 'C')).toContainText('which is in your trusted list.');
     await expect(verdict(page)).toHaveAttribute('data-verdict', 'pass');
   });
 
@@ -469,6 +473,87 @@ test.describe('@p3 settings web', () => {
     await expect(page.getByText('Version 1')).toHaveCount(0);
   });
 
+  test('@p3 settings a witness planted in storage is ignored on a shared gateway address', async ({ page }) => {
+    // The attack (R38): on https://<gateway>/bzz/<ref>/ every Swarm site shares one origin, so any
+    // other site there can write this app's localStorage. It plants its own witness, labelled as
+    // the built-in one, and swaps the endpoints. Evidence signed by the attacker must not pass.
+    const attackerKey = generatePrivateKey();
+    const attacker = privateKeyToAccount(attackerKey).address;
+    const forged = await capture(attackerKey);
+    const forgedRef = await uploadFree(forged.evidenceBytes, gateway.url);
+    const record = await publish(forged, { batchId: ZERO_BATCH, evidenceRef: forgedRef, witness: attacker });
+
+    const planted = {
+      pinnedWitnesses: [{ address: attacker, label: 'Recall Witness (default)' }],
+      arkivRpcUrl: 'https://evil.example/arkiv',
+      arkivAccessKey: 'planted-key',
+      downloadUrls: ['http://127.0.0.1:1/evil'],
+      uploadUrl: 'https://evil.example/up',
+      gnosisRpcUrl: 'https://evil.example/gnosis',
+      extensionId: 'a'.repeat(32),
+      theme: 'dark',
+    };
+    await page.goto(`${APP}/#/`);
+    await page.evaluate(([k, v]) => localStorage.setItem(k, v), [SETTINGS_KEY, JSON.stringify(planted)] as const);
+
+    // The app served the way a gateway serves it: under /bzz/<ref>/ on the same origin.
+    await page.route(/^http:\/\/localhost:5173\/bzz\/planted-ref\/(\?.*)?$/, async (route) => {
+      const index = await route.fetch({ url: `${APP}/` });
+      await route.fulfill({ response: index });
+    });
+    const requested: string[] = [];
+    page.on('request', (r) => requested.push(r.url()));
+    const SHARED = `${APP}/bzz/planted-ref/`;
+
+    // On the shared address: the planted witness does not count. C is a warning, never a pass.
+    await page.goto(`${SHARED}#/c/${record.entityKey}`);
+    await expect(status(page, 'C')).toHaveAttribute('data-status', 'warn');
+    await expect(check(page, 'C')).toContainText(`Signed by an unknown witness ${attacker}`);
+    await expect(verdict(page)).toHaveAttribute('data-verdict', 'warn');
+    await expect(page.getByText(/^Checks passed/)).toHaveCount(0);
+    // None of the planted endpoints was used.
+    expect(requested.filter((u) => /evil/.test(u) || u.startsWith('http://127.0.0.1:1/'))).toEqual([]);
+
+    // Settings there: the built-in witness only, nothing planted shown, nothing can be saved.
+    await page.goto(`${SHARED}#/settings`);
+    await expect(page.getByRole('heading', { level: 1, name: 'Settings' })).toBeVisible();
+    await expect(
+      page.getByText("Settings can't be changed on a shared gateway address. Open the app from its own address (bzz.link or GitHub Pages) to change them."),
+    ).toBeVisible();
+    const list = page.getByRole('list', { name: 'Trusted witnesses' });
+    await expect(list.getByRole('listitem')).toHaveCount(1);
+    await expect(list).toContainText('Recall Witness (default)');
+    await expect(list).not.toContainText(attacker.slice(0, 8));
+    await expect(page.getByLabel('Gnosis RPC URL')).toHaveValue(LOCAL.gnosis.rpcUrl);
+    await expect(page.getByLabel('Swarm download gateway')).toHaveValue(NODE_DOWNLOAD);
+    await expect(page.getByLabel('Extension ID')).toHaveValue('');
+    await expect(page.getByLabel('Arkiv access key')).toHaveValue('');
+    await expect(saveButton(page)).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Reset all', exact: true })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Add witness' })).toBeDisabled();
+    await expect(page.getByLabel('Witness address (0x…)')).toBeDisabled();
+    // The theme is the one thing that still works there.
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+    await page.getByRole('radio', { name: 'Light' }).check();
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+    const afterTheme = JSON.parse((await stored(page)) ?? '{}') as Record<string, unknown>;
+    expect(afterTheme).toEqual({ theme: 'light' }); // the planted values were written away
+
+    // The same evidence on the app's own address, with the witness really added by the person:
+    // it passes, and says that the trust came from this browser (never worded like the built-in one).
+    await page.goto(`${APP}/#/`);
+    await page.evaluate(
+      ([k, v]) => localStorage.setItem(k, v),
+      [SETTINGS_KEY, JSON.stringify({ pinnedWitnesses: [{ address: attacker, label: 'Operator X' }] })] as const,
+    );
+    await page.goto(`${APP}/#/c/${record.entityKey}`);
+    await expect(status(page, 'C')).toHaveAttribute('data-status', 'pass');
+    await expect(check(page, 'C')).toContainText(`Signed by a witness added in this browser: Operator X (${attacker.slice(0, 6)}`);
+    await expect(check(page, 'C')).not.toContainText('which is in your trusted list');
+    await expect(page.locator('.exhibit')).toContainText('Operator X (added in this browser)');
+    await page.evaluate((k) => localStorage.removeItem(k), SETTINGS_KEY);
+  });
+
   test('@p3 settings invalid inputs are rejected with the design brief copy', async ({ page }) => {
     await page.goto(`${APP}/#/`);
     await page.evaluate((k) => localStorage.removeItem(k), SETTINGS_KEY);
@@ -500,6 +585,15 @@ test.describe('@p3 settings web', () => {
     await add.click();
     await expect(page.getByText('That witness is already in the list.')).toBeVisible();
     await expect(page.getByRole('list', { name: 'Trusted witnesses' }).getByRole('listitem')).toHaveCount(1);
+    // Only the built-in witness may be called "default" (R38): a label that says so is refused.
+    await address.fill('0x70997970C51812dc3A010C7d01b50e0d17dc79C8');
+    for (const imitation of ['Recall Witness (default)', 'default', 'My DEFAULT witness']) {
+      await label.fill(imitation);
+      await add.click();
+      await expect(page.getByText('That label can\'t include the word "default". It is kept for the built-in witness.'), imitation).toBeVisible();
+      await expect(page.getByRole('list', { name: 'Trusted witnesses' }).getByRole('listitem')).toHaveCount(1);
+    }
+    await label.fill('');
     // Clicking Add with a bad address does not add anything either.
     await address.fill('0xnope');
     await add.click();
