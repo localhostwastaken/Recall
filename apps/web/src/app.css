@@ -1,0 +1,21 @@
+/* App shell extras: the footer carries the link to the advanced settings. Tokens only. */
+.footer-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-5);
+}
+
+.footer-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--control-h);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-1);
+  font-weight: 600;
+}
+
+.footer-link[aria-current='page'] {
+  color: var(--text);
+}

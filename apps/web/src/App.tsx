@@ -10,6 +10,7 @@ import { Settings } from './routes/Settings';
 import { Storage } from './routes/Storage';
 import { Timeline } from './routes/Timeline';
 import { ToastProvider } from './ui/Toast';
+import './app.css';
 
 function NotFound({ path }: { path: string }) {
   return (
@@ -98,7 +99,6 @@ export function App() {
           </a>
           <nav aria-label="Main" className="nav">
             {link('#/', 'home', 'Home')}
-            {link('#/settings', 'settings', 'Settings')}
           </nav>
           <div className="header-tools">
             <WalletChip />
@@ -114,8 +114,12 @@ export function App() {
         </ErrorBoundary>
       </main>
       <footer className="site-footer">
-        <div className="container">
+        <div className="container footer-row">
           <p className="muted">No trackers. Verification runs in your browser. TLSNotary alpha (unaudited) · testnet.</p>
+          {/* Everything is preconfigured, so settings live here and not in the main navigation. */}
+          <a className="footer-link" href="#/settings" aria-current={route.name === 'settings' ? 'page' : undefined}>
+            Advanced settings
+          </a>
         </div>
       </footer>
     </ToastProvider>
