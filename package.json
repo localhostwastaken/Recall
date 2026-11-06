@@ -9,7 +9,10 @@
     "test": "vitest run",
     "witness:keygen": "tsx scripts/gen-witness-key.ts",
     "test:e2e": "playwright test -c e2e --project=local",
-    "test:live": "playwright test -c e2e --project=live"
+    "test:live": "playwright test -c e2e --project=live",
+    "extension:release": "bash scripts/build-release-extension.sh",
+    "tunnel:up": "bash scripts/tunnel.sh",
+    "tunnel:down": "bash scripts/tunnel-stop.sh"
   },
   "devDependencies": {
     "@playwright/test": "1.49.1",

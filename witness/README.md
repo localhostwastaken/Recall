@@ -55,12 +55,23 @@ The webhook feature and `config.yaml` are removed.
 | `PORT` | `7047` | |
 | `MAX_RECV_DATA` / `MAX_SENT_DATA` | `65536` / `4096` | caps on what a client may register |
 | `MAX_SESSIONS` | `3` | concurrent MPC sessions; more get `recall: witness busy, try again shortly` |
+| `MAX_SESSIONS_PER_IP` | `2` | concurrent sessions per client; more get `recall: too many sessions from this client` |
+| `TRUST_CF_HEADER` | unset | `1`: the client IP is `CF-Connecting-IP`. Set it ONLY when the tunnel is the one way in |
 | `WITNESS_DEV_CA_DER` | unset | dev only: trust ONLY this CA (DER or PEM) instead of the Mozilla roots |
 | `WITNESS_DEV_ALLOW_HOSTS` | unset | dev CA mode only: comma-separated hosts `/proxy` may dial at private addresses |
 
 The devnet runs it as the `witness` service (`pnpm devnet:up`, port 7047) with
 a public test key (Hardhat #2, `DEVNET_WITNESS_KEY` in `e2e/fixtures/keys.ts`)
 and the fixture CA.
+
+The live witness (`pnpm tunnel:up`, `scripts/tunnel.sh`) is a separate container,
+`recall-witness-live`, built from the same image:
+- It gets only `WITNESS_PRIVATE_KEY` from `.env.local`, and it uses the Mozilla roots.
+- It is published on `127.0.0.1:7048` only, and reachable from outside only through
+  a Cloudflare quick tunnel (cloudflared over http2). That is why it can set
+  `TRUST_CF_HEADER=1` (per-client limits use `CF-Connecting-IP`).
+- The script writes the tunnel URL to `WITNESS_PUBLIC_URL` in `.env.local`.
+- `pnpm tunnel:down` stops both.
 
 ## Tests
 

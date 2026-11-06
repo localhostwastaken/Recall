@@ -29,6 +29,11 @@ if (RECALL_DEV_CA_DER_B64) {
 }
 const RECALL_DEV = Boolean(RECALL_DEV_CA_DER_B64) || process.env.RECALL_DEV === '1';
 
+// Recall: RECALL_BUILD_DIR picks the output folder (default build/). The release build
+// (scripts/build-release-extension.sh) goes to build-release/, so it never replaces the
+// dev build that the local e2e tests load from build/.
+const BUILD_DIR = path.resolve(__dirname, process.env.RECALL_BUILD_DIR || 'build');
+
 var options = {
   mode: process.env.NODE_ENV || 'development',
   ignoreWarnings: [
@@ -49,7 +54,7 @@ var options = {
   },
   output: {
     filename: '[name].bundle.js',
-    path: path.resolve(__dirname, 'build'),
+    path: BUILD_DIR,
     clean: true,
     publicPath: ASSET_PATH,
     webassemblyModuleFilename: '[hash].wasm',
@@ -219,7 +224,7 @@ var options = {
       patterns: [
         {
           from: 'src/manifest.json',
-          to: path.join(__dirname, 'build'),
+          to: BUILD_DIR,
           force: true,
           transform: function (content, path) {
             // generates the manifest file using the package.json informations
@@ -242,7 +247,7 @@ var options = {
       patterns: [
         {
           from: 'src/assets/img/icon-128.png',
-          to: path.join(__dirname, 'build'),
+          to: BUILD_DIR,
           force: true,
         },
       ],
@@ -251,7 +256,7 @@ var options = {
       patterns: [
         {
           from: 'src/assets/img/icon-34.png',
-          to: path.join(__dirname, 'build'),
+          to: BUILD_DIR,
           force: true,
         },
       ],
@@ -260,7 +265,7 @@ var options = {
       patterns: [
         {
           from: path.dirname(require.resolve('tlsn-wasm/package.json')),
-          to: path.join(__dirname, 'build'),
+          to: BUILD_DIR,
           force: true,
           globOptions: {
             ignore: ['**/package.json', '**/README.md'],

@@ -15,9 +15,14 @@ config.mode = 'production';
 
 var packageInfo = JSON.parse(fs.readFileSync('package.json', 'utf-8'));
 
+// Recall: a dev build (test CA) gets its own zip name, so it never replaces the release zip.
+var isDevBuild =
+  Boolean((process.env.RECALL_DEV_CA_DER_B64 || '').trim()) || process.env.RECALL_DEV === '1';
+var zipName = `${packageInfo.name}-${packageInfo.version}${isDevBuild ? '-dev' : ''}.zip`;
+
 config.plugins = (config.plugins || []).concat(
   new ZipPlugin({
-    filename: `${packageInfo.name}-${packageInfo.version}.zip`,
+    filename: zipName,
     path: path.join(__dirname, '../', 'zip'),
   }),
 );
@@ -42,8 +47,6 @@ webpack(config, function (err, stats) {
   }
 
   console.log('Build completed successfully!');
-  console.log(`Output: ${path.join(__dirname, '../', 'build')}`);
-  console.log(
-    `Zip: ${path.join(__dirname, '../', 'zip', `${packageInfo.name}-${packageInfo.version}.zip`)}`,
-  );
+  console.log(`Output: ${config.output.path}`);
+  console.log(`Zip: ${path.join(__dirname, '../', 'zip', zipName)}`);
 });
