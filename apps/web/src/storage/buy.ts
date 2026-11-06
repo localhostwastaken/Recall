@@ -9,7 +9,12 @@ import { defaultSettings, getSettings, isSharedOrigin } from '../settings';
 import { isUserRejection } from '../wallet';
 
 /** One batch per capture; depth 17 is the capture default (design brief 4.7). */
-export const DEPTH = 17;
+export const DEPTH = 17 as const;
+/** A capture with a repository snapshot (R46) needs depth 18 (about 3,800 chunks for 15 MB). */
+export const ATTACHMENT_DEPTH = 18 as const;
+export type Depth = typeof DEPTH | typeof ATTACHMENT_DEPTH;
+/** The depth to buy for a pending capture: 18 only when it asks for it, else the default. */
+export const depthFor = (needsDepth: unknown): Depth => (needsDepth === ATTACHMENT_DEPTH ? ATTACHMENT_DEPTH : DEPTH);
 /** How long a sent purchase is looked up before it counts as "not known yet". */
 export const SETTLE_TIMEOUT_MS = 30_000;
 /** Bee needs about 12 blocks (1 to 2 minutes) before it accepts stamps for a new batch. */
@@ -77,7 +82,7 @@ export type Settled = { kind: 'bought'; batchId: Hex; ttl: bigint | null } | { k
  * `unknown` (it may still go through: never buy again by itself). A batch for another owner or
  * depth (an older plan in this tab) is not this purchase's. The caller forgets the hash.
  */
-export async function settlePurchase(pub: PublicClient, txHash: Hex, owner: Address, depth = DEPTH): Promise<Settled> {
+export async function settlePurchase(pub: PublicClient, txHash: Hex, owner: Address, depth: number = DEPTH): Promise<Settled> {
   const r = await batchFromTx(pub, txHash, { timeoutMs: SETTLE_TIMEOUT_MS });
   if (r.status === 'unknown') return { kind: 'unknown' };
   if (r.status === 'created' && r.owner.toLowerCase() === owner.toLowerCase() && r.depth === depth) {
@@ -106,6 +111,8 @@ export async function buyOneBatch(
   opts: {
     owner: Address;
     days: number;
+    /** Batch depth (default DEPTH). The quote and any lookup use the same depth. */
+    depth?: Depth;
     quotedTotal?: bigint;
     sentKey: string;
     /** Keep the hash in localStorage (the publish page), not sessionStorage. */
@@ -114,10 +121,11 @@ export async function buyOneBatch(
   },
 ): Promise<BuyResult> {
   let sent: Hex | undefined;
+  const depth: Depth = opts.depth ?? DEPTH;
   try {
     const { batchId } = await buyBatch(wallet, {
       owner: opts.owner,
-      depth: DEPTH,
+      depth,
       days: opts.days,
       quotedTotal: opts.quotedTotal, // the price may move up 10% at most between the quote and the purchase
       onSent: (txHash) => {
@@ -130,7 +138,7 @@ export async function buyOneBatch(
     return { kind: 'bought', batchId, ttl };
   } catch (err) {
     if (sent) {
-      const found = await settlePurchase(pub, sent, opts.owner);
+      const found = await settlePurchase(pub, sent, opts.owner, depth);
       if (found.kind === 'bought') return found; // only reading the result failed
       if (found.kind === 'unknown') return { kind: 'unknown', txHash: sent };
       return { kind: 'failed', message: reason(err) };
