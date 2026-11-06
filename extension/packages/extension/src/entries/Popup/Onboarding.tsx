@@ -209,7 +209,7 @@ export function Onboarding({ showHelpButton = true }: { showHelpButton?: boolean
                 </button>
               </div>
 
-              <ol className="ob-markers" aria-hidden="true">
+              <ol className="ob-markers" aria-hidden="true" style={{ ['--ob-steps' as string]: ONBOARDING_STEPS.length }}>
                 {ONBOARDING_STEPS.map((s, i) => (
                   <li
                     key={s.title}
