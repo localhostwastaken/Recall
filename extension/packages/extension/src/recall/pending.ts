@@ -1,8 +1,11 @@
-// Pending records: a capture whose evidence is on Swarm and that waits for the user to
-// publish its Arkiv record in the web app's approve tab. Each one is stored under an
-// unguessable 128-bit captureId; there is no way to list them (ruling R27).
+// Pending records: a checked capture that waits in the extension for the person to decide in
+// the web app's publish tab (R44, capture first): confirm it (same bytes as the earlier
+// capture), or upload its evidence to Swarm and publish the Arkiv record. Nothing is uploaded
+// before the person chooses. Each one is stored under an unguessable 128-bit captureId; there
+// is no way to list them (ruling R27).
 import type { Hex } from 'viem';
 import type { EvidenceFile } from '@recall/evidence';
+import type { UploadMode } from './settings';
 
 export const PENDING_PREFIX = 'recall.pending.';
 /** After markPublished: a small tombstone (no evidence), so a repeated mark stays ok. */
@@ -11,17 +14,65 @@ export const PUBLISHED_PREFIX = 'recall.published.';
 /** 16 random bytes as 32 lower-case hex characters. */
 export const CAPTURE_ID = /^[0-9a-f]{32}$/;
 
+/** The upload the publish tab started (captures only). Uploaded = evidenceRef and batchId are set. */
+export type StoredUpload =
+  | { status: 'uploading'; mode: UploadMode; at: number }
+  | { status: 'failed'; reason: string; at: number };
+
 export type PendingRecord = {
   captureId: string;
   kind: 'capture' | 'confirmation';
   evidence: EvidenceFile;
+  /** Set once the evidence is on Swarm (captures only). */
   evidenceRef?: Hex;
   batchId?: Hex;
   captureKey?: Hex;
+  /** Confirmations: the earlier capture's signed time (Unix seconds, decimal). */
+  since?: string;
   /** From the verified facts; what the Arkiv record must carry. */
   bodySha256: Hex;
   createdAt: number;
+  /** Captures only: an upload in progress, or the last one that failed. */
+  upload?: StoredUpload;
 };
+
+/** What `recall.getPending` reports about the upload of a pending capture. */
+export type PendingUploadState =
+  | { status: 'none' }
+  | { status: 'uploading' }
+  | { status: 'uploaded'; evidenceRef: Hex; batchId: Hex }
+  | { status: 'failed'; reason: string };
+
+/**
+ * An upload still "uploading" after this long was lost (offscreen document gone, browser slept):
+ * the batch wait (2 min) and the upload itself (1 min) are both bounded, so it ended long ago.
+ */
+export const UPLOAD_LOST_AFTER_MS = 5 * 60_000;
+
+/** The upload state of a pending record, as the publish tab sees it. */
+export function pendingUploadState(rec: PendingRecord, now = Date.now()): PendingUploadState {
+  if (rec.evidenceRef && rec.batchId) {
+    return { status: 'uploaded', evidenceRef: rec.evidenceRef, batchId: rec.batchId };
+  }
+  const u = rec.upload;
+  if (u?.status === 'uploading') {
+    return now - u.at < UPLOAD_LOST_AFTER_MS
+      ? { status: 'uploading' }
+      : { status: 'failed', reason: 'the upload did not finish' };
+  }
+  if (u?.status === 'failed') return { status: 'failed', reason: u.reason };
+  return { status: 'none' };
+}
+
+// Every change to a pending record that reads it first runs in this chain (uploads, their
+// results, discard, publish), so a late upload result can never bring back a discarded or
+// published record, and two upload requests can never both start.
+let chain: Promise<unknown> = Promise.resolve();
+export function pendingLocked<T>(fn: () => Promise<T>): Promise<T> {
+  const next = chain.then(fn, fn);
+  chain = next.catch(() => undefined);
+  return next;
+}
 
 /** The indexed fields of an Arkiv record, as the offscreen document read them. */
 export type EntitySummary =
@@ -122,13 +173,34 @@ export async function readPending(
  * The exact unguessable captureId is the authority, as for readPending; the evidence stays on
  * Swarm, only the extension's hand-over copy goes.
  */
-export async function discardPending(
+export function discardPending(
   captureId: unknown,
   area: PendingArea = defaultArea(),
 ): Promise<{ ok: true } | { error: string }> {
-  if (!(await readPending(captureId, area))) return { error: 'no pending capture with this id' };
-  await area.remove(PENDING_PREFIX + (captureId as string));
-  return { ok: true };
+  return pendingLocked(async () => {
+    if (!(await readPending(captureId, area))) return { error: 'no pending capture with this id' };
+    await area.remove(PENDING_PREFIX + (captureId as string));
+    return { ok: true as const };
+  });
+}
+
+/**
+ * Saves `next(rec)` for the pending record `captureId`, if it still exists (inside the chain).
+ * Returns the saved record, or null when there is none (discarded or published meanwhile).
+ */
+export function updatePending(
+  captureId: string,
+  next: (rec: PendingRecord) => PendingRecord | null,
+  area: PendingArea = defaultArea(),
+): Promise<PendingRecord | null> {
+  return pendingLocked(async () => {
+    const rec = await readPending(captureId, area);
+    if (!rec) return null;
+    const out = next(rec);
+    if (!out) return rec;
+    await area.set({ [PENDING_PREFIX + captureId]: JSON.stringify(out) });
+    return out;
+  });
 }
 
 const same = (a: string | undefined, b: string | undefined) =>
@@ -173,7 +245,9 @@ export async function markPublished(
   const mismatch = entityMismatch(rec, entity);
   if (mismatch) return { error: `the Arkiv record does not match this capture: ${mismatch}` };
   const tombstone: Tombstone = { entityKey: entityKey.toLowerCase(), at: Date.now() };
-  await area.set({ [PUBLISHED_PREFIX + captureId]: tombstone });
-  await area.remove(PENDING_PREFIX + captureId);
-  return { ok: true };
+  return pendingLocked(async () => {
+    await area.set({ [PUBLISHED_PREFIX + captureId]: tombstone });
+    await area.remove(PENDING_PREFIX + captureId);
+    return { ok: true as const };
+  });
 }

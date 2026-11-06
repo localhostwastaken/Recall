@@ -54,9 +54,7 @@ import { postageAbi, ttlSeconds } from '../../src/recall/batchChain';
 import { failureKind, pickUsable, ttlReader, uploadEvidence } from '../../src/recall/swarmUpload';
 import {
   CAPTURE_HELPER,
-  captureHelper,
   jobSteps,
-  storageNotice,
   uploadCopy,
 } from '../../src/recall/captureView';
 import type { CheckSummary } from '../../src/recall/jobState';
@@ -1136,61 +1134,24 @@ describe('offscreen upload', () => {
 });
 
 describe('popup copy', () => {
-  it('lists the upload step only when an upload is planned', () => {
-    expect(jobSteps({ uploadPlanned: false, step: 2 }).labels).toHaveLength(3);
-    expect(jobSteps({ uploadPlanned: true, step: 1 }).labels).toEqual([
-      'Connecting to the witness',
-      'Proving the page with the witness',
-      'Checking the witness signature',
-      'Uploading evidence to Swarm',
-      'Opening the approval tab',
-    ]);
-    expect(jobSteps({ step: 4 })).toEqual({ labels: expect.any(Array), current: 3 });
+  it('lists no upload step: storage is chosen in the Recall tab (R44)', () => {
+    expect(jobSteps({ step: 2 }).labels).toHaveLength(3);
+    expect(jobSteps({ step: 3 })).toEqual({ labels: expect.any(Array), current: 2 });
   });
 
-  it('warns about missing or expired storage before a capture', () => {
+  it('never gates a capture on storage', () => {
     expect(CAPTURE_HELPER).toBe('Takes about 30 s and about 80 MB of data. Pages up to 64 KB.');
-    expect(captureHelper('ok')).toBe(CAPTURE_HELPER);
-    expect(captureHelper('empty')).toMatch(/^No storage left: .*not uploaded/);
-    expect(captureHelper('expired')).toMatch(/^Storage expired: .*not uploaded/);
-    expect(storageNotice('ok')).toBeNull();
-    expect(storageNotice('empty')?.title).toBe('No storage left');
-    expect(storageNotice('expired')).toEqual({
-      title: 'Storage expired',
-      body: 'Buy more in the Recall app.',
-    });
   });
 
-  it('says what happened to the evidence', () => {
-    expect(
-      uploadCopy(
-        { status: 'uploaded', captureId: 'x', evidenceRef: id(1), batchId: id(2) },
-        'empty',
-      ),
-    ).toMatchObject({ kind: 'success', title: 'Evidence uploaded' });
-    expect(uploadCopy({ status: 'no_storage' }, 'empty')).toEqual({
-      kind: 'error',
-      title: 'No storage left',
-      body: 'Your prepaid storage is used up. Buy more to keep capturing. Nothing was published.',
-      actions: ['buyStorage'],
+  it('says what happens next', () => {
+    expect(uploadCopy({ status: 'pending', captureId: 'x' })).toMatchObject({
+      kind: 'success',
+      title: 'Continue in the Recall tab',
+      actions: ['openApprove'],
     });
-    expect(uploadCopy({ status: 'no_storage' }, 'expired')).toEqual({
-      kind: 'error',
-      title: 'Storage expired',
-      body: 'Buy more in the Recall app. Nothing was published.',
-      actions: ['buyStorage'],
-    });
-    expect(uploadCopy({ status: 'no_storage' }, 'ok').actions).toEqual(['uploadNow']);
-    expect(uploadCopy({ status: 'skipped', reason: 'check A did not pass' }, 'ok').body).toBe(
+    expect(uploadCopy({ status: 'skipped', reason: 'check A did not pass' }).body).toBe(
       'Check A did not pass, so the evidence was not uploaded. Nothing was published.',
     );
-    expect(
-      uploadCopy({ status: 'failed', error: 'bee said no.', code: 'not_ready' }, 'ok').title,
-    ).toBe('Storage not ready yet');
-    expect(uploadCopy({ status: 'failed', error: 'bee said no.' }, 'ok')).toMatchObject({
-      title: 'Upload failed',
-      body: 'Bee said no. Nothing was published.',
-      actions: ['retryUpload', 'copy'],
-    });
   });
+
 });

@@ -7,10 +7,9 @@ import {
   dismissCapture,
   onCaptureResult,
   onCaptureStep,
-  onUploadResult,
-  retryUpload,
   startCapture,
 } from './job';
+import { onPendingUploadResult } from './pendingUpload';
 import { initExternalApi } from './external';
 import { earlierCaptures, resolveWitness } from './lookup';
 import { stampKey } from './stamp';
@@ -52,8 +51,6 @@ export function initRecallBackground(): void {
         return reply(cancelCapture().then(() => ({ ok: true })));
       case 'recall.dismissCapture':
         return reply(dismissCapture().then(() => ({ ok: true })));
-      case 'recall.retryUpload':
-        return reply(retryUpload());
       case 'recall.witnessStatus':
         return reply(resolveWitness({ fresh: true }));
       case 'recall.earlierCaptures':
@@ -65,7 +62,8 @@ export function initRecallBackground(): void {
         void onCaptureResult(msg.id, msg.outcome);
         return;
       case 'recall.upload.result':
-        void onUploadResult(msg.id, msg.outcome);
+        // Uploads run only for pending captures, started from the publish tab (R44).
+        void onPendingUploadResult(msg.id, msg.outcome);
         return;
       default:
         return;

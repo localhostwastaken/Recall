@@ -4,7 +4,9 @@
 // and any page there may call it, so nothing here trusts the caller (ruling R27):
 // - recall.getStampAddress  -> {address, version}        public, read-only (version: the extension's)
 // - recall.addBatches       -> {pool} | {error, pool, rejected}  each batch checked on Gnosis
-// - recall.getPending       -> PendingRecord | {error}   exact unguessable captureId only
+// - recall.getPending       -> PendingRecord + {upload, storage, uploadMode} | {error}
+//                                                        exact unguessable captureId only
+// - recall.uploadPending    -> {status} | {error}        exact captureId; starts the upload once
 // - recall.markPublished    -> {ok:true} | {error}       only after the Arkiv record matches
 // - recall.discardPending   -> {ok:true} | {error}       exact unguessable captureId only
 // Every answer is JSON-safe (strings, numbers, booleans; no bytes, no bigint).
@@ -13,15 +15,17 @@ import { gnosis } from 'viem/chains';
 import { loadSettings, netConfigFor } from './settings';
 import { stampAddress } from './stamp';
 import { addBatches, parseBatchIds } from './pool';
-import { discardPending, markPublished, readPending, type EntitySummary } from './pending';
+import { discardPending, markPublished, type EntitySummary } from './pending';
+import { pendingAnswer, uploadPending } from './pendingUpload';
 import { ensureOffscreen } from './offscreen';
-import { clearDiscardedCapture } from './job';
+import { clearFinishedCapture } from './job';
 import type { OffscreenReadEntity } from './arkivRead';
 
 export type ExternalRequest =
   | { type: 'recall.getStampAddress' }
   | { type: 'recall.addBatches'; batchIds: Hex[] }
   | { type: 'recall.getPending'; captureId: string }
+  | { type: 'recall.uploadPending'; captureId: string; mode: 'stamped' | 'free' }
   | { type: 'recall.markPublished'; captureId: string; entityKey: Hex }
   | { type: 'recall.discardPending'; captureId: string };
 
@@ -71,18 +75,23 @@ export async function handleExternal(raw: unknown): Promise<Answer> {
       };
     }
 
-    case 'recall.getPending': {
-      const rec = await readPending(msg.captureId);
-      return rec ? { ...rec } : { error: 'no pending capture with this id' };
-    }
+    case 'recall.getPending':
+      return pendingAnswer(msg.captureId);
 
-    case 'recall.markPublished':
-      return markPublished(msg.captureId, msg.entityKey, readEntity);
+    case 'recall.uploadPending':
+      return uploadPending(msg.captureId, msg.mode);
+
+    case 'recall.markPublished': {
+      const res = await markPublished(msg.captureId, msg.entityKey, readEntity);
+      // Published: the popup goes back to idle (best effort).
+      if ('ok' in res) await clearFinishedCapture(msg.captureId as string).catch(() => undefined);
+      return res;
+    }
 
     case 'recall.discardPending': {
       const res = await discardPending(msg.captureId);
       // The popup must not keep offering a capture that is gone (best effort).
-      if ('ok' in res) await clearDiscardedCapture(msg.captureId as string).catch(() => undefined);
+      if ('ok' in res) await clearFinishedCapture(msg.captureId as string).catch(() => undefined);
       return res;
     }
 

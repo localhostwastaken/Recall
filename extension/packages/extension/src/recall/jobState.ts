@@ -27,24 +27,23 @@ export type CheckSummary = {
   };
 };
 
-/** Job steps: the capture's three, then 4 = uploading the evidence to Swarm. */
-export type JobStep = CaptureStep | 4;
+/** Job steps: the capture's three (the same-page check runs within step 3). */
+export type JobStep = CaptureStep;
 
-/** What happened to the evidence after the checks. */
+/** What happened to the capture after the checks (R44: nothing is uploaded here). */
 export type UploadState =
-  | { status: 'uploaded'; captureId: string; evidenceRef: Hex; batchId: Hex }
+  /** A new or changed page: kept in the extension; the publish tab decides how to store it. */
+  | { status: 'pending'; captureId: string }
   /**
    * The newest verified capture of the page has the same bytes: a confirmation (evidence
-   * inline, no Swarm upload) waits in the approval tab. `since`: that capture's signed time
+   * inline, no Swarm upload) waits in the publish tab. `since`: that capture's signed time
    * (Unix seconds, decimal).
    */
   | { status: 'confirmation'; captureId: string; captureKey: Hex; since: string }
-  /** The pool had no unused batch. */
-  | { status: 'no_storage' }
-  /** The checks did not allow an upload. */
+  /** The checks did not allow publishing. */
   | { status: 'skipped'; reason: string }
-  /** `not_ready`: no batch became usable in time (fresh storage takes 1-2 minutes). */
-  | { status: 'failed'; error: string; code?: 'not_ready' };
+  /** The capture could not be kept for publishing. */
+  | { status: 'failed'; error: string };
 
 export type CaptureBase = { id: string; url: string; startedAt: number };
 type Base = CaptureBase;
@@ -54,13 +53,11 @@ export type CaptureState =
       step: JobStep;
       /** When the current step began (the staleness clock); defaults to startedAt. */
       stepAt?: number;
-      /** The pool had a batch at the start, so the steps include the upload. */
-      uploadPlanned?: boolean;
       /** Witnesses are pinned, so the same-page check (and maybe a confirmation) comes after the checks. */
       lookupPlanned?: boolean;
       /** Step 3 only: the checks passed and the same-page check is running. */
       lookup?: boolean;
-      /** Step 3 (same-page check) and step 4 (upload): the checked capture. */
+      /** Step 3 (same-page check): the checked capture. */
       evidence?: EvidenceFile;
       checks?: CheckSummary;
     })

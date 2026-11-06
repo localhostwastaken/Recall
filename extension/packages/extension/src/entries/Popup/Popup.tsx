@@ -6,19 +6,14 @@ import { Notice } from '../../recall/ui/Notice';
 import { Steps, type StepState } from '../../recall/ui/Steps';
 import { CheckRow } from '../../recall/ui/CheckRow';
 import { MonoValue } from '../../recall/ui/MonoValue';
-import { SETTINGS_KEY, loadSettings, type UploadMode } from '../../recall/settings';
-import { FREE_BATCH_ID } from '../../recall/uploadParts';
+import { loadSettings } from '../../recall/settings';
 import { SettingsPanel } from './SettingsPanel';
 import { CAPTURE_STATE_KEY, isLiveRunning, type CaptureState } from '../../recall/jobState';
-import { POOL_KEY, parsePool, storageState, type StorageState } from '../../recall/poolState';
 import type { PopupRequest } from '../../recall/messages';
 import {
+  CAPTURE_HELPER,
   approveUrl,
-  storageUrl,
-  captureHelper,
-  captureUrl,
   earlierCopy,
-  storageNotice,
   type EarlierCaptures,
   checkLines,
   errorCopy,
@@ -76,50 +71,6 @@ function useCaptureState(): CaptureState | undefined {
     return () => chrome.storage.session.onChanged.removeListener(onChanged);
   }, []);
   return state;
-}
-
-/** Whether the pool can take a capture (ok / expired / empty), kept live (undefined while loading). */
-function useStorageState(): StorageState | undefined {
-  const [state, setState] = useState<StorageState | undefined>(undefined);
-  useEffect(() => {
-    const read = (stored: unknown) => setState(storageState(parsePool(stored)));
-    chrome.storage.local
-      .get(POOL_KEY)
-      .then((r) => read(r[POOL_KEY]))
-      .catch(() => undefined);
-    const onChanged = (changes: Record<string, chrome.storage.StorageChange>) => {
-      if (POOL_KEY in changes) read(changes[POOL_KEY].newValue);
-    };
-    chrome.storage.local.onChanged.addListener(onChanged);
-    return () => chrome.storage.local.onChanged.removeListener(onChanged);
-  }, []);
-  return state;
-}
-
-/** The upload mode of the settings, kept live (the default until the settings are read). */
-function useUploadMode(): UploadMode | undefined {
-  const [mode, setMode] = useState<UploadMode | undefined>(undefined);
-  useEffect(() => {
-    loadSettings()
-      .then((s) => setMode(s.uploadMode))
-      .catch(() => setMode('stamped'));
-    const onChanged = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
-      if (area === 'local' && SETTINGS_KEY in changes) {
-        loadSettings()
-          .then((s) => setMode(s.uploadMode))
-          .catch(() => undefined);
-      }
-    };
-    chrome.storage.onChanged.addListener(onChanged);
-    return () => chrome.storage.onChanged.removeListener(onChanged);
-  }, []);
-  return mode;
-}
-
-/** Opens the web app's Buy storage page in a new tab, naming this extension (`?ext=`). */
-async function openBuyStorage(): Promise<void> {
-  const { appUrl } = await loadSettings();
-  await chrome.tabs.create({ url: storageUrl(appUrl, chrome.runtime.id) });
 }
 
 /** Opens a page of the web app (built from the app URL in settings) in a new tab. */
@@ -210,14 +161,7 @@ export function Popup() {
   const [copied, setCopied] = useState(false);
   const [view, setView] = useState<'main' | 'settings'>('main');
   const job = useCaptureState();
-  const poolStorage = useStorageState();
-  // Free upload mode takes nothing from the pool, so an empty or expired pool is not a problem.
-  // Until the mode is read the pool's state is not shown either: no "No storage" flash that
-  // free mode would not have had.
-  const uploadMode = useUploadMode();
-  const storage: StorageState | undefined =
-    uploadMode === undefined ? undefined : uploadMode === 'free' ? 'ok' : poolStorage;
-  const noStorage = storageNotice(storage);
+  // Storage is chosen after the capture, in the Recall tab (R44): nothing here gates on it.
   // Only pages the extension can capture have a history to look up.
   const capturable = page && !pageBlockedReason(page.url) ? page.url : undefined;
   const earlier = useEarlierCaptures(capturable);
@@ -259,8 +203,6 @@ export function Popup() {
   }, [capture, checkWitness]);
   const dismiss = useCallback(() => void send({ type: 'recall.dismissCapture' }), []);
   const cancel = useCallback(() => void send({ type: 'recall.cancelCapture' }), []);
-  const retryUpload = useCallback(() => void send({ type: 'recall.retryUpload' }), []);
-  const buyStorage = useCallback(() => void openBuyStorage(), []);
   // The settings are a panel of this popup (the options page has the same form).
   const openSettings = useCallback(() => {
     cameFromSettings.current = true;
@@ -286,7 +228,7 @@ export function Popup() {
   else if (witness === 'offline')
     disabledReason = 'The witness is offline, so new captures are paused.';
   const busy = Boolean(running && mine);
-  const helper = disabledReason ?? captureHelper(storage);
+  const helper = disabledReason ?? CAPTURE_HELPER;
 
   return (
     <div className="popup">
@@ -355,16 +297,11 @@ export function Popup() {
                 <p className="progress-text">
                   {formatElapsed(now - mine.startedAt)} elapsed · usually 15–30 s
                 </p>
-                {mine.step < 4 ? (
-                  <div className="popup-actions">
-                    <button type="button" className="btn btn-secondary" onClick={cancel}>
-                      Cancel capture
-                    </button>
-                  </div>
-                ) : (
-                  // Stamped chunks cannot be taken back, so the upload always runs to the end.
-                  <p className="popup-note muted">The upload can't be cancelled once it starts.</p>
-                )}
+                <div className="popup-actions">
+                  <button type="button" className="btn btn-secondary" onClick={cancel}>
+                    Cancel capture
+                  </button>
+                </div>
                 <p className="popup-note muted">
                   You can close this popup. The capture keeps running.
                 </p>
@@ -372,11 +309,8 @@ export function Popup() {
             ) : mine?.status === 'done' ? (
               <CaptureResult
                 job={mine}
-                storage={storage ?? 'empty'}
                 copied={copied}
                 openSettings={openSettings}
-                onBuyStorage={buyStorage}
-                onRetryUpload={retryUpload}
                 onCopy={() => {
                   const u = mine.upload;
                   void navigator.clipboard
@@ -436,23 +370,6 @@ export function Popup() {
                   verified by anyone.
                 </Notice>
               </section>
-            ) : noStorage ? (
-              <section aria-labelledby="capture-result">
-                <h2 id="capture-result" className="section-label">
-                  Storage
-                </h2>
-                <Notice
-                  kind="warn"
-                  title={noStorage.title}
-                  actions={
-                    <button type="button" className="btn btn-secondary" onClick={buyStorage}>
-                      Buy storage
-                    </button>
-                  }
-                >
-                  {noStorage.body}
-                </Notice>
-              </section>
             ) : capturable ? (
               <EarlierCapturesView value={earlier} />
             ) : null}
@@ -488,62 +405,28 @@ export function Popup() {
 
 function CaptureResult({
   job,
-  storage,
   copied,
   openSettings,
-  onBuyStorage,
-  onRetryUpload,
   onCopy,
 }: {
   job: Extract<CaptureState, { status: 'done' }>;
-  storage: StorageState;
   copied: boolean;
   openSettings: () => void;
-  onBuyStorage: () => void;
-  onRetryUpload: () => void;
   onCopy: () => void;
 }) {
   const lines = checkLines(job.checks, job.evidence);
   const v = verdict(lines, job.checks);
-  const up = job.upload ? uploadCopy(job.upload, storage) : null;
+  const up = job.upload ? uploadCopy(job.upload) : null;
   const u = job.upload;
   const openApprove = () => {
-    if (u?.status === 'uploaded' || u?.status === 'confirmation') {
+    if (u?.status === 'pending' || u?.status === 'confirmation') {
       void openApp((app) => approveUrl(app, u.captureId, chrome.runtime.id));
     }
   };
-  const keepAlive = () => {
-    if (u?.status === 'confirmation') void openApp((app) => captureUrl(app, u.captureKey));
-  };
   const upActions = {
     openApprove: (
-      <button key="approve" type="button" className="btn btn-secondary" onClick={openApprove}>
-        Open approval tab
-      </button>
-    ),
-    publishConfirmation: (
-      <button key="confirm" type="button" className="btn btn-secondary" onClick={openApprove}>
-        Publish confirmation
-      </button>
-    ),
-    keepAlive: (
-      <button key="keep" type="button" className="btn btn-ghost" onClick={keepAlive}>
-        Keep earlier capture alive
-      </button>
-    ),
-    buyStorage: (
-      <button key="buy" type="button" className="btn btn-secondary" onClick={onBuyStorage}>
-        Buy storage
-      </button>
-    ),
-    uploadNow: (
-      <button key="upload" type="button" className="btn btn-secondary" onClick={onRetryUpload}>
-        Upload now
-      </button>
-    ),
-    retryUpload: (
-      <button key="retry" type="button" className="btn btn-secondary" onClick={onRetryUpload}>
-        Try again
+      <button key="approve" type="button" className="btn btn-primary" onClick={openApprove}>
+        Open Recall tab
       </button>
     ),
     copy: (
@@ -557,10 +440,22 @@ function CaptureResult({
       <h2 id="capture-result" className="section-label">
         Capture result
       </h2>
+      {up ? (
+        <div className="upload-result">
+          <Notice
+            kind={up.kind}
+            title={up.title}
+            focus
+            actions={up.actions.length ? up.actions.map((a) => upActions[a]) : undefined}
+          >
+            {up.body}
+          </Notice>
+        </div>
+      ) : null}
       <Notice
         kind={v.kind}
         title={v.title}
-        focus
+        focus={!up}
         actions={
           v.witnessSettings ? (
             <button type="button" className="btn btn-ghost" onClick={openSettings}>
@@ -571,32 +466,6 @@ function CaptureResult({
       >
         {v.body}
       </Notice>
-      {up ? (
-        <div className="upload-result">
-          <Notice
-            kind={up.kind}
-            title={up.title}
-            actions={up.actions.length ? up.actions.map((a) => upActions[a]) : undefined}
-          >
-            {up.body}
-            {job.upload?.status === 'uploaded' ? (
-              <span className="upload-ref">
-                Evidence <MonoValue value={job.upload.evidenceRef} />
-              </span>
-            ) : null}
-            {job.upload?.status === 'uploaded' && job.upload.batchId === FREE_BATCH_ID ? (
-              <span className="upload-ref">
-                Stored on the gateway's free storage: no known end date, and it can't be kept alive.
-              </span>
-            ) : null}
-            {job.upload?.status === 'confirmation' ? (
-              <span className="upload-ref">
-                Finish in the approval tab to publish the confirmation.
-              </span>
-            ) : null}
-          </Notice>
-        </div>
-      ) : null}
       <ul className="checks" aria-label="Checks">
         {lines.map((l) => (
           <CheckRow

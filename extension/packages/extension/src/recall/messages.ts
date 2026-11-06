@@ -43,7 +43,6 @@ export type PopupRequest =
   | { type: 'recall.startCapture'; url: string }
   | { type: 'recall.cancelCapture' }
   | { type: 'recall.dismissCapture' }
-  | { type: 'recall.retryUpload' }
   | { type: 'recall.witnessStatus' }
   | { type: 'recall.earlierCaptures'; url: string };
 

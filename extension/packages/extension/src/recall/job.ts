@@ -1,28 +1,18 @@
 // The capture job (service worker side): one capture at a time, run by the offscreen
 // document. Its state lives in chrome.storage.session, so the popup can close and
 // reopen while the capture keeps running. After the checks, a capture that may be
-// uploaded is compared with the page's newest verified capture: the same bytes become a
-// confirmation (evidence inline in the Arkiv record, no upload); anything else is stamped
-// with one pool batch and uploaded to Swarm (also in offscreen). Either way the web app's
-// approval tab then opens, where MetaMask publishes the Arkiv record.
+// published is compared with the page's newest verified capture (the same bytes make it a
+// confirmation), then kept as a pending record WITHOUT any upload, and the web app's publish
+// tab opens (R44, capture first). There the person chooses: confirm, upload with storage they
+// have or buy, or discard; the upload itself is pendingUpload.ts.
 import { encodeEvidence, runChecks, urlHash, type CheckReport, type EvidenceFile } from '@recall/evidence';
 import type { Hex } from 'viem';
 import { RECALL_DEV } from './build';
-import { loadSettings, netConfigFor } from './settings';
+import { loadSettings } from './settings';
 import { ensureOffscreen } from './offscreen';
-import { applyBatchUpdates, loadPool } from './pool';
-import { unusedBatches } from './poolState';
-import { stampKey } from './stamp';
-import { newCaptureId, savePending } from './pending';
+import { newCaptureId, savePending, type PendingRecord } from './pending';
 import { latestVerifiedCapture, openApproveTab, witnessForCapture } from './lookup';
-import {
-  USABLE_WAIT_MS,
-  canonicalEvidence,
-  uploadGate,
-  uploadIsPlanned,
-  type OffscreenUpload,
-  type UploadOutcome,
-} from './uploadParts';
+import { canonicalEvidence, uploadGate } from './uploadParts';
 import {
   MAX_RECV_DATA,
   withTimeout,
@@ -109,9 +99,7 @@ function failure(base: Base, error: string, code: CaptureErrorCode, size?: numbe
 }
 
 /** Sends to the offscreen document, retrying briefly while a new document is still loading. */
-async function sendToOffscreen(
-  msg: OffscreenCapture | OffscreenUpload,
-): Promise<{ accepted?: boolean } | undefined> {
+async function sendToOffscreen(msg: OffscreenCapture): Promise<{ accepted?: boolean } | undefined> {
   for (let attempt = 0; ; attempt++) {
     try {
       return (await chrome.runtime.sendMessage(msg)) as { accepted?: boolean } | undefined;
@@ -144,16 +132,13 @@ export async function startCapture(
       await finish(failure(base, 'the witness is offline', 'witness_offline'));
       return { id: base.id };
     }
-    // With no batch in the pool the capture is still proved and checked, but not uploaded
-    // (free upload mode needs no batch, so it is always uploaded).
-    const uploadPlanned = uploadIsPlanned((await loadSettings()).uploadMode, unusedBatches(await loadPool()).length);
+    // Storage is chosen after the capture, in the publish tab: nothing here depends on the pool.
     const lookupPlanned = (await loadSettings()).pinnedWitnesses.length > 0;
     await area().set({
       [CAPTURE_STATE_KEY]: {
         ...base,
         status: 'running',
         step: 1,
-        uploadPlanned,
         lookupPlanned,
       } satisfies CaptureState,
     });
@@ -190,8 +175,8 @@ export function onCaptureStep(id: string, step: CaptureStep): Promise<void> {
 
 /**
  * Offscreen result: run checks A-C on fresh evidence; then (outside the state chain, so a
- * cancel is never held up by the network) the same-page check, which ends in a confirmation
- * or an upload. A capture the checks refused is stored as final at once.
+ * cancel is never held up by the network) the same-page check, which ends in a pending
+ * confirmation or a pending capture. A capture the checks refused is stored as final at once.
  */
 export async function onCaptureResult(id: string, outcome: CaptureOutcome): Promise<void> {
   const next = await checkCapture(id, outcome);
@@ -262,7 +247,7 @@ export const INLINE_EVIDENCE_MAX = 128 * 1024;
  * evidence downloaded and checked A-C with a pinned witness, its record matching the
  * evidence) with the same bytes makes this capture a confirmation; a record that merely
  * claims the same bytes counts for nothing. Anything unknown (no pinned witness, a listing
- * cut short, Arkiv or Swarm unreachable) leads to an upload.
+ * cut short, Arkiv or Swarm unreachable) makes it a new capture (fails safe toward upload).
  */
 async function sameAsLatest(evidence: EvidenceFile, checks: CheckSummary): Promise<{ captureKey: Hex; since: string } | null> {
   const f = checks.facts;
@@ -273,6 +258,11 @@ async function sameAsLatest(evidence: EvidenceFile, checks: CheckSummary): Promi
   return { captureKey: latest.entityKey, since: latest.signedAt };
 }
 
+/**
+ * Keeps the checked capture as a pending record (no upload) and opens the publish tab. With
+ * the same bytes as the newest verified capture it is a confirmation; if that cannot be kept,
+ * it is kept as a new capture instead.
+ */
 async function afterChecks(id: string, evidence: EvidenceFile, checks: CheckSummary): Promise<void> {
   const same = await sameAsLatest(evidence, checks).catch(() => null);
   let opened: string | undefined;
@@ -280,31 +270,44 @@ async function afterChecks(id: string, evidence: EvidenceFile, checks: CheckSumm
     const s = await readCaptureState();
     if (s?.status !== 'running' || s.id !== id || s.step !== 3 || !s.evidence) return; // cancelled
     const base: Base = { id: s.id, url: s.url, startedAt: s.startedAt };
-    if (!same || !checks.facts) {
-      await beginUpload(base, evidence, checks, s.lookupPlanned);
+    const f = checks.facts;
+    if (!f) {
+      await finishDone(base, evidence, checks, { status: 'skipped', reason: 'the checks gave no verified facts' });
       return;
+    }
+    const common = {
+      evidence: canonicalEvidence(evidence),
+      bodySha256: f.bodySha256,
+      createdAt: Date.now(),
+    };
+    if (same) {
+      try {
+        const captureId = newCaptureId();
+        await savePending({ captureId, kind: 'confirmation', captureKey: same.captureKey, since: same.since, ...common });
+        await finishDone(base, evidence, checks, {
+          status: 'confirmation',
+          captureId,
+          captureKey: same.captureKey,
+          since: same.since,
+        });
+        opened = captureId;
+        return;
+      } catch (err) {
+        // Could not keep the confirmation: keep it as a new capture instead.
+        console.error('[recall] confirmation could not be kept', errorText(err));
+      }
     }
     try {
       const captureId = newCaptureId();
-      await savePending({
-        captureId,
-        kind: 'confirmation',
-        evidence: canonicalEvidence(evidence),
-        captureKey: same.captureKey,
-        bodySha256: checks.facts.bodySha256,
-        createdAt: Date.now(),
-      });
-      await finishDone(base, evidence, checks, {
-        status: 'confirmation',
-        captureId,
-        captureKey: same.captureKey,
-        since: same.since,
-      });
+      const rec: PendingRecord = { captureId, kind: 'capture', ...common };
+      await savePending(rec);
+      await finishDone(base, evidence, checks, { status: 'pending', captureId });
       opened = captureId;
     } catch (err) {
-      // Could not keep the confirmation: upload as a new capture instead.
-      console.error('[recall] confirmation could not be kept', errorText(err));
-      await beginUpload(base, evidence, checks, s.lookupPlanned);
+      await finishDone(base, evidence, checks, {
+        status: 'failed',
+        error: `the capture could not be kept for publishing: ${errorText(err)}`,
+      });
     }
   });
   if (opened) await openApproveTab(opened);
@@ -321,149 +324,11 @@ function finishDone(
 
 const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
-/**
- * Step 4: hands the checked evidence, the stamp key and the unused batches to the
- * offscreen document, which picks a usable batch, stamps and uploads. Runs inside the
- * state chain. With an empty pool the capture ends without an upload.
- *
- * Free upload mode (settings) sends neither the stamp key nor any batch: the offscreen
- * document posts the evidence to the gateway's own storage, and the pool is not read.
- */
-async function beginUpload(
-  base: Base,
-  evidence: EvidenceFile,
-  checks: CheckSummary,
-  lookupPlanned?: boolean,
-): Promise<void> {
-  const settings = await loadSettings();
-  const free = settings.uploadMode === 'free';
-  const candidates = free ? [] : unusedBatches(await loadPool());
-  if (!free && candidates.length === 0) {
-    await finishDone(base, evidence, checks, { status: 'no_storage' });
-    return;
-  }
-  await area().set({
-    [CAPTURE_STATE_KEY]: {
-      ...base,
-      status: 'running',
-      step: 4,
-      stepAt: Date.now(),
-      uploadPlanned: true,
-      ...(lookupPlanned ? { lookupPlanned } : {}),
-      evidence,
-      checks,
-    } satisfies CaptureState,
-  });
-  try {
-    const net = netConfigFor(settings);
-    await ensureOffscreen();
-    const msg: OffscreenUpload = {
-      type: 'recall.offscreen.upload',
-      id: base.id,
-      mode: free ? 'free' : 'stamped',
-      // Already canonical after the checks; a retry reads it back from session storage,
-      // whose objects come back with sorted keys, so it is put in canonical form again.
-      evidence: canonicalEvidence(evidence),
-      ...(free ? {} : { stampKey: await stampKey() }),
-      candidates: candidates.map((b) => ({
-        batchId: b.batchId,
-        depth: b.depth,
-        startBlock: b.startBlock,
-        ...(b.stamper ? { stamper: b.stamper } : {}),
-      })),
-      uploadUrl: net.swarm.uploadUrl,
-      gnosisRpcUrl: net.gnosis.rpcUrl,
-      waitMs: USABLE_WAIT_MS,
-    };
-    const ack = await sendToOffscreen(msg);
-    if (!ack?.accepted) throw new Error('the uploader did not start');
-  } catch (err) {
-    await finishDone(base, evidence, checks, { status: 'failed', error: errorText(err) });
-  }
-}
-
-/**
- * Offscreen upload result. What the attempt learned about each batch is stored whatever
- * became of the job (a stamped slot must never be stamped again); the job finishes only
- * if it is still this upload. Nothing here may leave the job stuck at step 4.
- */
-export async function onUploadResult(id: string, outcome: UploadOutcome): Promise<void> {
-  let opened: string | undefined;
-  await update(async () => {
-    try {
-      await applyBatchUpdates(outcome.updates ?? []);
-    } catch (err) {
-      console.error('[recall] pool update failed', errorText(err));
-    }
-    const s = await readCaptureState();
-    if (s?.status !== 'running' || s.id !== id || s.step !== 4 || !s.evidence || !s.checks) return;
-    const base: Base = { id: s.id, url: s.url, startedAt: s.startedAt };
-    if (!outcome.ok) {
-      await finishDone(
-        base,
-        s.evidence,
-        s.checks,
-        outcome.code === 'no_storage'
-          ? { status: 'no_storage' }
-          : {
-              status: 'failed',
-              error: outcome.error,
-              ...(outcome.code === 'not_ready' ? { code: 'not_ready' as const } : {}),
-            },
-      );
-      return;
-    }
-    try {
-      if (!s.checks.facts) throw new Error('the checks gave no verified facts');
-      const captureId = newCaptureId();
-      await savePending({
-        captureId,
-        kind: 'capture',
-        // The same canonical form that was uploaded (session storage sorted its keys).
-        evidence: canonicalEvidence(s.evidence),
-        evidenceRef: outcome.evidenceRef,
-        batchId: outcome.batchId,
-        bodySha256: s.checks.facts.bodySha256,
-        createdAt: Date.now(),
-      });
-      await finishDone(base, s.evidence, s.checks, {
-        status: 'uploaded',
-        captureId,
-        evidenceRef: outcome.evidenceRef,
-        batchId: outcome.batchId,
-      });
-      opened = captureId;
-    } catch (err) {
-      await finishDone(base, s.evidence, s.checks, {
-        status: 'failed',
-        error: `the evidence is on Swarm, but the capture could not be kept for publishing: ${errorText(err)}`,
-      });
-    }
-  });
-  if (opened) await openApproveTab(opened);
-}
-
-/** The popup's "Try again" after a failed upload (or once storage was bought): upload the same capture. */
-export function retryUpload(): Promise<{ ok: true } | { error: string }> {
-  return update(async () => {
-    const s = await readCaptureState();
-    if (
-      s?.status !== 'done' ||
-      (s.upload?.status !== 'failed' && s.upload?.status !== 'no_storage')
-    ) {
-      return { error: 'there is no capture waiting for an upload' };
-    }
-    await beginUpload({ id: s.id, url: s.url, startedAt: s.startedAt }, s.evidence, s.checks);
-    return { ok: true };
-  });
-}
-
 /** Cancels the running capture: the popup shows "cancelled" at once, the prover stops soon after. */
 export function cancelCapture(): Promise<void> {
   return update(async () => {
     const s = await readCaptureState();
-    // Once the upload has started it runs to the end: stamped chunks cannot be taken back.
-    if (s?.status !== 'running' || s.step === 4) return;
+    if (s?.status !== 'running') return;
     await finish({
       id: s.id,
       url: s.url,
@@ -484,15 +349,15 @@ export function dismissCapture(): Promise<void> {
 }
 
 /**
- * The approval tab discarded the pending capture `captureId`: if the popup's result is that
- * capture (uploaded, or an unchanged-page confirmation), clear it, so the popup is idle again
- * instead of offering an approval tab with nothing left to publish. Anything else stays.
+ * The publish tab published or discarded the pending capture `captureId`: if the popup's result
+ * is that capture, clear it, so the popup is idle again instead of offering a publish tab with
+ * nothing left to do. Anything else stays.
  */
-export function clearDiscardedCapture(captureId: string): Promise<void> {
+export function clearFinishedCapture(captureId: string): Promise<void> {
   return update(async () => {
     const s = await readCaptureState();
     const u = s?.status === 'done' ? s.upload : undefined;
-    if ((u?.status === 'uploaded' || u?.status === 'confirmation') && u.captureId === captureId) {
+    if ((u?.status === 'pending' || u?.status === 'confirmation') && u.captureId === captureId) {
       await area().remove(CAPTURE_STATE_KEY);
     }
   });

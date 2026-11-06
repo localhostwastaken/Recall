@@ -6,7 +6,6 @@ import type { NoticeKind } from './ui/Notice';
 import { middle } from './ui/MonoValue';
 import { captureTarget, formatSize, type CaptureErrorCode } from './captureParts';
 import type { CheckSummary, UploadState } from './jobState';
-import type { StorageState } from './poolState';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -25,59 +24,32 @@ export function formatElapsed(ms: number): string {
 
 export const CAPTURE_STEPS = [
   'Connecting to the witness',
-  'Proving the page with the witness',
+  'Recording the page (~30 s)',
   'Checking the witness signature',
 ] as const;
 
 /** Shown when witnesses are pinned: the same-page check after the signature check. */
 export const LOOKUP_STEP = 'Looking for earlier captures';
 
-/** Shown when the pool has a batch to upload with. */
-export const UPLOAD_STEP = 'Uploading evidence to Swarm';
-
-/** The last step of a job that uploads (a record follows the upload). */
-export const APPROVE_STEP = 'Opening the approval tab';
-
 /** The popup's footer helper while a capture can start (design brief 4.1). */
 export const CAPTURE_HELPER = 'Takes about 30 s and about 80 MB of data. Pages up to 64 KB.';
 
-/** The helper when the pool is empty: the capture still runs, but is not uploaded. */
-export const CAPTURE_HELPER_NO_STORAGE =
-  'No storage left: the page will be checked but not uploaded. Pages up to 64 KB.';
-
-/** The helper when only expired batches are left. */
-export const CAPTURE_HELPER_EXPIRED =
-  'Storage expired: the page will be checked but not uploaded. Pages up to 64 KB.';
-
-/** The footer helper for a capture that can start, by storage state. */
-export const captureHelper = (storage: StorageState | undefined): string =>
-  storage === 'empty'
-    ? CAPTURE_HELPER_NO_STORAGE
-    : storage === 'expired'
-      ? CAPTURE_HELPER_EXPIRED
-      : CAPTURE_HELPER;
-
 export type StepPlan = {
   step: number;
-  uploadPlanned?: boolean;
   lookupPlanned?: boolean;
   /** Step 3 with the checks done: the same-page check is running. */
   lookup?: boolean;
 };
 
 /**
- * The steps a job shows (design brief 4.1) and which one is current: the capture's three,
- * then the same-page check when witnesses are pinned, then the upload and opening the
- * approval tab when storage is there. With no upload planned the job ends "not uploaded"
- * (or in a confirmation, straight from the same-page check), so the approval tab is never a
- * step of its own and is not listed.
+ * The steps a job shows (R44) and which one is current: the capture's three, then the
+ * same-page check when witnesses are pinned. Storage is chosen afterwards, in the Recall tab,
+ * so there is no upload step here.
  */
 export function jobSteps(p: StepPlan): { labels: string[]; current: number } {
   const labels: string[] = [...CAPTURE_STEPS];
   if (p.lookupPlanned || p.lookup) labels.push(LOOKUP_STEP);
-  if (p.uploadPlanned || p.step > 3) labels.push(UPLOAD_STEP, APPROVE_STEP);
-  const label =
-    p.step >= 4 ? UPLOAD_STEP : p.step === 3 && p.lookup ? LOOKUP_STEP : CAPTURE_STEPS[Math.max(0, p.step - 1)];
+  const label = p.step === 3 && p.lookup ? LOOKUP_STEP : CAPTURE_STEPS[Math.max(0, Math.min(2, p.step - 1))];
   return { labels, current: Math.max(0, labels.indexOf(label)) };
 }
 
@@ -245,36 +217,11 @@ export function errorCopy(
 
 export type { CheckResult };
 
-/** "No storage left" (design brief 4.1). */
-export const NO_STORAGE_TITLE = 'No storage left';
-export const NO_STORAGE_BODY = 'Your prepaid storage is used up. Buy more to keep capturing.';
-
-/** Only batches that expired (or ran too short) are left. */
-export const STORAGE_EXPIRED_TITLE = 'Storage expired';
-export const STORAGE_EXPIRED_BODY = 'Buy more in the Recall app.';
-
-/** The idle storage notice, or null when a capture can be uploaded. */
-export function storageNotice(
-  storage: StorageState | undefined,
-): { title: string; body: string } | null {
-  if (storage === 'empty') return { title: NO_STORAGE_TITLE, body: NO_STORAGE_BODY };
-  if (storage === 'expired') return { title: STORAGE_EXPIRED_TITLE, body: STORAGE_EXPIRED_BODY };
-  return null;
-}
-
 export type UploadCopy = {
   kind: NoticeKind;
   title: string;
   body: string;
-  actions: (
-    | 'buyStorage'
-    | 'uploadNow'
-    | 'retryUpload'
-    | 'copy'
-    | 'openApprove'
-    | 'publishConfirmation'
-    | 'keepAlive'
-  )[];
+  actions: ('openApprove' | 'copy')[];
 };
 
 const sentence = (s: string) => {
@@ -282,54 +229,28 @@ const sentence = (s: string) => {
   return t.charAt(0).toUpperCase() + t.slice(1);
 };
 
-/**
- * The notice under a finished capture's checks: what happened to its evidence.
- * `storage`: the pool now ('ok' means a no-storage capture can be uploaded after all).
- */
-export function uploadCopy(upload: UploadState, storage: StorageState): UploadCopy {
+/** "Continue in the Recall tab" (R44): the person chooses there how to save the capture. */
+export const CONTINUE_TITLE = 'Continue in the Recall tab';
+
+/** The notice under a finished capture's checks: what happens next. */
+export function uploadCopy(upload: UploadState): UploadCopy {
   switch (upload.status) {
-    case 'uploaded':
-      // Design brief 4.1; the approval tab opens by itself, the button is the fallback.
+    case 'pending':
+      // The Recall tab opens by itself; the button is the fallback.
       return {
         kind: 'success',
-        title: 'Evidence uploaded',
-        body: 'Finish in the approval tab to publish the record.',
+        title: CONTINUE_TITLE,
+        body: 'Choose how to save and publish this capture there. Nothing is uploaded until you do.',
         actions: ['openApprove'],
       };
-    case 'confirmation': {
+    case 'confirmation':
       // "the capture", not "your capture": the earlier one may be anyone's.
-      const since = formatUtc(Number(upload.since));
       return {
         kind: 'info',
-        title: `Unchanged since ${since}`,
-        body:
-          `This page is byte-for-byte the same as the capture from ${since}. You can publish a ` +
-          'confirmation that it was still unchanged today. No new upload is needed.',
-        actions: ['publishConfirmation', 'keepAlive'],
+        title: CONTINUE_TITLE,
+        body: `Unchanged since ${formatUtc(Number(upload.since))}. Confirm it there; no upload is needed.`,
+        actions: ['openApprove'],
       };
-    }
-    case 'no_storage':
-      if (storage === 'expired') {
-        return {
-          kind: 'error',
-          title: STORAGE_EXPIRED_TITLE,
-          body: `${STORAGE_EXPIRED_BODY} ${NOTHING}`,
-          actions: ['buyStorage'],
-        };
-      }
-      return storage === 'ok'
-        ? {
-            kind: 'info',
-            title: 'Not uploaded yet',
-            body: `There was no storage left when this capture finished. You can upload it now. ${NOTHING}`,
-            actions: ['uploadNow'],
-          }
-        : {
-            kind: 'error',
-            title: NO_STORAGE_TITLE,
-            body: `${NO_STORAGE_BODY} ${NOTHING}`,
-            actions: ['buyStorage'],
-          };
     case 'skipped':
       return {
         kind: 'info',
@@ -338,19 +259,12 @@ export function uploadCopy(upload: UploadState, storage: StorageState): UploadCo
         actions: [],
       };
     case 'failed':
-      return upload.code === 'not_ready'
-        ? {
-            kind: 'warn',
-            title: 'Storage not ready yet',
-            body: `New storage takes about 1–2 minutes to become usable. Try again in a minute. ${NOTHING}`,
-            actions: ['retryUpload'],
-          }
-        : {
-            kind: 'error',
-            title: 'Upload failed',
-            body: `${sentence(upload.error)}. ${NOTHING}`,
-            actions: ['retryUpload', 'copy'],
-          };
+      return {
+        kind: 'error',
+        title: 'Capture not kept',
+        body: `${sentence(upload.error)}. ${NOTHING}`,
+        actions: ['copy'],
+      };
   }
 }
 
@@ -364,7 +278,7 @@ export function pageBlockedReason(url: string): string | null {
   return t.error.charAt(0).toUpperCase() + t.error.slice(1) + '.';
 }
 
-/** The web app's approval tab for a pending capture; `ext` tells the page which extension to ask. */
+/** The web app's publish tab for a pending capture; `ext` tells the page which extension to ask. */
 export function approveUrl(appUrl: string, captureId: string, extensionId: string): string {
   return new URL(`#/approve/${captureId}?ext=${extensionId}`, appUrl).href;
 }

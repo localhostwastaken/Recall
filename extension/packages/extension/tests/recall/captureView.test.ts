@@ -156,25 +156,28 @@ describe('capture view copy', () => {
     );
   });
 
-  it('an uploaded capture points to the approval tab', () => {
-    const k = ('0x' + '1'.repeat(64)) as `0x${string}`;
-    expect(uploadCopy({ status: 'uploaded', captureId: 'x', evidenceRef: k, batchId: k }, 'ok')).toEqual({
+  it('a kept capture points to the Recall tab, where storage is chosen (R44)', () => {
+    expect(uploadCopy({ status: 'pending', captureId: 'x' })).toEqual({
       kind: 'success',
-      title: 'Evidence uploaded',
-      body: 'Finish in the approval tab to publish the record.',
+      title: 'Continue in the Recall tab',
+      body: 'Choose how to save and publish this capture there. Nothing is uploaded until you do.',
       actions: ['openApprove'],
     });
   });
 
-  it('an unchanged page offers a confirmation, with no new upload', () => {
+  it('an unchanged page is confirmed in the Recall tab, with no new upload', () => {
     const k = ('0x' + '1'.repeat(64)) as `0x${string}`;
-    expect(uploadCopy({ status: 'confirmation', captureId: 'x', captureKey: k, since: '1793800920' }, 'empty')).toEqual({
+    expect(uploadCopy({ status: 'confirmation', captureId: 'x', captureKey: k, since: '1793800920' })).toEqual({
       kind: 'info',
-      title: 'Unchanged since 4 Nov 2026, 14:02 UTC',
-      body:
-        'This page is byte-for-byte the same as the capture from 4 Nov 2026, 14:02 UTC. You can publish a ' +
-        'confirmation that it was still unchanged today. No new upload is needed.',
-      actions: ['publishConfirmation', 'keepAlive'],
+      title: 'Continue in the Recall tab',
+      body: 'Unchanged since 4 Nov 2026, 14:02 UTC. Confirm it there; no upload is needed.',
+      actions: ['openApprove'],
+    });
+    expect(uploadCopy({ status: 'failed', error: 'storage full.' })).toEqual({
+      kind: 'error',
+      title: 'Capture not kept',
+      body: 'Storage full. Nothing was published.',
+      actions: ['copy'],
     });
   });
 
@@ -236,33 +239,19 @@ describe('capture view copy', () => {
     ).toMatchObject({ kind: 'some', note: "2 records couldn't be checked right now. The timeline checks them all." });
   });
 
-  it('steps: the same-page check, the upload and the approval tab when they can happen', () => {
-    // Pinned witness, no storage: the job ends "not uploaded" (or in a confirmation straight
-    // from the same-page check), so the approval tab is not listed.
+  it('steps: the capture, then the same-page check when witnesses are pinned; no upload step (R44)', () => {
     const pinned = jobSteps({ step: 2, lookupPlanned: true });
     expect(pinned.labels).toEqual([
       'Connecting to the witness',
-      'Proving the page with the witness',
+      'Recording the page (~30 s)',
       'Checking the witness signature',
       'Looking for earlier captures',
     ]);
     expect(pinned.current).toBe(1);
-    expect(jobSteps({ step: 3, lookupPlanned: true, lookup: true }).labels).not.toContain('Opening the approval tab');
     // During the same-page check the current step is the lookup, not the signature check.
-    expect(jobSteps({ step: 3, lookupPlanned: true, lookup: true, uploadPlanned: true })).toEqual({
-      labels: [
-        'Connecting to the witness',
-        'Proving the page with the witness',
-        'Checking the witness signature',
-        'Looking for earlier captures',
-        'Uploading evidence to Swarm',
-        'Opening the approval tab',
-      ],
-      current: 3,
-    });
+    expect(jobSteps({ step: 3, lookupPlanned: true, lookup: true }).current).toBe(3);
     expect(jobSteps({ step: 3, lookupPlanned: true }).current).toBe(2);
-    expect(jobSteps({ step: 4, lookupPlanned: true, uploadPlanned: true }).current).toBe(4);
-    // Nothing pinned, no storage: just the capture's three steps.
+    // Nothing pinned: just the capture's three steps.
     expect(jobSteps({ step: 1 })).toEqual({ labels: expect.any(Array), current: 0 });
     expect(jobSteps({ step: 1 }).labels).toHaveLength(3);
   });
