@@ -162,6 +162,39 @@ describe('Library page', () => {
     current = data();
     render({ q: 'zzz' });
     expect(text()).toContain('No captures match this search.');
+    expect(text()).toContain('Nothing matches “zzz”.');
+    expect(cards()).toHaveLength(0);
+    const button = [...host.querySelectorAll('button')].find((b) => b.textContent === 'Clear search')!;
+    expect(button).toBeDefined();
+    act(() => button.click());
+    expect(cards()).toHaveLength(3);
+    expect(document.activeElement).toBe(host.querySelector('input[type="search"]'));
+  });
+
+  it('a search inside a filter names both and clears both', () => {
+    current = data();
+    render({ q: 'zzz', type: 'repo' });
+    expect(text()).toContain('Nothing among the repos matches “zzz”.');
+    const button = [...host.querySelectorAll('button')].find((b) => b.textContent === 'Clear search and filters')!;
+    act(() => button.click());
+    expect(cards()).toHaveLength(3);
+  });
+
+  it('the results line gives the count and says the list is ranked by time left', () => {
+    current = data();
+    render();
+    expect(host.querySelector('[role="status"]')?.textContent).toBe('3 pages · ranked by time left');
+    render({ sort: 'newest' });
+    expect(host.querySelector('[role="status"]')?.textContent).toBe('3 pages');
+  });
+
+  it('skeleton cards have the card rows and no letter tile', () => {
+    current = data({ status: 'loading', entries: [] });
+    render();
+    expect(host.querySelectorAll('.lib-skel')).toHaveLength(6);
+    expect(host.querySelector('.lib-skel-fav')).toBeNull();
+    expect(host.querySelector('.lib-skel .btn')).toBeNull();
+    expect(host.querySelector('.lib-skel-line.action')).not.toBeNull();
   });
 
   it('says when the list was cut at 1,000 captures', () => {

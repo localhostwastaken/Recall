@@ -5,40 +5,66 @@
   margin-top: 0;
 }
 
+/* A browse page, not an article: a compact header so the cards start high on the screen (the
+   main column above already pads the top). */
+.page.library {
+  padding-top: 0;
+}
+
 .lib-intro {
   margin-bottom: var(--space-5);
 }
 
-.lib-intro .lede {
-  margin-top: var(--space-2);
+.lib-intro h1 {
+  font-size: var(--text-2xl);
+  line-height: var(--lh-2xl);
+}
+
+.lib-lede {
+  margin: var(--space-2) 0 0;
+  max-width: 40rem;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
   color: var(--text-muted);
 }
 
-/* Toolbar: search grows, the type filter and sort sit beside it; they wrap on narrow screens. */
+/* Toolbar: one row of equal 44 px controls. The search grows; the type filter and sort keep their
+   natural width. On a phone each takes a full row. */
 .lib-tools {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
   gap: var(--space-3);
 }
 
-.lib-search {
+.lib-search,
+.lib-sort {
   position: relative;
-  flex: 1 1 280px;
   min-width: 0;
 }
 
-.lib-search-icon {
+.lib-search-icon,
+.lib-sort-icon,
+.lib-sort-chevron {
   position: absolute;
-  left: var(--space-4);
   top: 50%;
   transform: translateY(-50%);
   color: var(--text-muted);
   pointer-events: none;
 }
 
+.lib-search-icon,
+.lib-sort-icon {
+  left: var(--space-4);
+}
+
+.lib-sort-chevron {
+  right: var(--space-3);
+}
+
 .lib-tools .lib-search-input,
 .lib-tools .lib-sort-select {
+  height: 44px;
   min-height: 44px;
   border-radius: var(--radius-2);
   font-size: var(--text-md);
@@ -53,6 +79,11 @@
   opacity: 1;
 }
 
+.lib-search-input:hover,
+.lib-sort-select:hover {
+  border-color: var(--text-muted);
+}
+
 .lib-type .segmented legend {
   position: absolute;
   width: 1px;
@@ -63,22 +94,33 @@
   white-space: nowrap;
 }
 
+/* 42 px options inside a 1 px border: the group is 44 px, the same as the search box and select. */
 .lib-type .segmented-options {
+  display: flex;
   margin-top: 0;
   border-radius: var(--radius-2);
+  background: var(--surface);
 }
 
 .lib-type .segmented-option {
   min-width: 0;
-  min-height: 44px;
+  min-height: 42px;
   padding: 0 var(--space-4);
+  font-size: var(--text-sm);
+}
+
+.lib-type .segmented-option:not(:has(input:checked)):hover {
+  background: var(--surface-2);
 }
 
 .lib-tools .lib-sort-select {
   width: auto;
-  padding: 0 var(--space-6) 0 var(--space-4);
+  padding: 0 calc(var(--space-3) + 16px + var(--space-2)) 0 calc(var(--space-4) + 16px + var(--space-2));
+  font-size: var(--text-sm);
   font-weight: 600;
   cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
 }
 
 .lib-search-input:focus-visible,
@@ -87,22 +129,66 @@
   outline-offset: 2px;
 }
 
+/* The results line: the count (and the order) on the left, the quiet test-page switch on the right. */
+.lib-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0 var(--space-4);
+  min-height: 44px;
+  margin: var(--space-2) 0 var(--space-2);
+}
+
+.lib-meta.is-empty {
+  min-height: 0;
+  margin-bottom: var(--space-4);
+}
+
 .lib-status {
-  min-height: var(--lh-xs);
-  margin: var(--space-4) 0 var(--space-3);
+  margin: 0;
   font-size: var(--text-xs);
   line-height: var(--lh-xs);
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
 
-/* The grid: equal-height cards, 16 px apart; one column on a phone. */
+/* A small switch for housekeeping views (our test pages, unverified captures): 13 px muted words,
+   a smaller track, the full 44 px hit area. */
+.lib-quiet .switch {
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+  color: var(--text-muted);
+}
+
+.lib-quiet .switch:hover,
+.lib-quiet .switch[aria-checked='true'] {
+  color: var(--text);
+}
+
+.lib-quiet .switch-track {
+  width: 32px;
+  height: 20px;
+}
+
+.lib-quiet .switch-thumb {
+  width: 14px;
+  height: 14px;
+}
+
+.lib-quiet .switch[aria-checked='true'] .switch-thumb {
+  transform: translateX(12px);
+}
+
+/* The grid: equal-height cards, 16 px apart, at most three across, left-aligned; one column on a
+   phone. A short list keeps the card width instead of stretching. */
 .lib-grid {
   list-style: none;
   margin: 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
   gap: var(--space-4);
 }
 
@@ -119,60 +205,81 @@
   display: inline-flex;
 }
 
-/* Skeleton cards: the card's size and rows, no text. */
+/* Skeleton cards: the card's rows and height (title, address; pill and facts; days, bar, button). */
 .lib-skel {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
-  min-height: 176px;
+  min-height: 160px;
   padding: var(--space-4);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-2);
 }
 
-.lib-skel-head {
-  display: flex;
-  gap: var(--space-3);
-}
-
-.lib-skel-fav,
 .lib-skel-line {
   display: block;
+  height: 12px;
   background: var(--surface-2);
   border-radius: var(--radius-1);
 }
 
-.lib-skel-fav {
-  flex: none;
-  width: 36px;
-  height: 36px;
+.lib-skel-line.title {
+  width: 72%;
+  height: 14px;
 }
 
-.lib-skel-lines {
-  flex: 1;
-  display: grid;
+.lib-skel-line.addr {
+  width: 52%;
+  height: 10px;
+  margin-top: var(--space-3);
+}
+
+.lib-skel-facts {
+  display: flex;
+  align-items: center;
   gap: var(--space-2);
-  align-content: start;
-}
-
-.lib-skel-line {
-  height: 12px;
-}
-
-.lib-skel-line.short {
-  width: 60%;
+  margin-top: var(--space-4);
 }
 
 .lib-skel-line.pill {
-  width: 45%;
+  width: 84px;
   height: 24px;
   border-radius: var(--radius-pill);
 }
 
-.lib-skel-line.bar {
+.lib-skel-line.meta {
+  width: 72px;
+  height: 10px;
+}
+
+.lib-skel-foot {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-4);
   margin-top: auto;
-  height: 8px;
+}
+
+.lib-skel-life {
+  flex: 1;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.lib-skel-line.days {
+  width: 72px;
+  height: 10px;
+}
+
+.lib-skel-line.bar {
+  height: 6px;
+  border-radius: var(--radius-pill);
+}
+
+.lib-skel-line.action {
+  flex: none;
+  width: 96px;
+  height: 36px;
+  border-radius: var(--radius-pill);
 }
 
 @media (prefers-reduced-motion: no-preference) {
@@ -219,23 +326,58 @@
   color: var(--text-muted);
 }
 
+/* No results for this view: an icon, what was asked for, one way back. */
 .lib-none {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   align-items: center;
-  gap: var(--space-3) var(--space-4);
-  padding: var(--space-5);
-  border: 1px dashed var(--border-strong);
+  text-align: center;
+  gap: var(--space-2);
+  padding: var(--space-7) var(--space-5);
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
   border-radius: var(--radius-2);
+}
+
+.lib-none-icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  margin-bottom: var(--space-2);
+  border-radius: 50%;
+  background: var(--surface-2);
   color: var(--text-muted);
 }
 
-.lib-none p {
+.lib-none-title {
   margin: 0;
+  font-size: var(--text-md);
+  line-height: var(--lh-md);
+  font-weight: 700;
+  color: var(--text);
+}
+
+.lib-none-text {
+  margin: 0;
+  max-width: 32rem;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.lib-none-q {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.lib-none .btn {
+  margin-top: var(--space-3);
 }
 
 .lib-note {
-  margin: var(--space-4) 0 0;
+  margin: 0;
   font-size: var(--text-xs);
   line-height: var(--lh-xs);
   color: var(--text-muted);
@@ -249,14 +391,23 @@
   overflow-wrap: anywhere;
 }
 
-.lib-unverified {
+/* Footnotes under the grid: the row cap and "Show unverified (n)", quiet, one hairline above. */
+.lib-foot {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-2);
   margin-top: var(--space-6);
-  padding-top: var(--space-5);
+  padding-top: var(--space-3);
   border-top: 1px solid var(--border);
 }
 
-.lib-unverified section {
-  margin-top: var(--space-4);
+.lib-unverified {
+  justify-self: stretch;
+  margin-top: var(--space-3);
+}
+
+.lib-unverified .lib-note {
+  margin-top: var(--space-2);
 }
 
 .lib-unverified .lib-grid {
@@ -280,7 +431,22 @@
 }
 
 .lib-preview .lib-grid {
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+}
+
+/* Tablet: the search takes the first row; the filter and the sort share the second. */
+@media (max-width: 899px) {
+  .lib-tools {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .lib-search {
+    grid-column: 1 / -1;
+  }
+
+  .lib-sort {
+    justify-self: end;
+  }
 }
 
 @media (max-width: 759px) {
@@ -288,17 +454,26 @@
   .lib-preview .lib-grid {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+/* Phone: every control full width, 8 px apart. */
+@media (max-width: 599px) {
+  .lib-intro {
+    margin-bottom: var(--space-4);
+  }
+
+  .lib-intro h1 {
+    font-size: 28px;
+    line-height: 1.15;
+  }
 
   .lib-tools {
-    align-items: stretch;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-2);
   }
 
-  .lib-search {
-    flex-basis: 100%;
-  }
-
-  .lib-type {
-    flex: 1 1 auto;
+  .lib-sort {
+    justify-self: stretch;
   }
 
   .lib-type .segmented,
@@ -310,12 +485,12 @@
     flex: 1;
   }
 
-  .lib-sort {
-    flex: 1 1 auto;
-  }
-
   .lib-tools .lib-sort-select {
     width: 100%;
+  }
+
+  .lib-meta {
+    margin-top: var(--space-1);
   }
 }
 
@@ -324,7 +499,6 @@
   color: var(--text-muted);
   font-weight: 600;
 }
-
 
 /* A long host in a title wraps instead of being clipped (the address line stays one line). */
 .lib-cell .ccard-title {
