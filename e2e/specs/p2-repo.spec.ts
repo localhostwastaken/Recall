@@ -353,8 +353,10 @@ test.describe('@p2 repo', () => {
     await expect(rec.locator('section.repo-snapshot[data-phase="ok"]')).toHaveCount(1, { timeout: 120_000 });
     const bad = rec.locator('section.repo-snapshot[data-phase="mismatch"]');
     await expect(bad).toHaveCount(1, { timeout: 120_000 });
-    await expect(bad.locator('.badge')).toHaveText("Doesn't match");
-    await expect(bad.getByRole('alert')).toContainText("The downloaded code doesn't match this capture");
+    // Another account's record: a neutral note, never an alert.
+    await expect(bad.locator('.badge')).toHaveText('Not used');
+    await expect(bad).toContainText("A record from another account names this capture, but its code doesn't match");
+    await expect(bad.getByRole('alert')).toHaveCount(0);
     await expect(bad.getByRole('button', { name: 'Download code (.tar.gz)' })).toBeDisabled();
     await rec.close();
 
@@ -381,7 +383,7 @@ test.describe('@p2 repo', () => {
     const card = snapshotCards(page);
     await expect(card).toHaveCount(1, { timeout: 60_000 });
     await expect(card).toHaveAttribute('data-phase', 'mismatch', { timeout: 120_000 });
-    await expect(card.locator('.badge')).toHaveText("Doesn't match");
+    await expect(card.locator('.badge')).toHaveText('Not used');
     await expect(page.getByText('Hash-anchored')).toHaveCount(0);
     await expect(card.getByRole('button', { name: 'Download code (.tar.gz)' })).toBeDisabled();
     await page.close();

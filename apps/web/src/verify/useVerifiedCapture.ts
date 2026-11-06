@@ -21,6 +21,8 @@ export type CaptureRecord = {
   evidenceRef: Hex;
   /** Arkiv block at which the entity expires. */
   expiresAtBlock: bigint;
+  /** The account that created the entity (Arkiv's $creator, which never changes). */
+  creator: Address;
 };
 
 /** Live storage figures behind check E. `ttlSeconds` is null when the batch is expired or unknown. */
@@ -80,6 +82,7 @@ async function fetchCapture(cfg: NetConfig, entityKey: Hex): Promise<CaptureReco
     batchId: e.batchId.value,
     evidenceRef: e.evidenceRef.value,
     expiresAtBlock: e.$expiresAt,
+    creator: e.$creator as Address,
   };
 }
 

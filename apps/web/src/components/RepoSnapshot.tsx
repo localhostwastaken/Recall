@@ -16,6 +16,15 @@ const BADGE: Record<SnapshotState['phase'], { status: Status; label: string }> =
   unavailable: { status: 'unavailable', label: "Couldn't download" },
 };
 
+/**
+ * The badge of a snapshot card. A record by another account that doesn't match is neutral: anyone
+ * can write a record naming any capture, so it says nothing about this capture or its creator.
+ */
+export function snapshotBadge(item: Pick<RepoSnapshotItem, 'own' | 'state'>): { status: Status; label: string } {
+  if (!item.own && item.state.phase === 'mismatch') return { status: 'unavailable', label: 'Not used' };
+  return BADGE[item.state.phase];
+}
+
 /** A commit as its first 7 digits; the full id is in the title and the copy button. */
 export function CommitId({ sha }: { sha: string }) {
   const toast = useToast();
@@ -52,7 +61,7 @@ const mb = (n: number) => (n / 1024 / 1024).toFixed(1);
 
 function SnapshotCard({ branch, item, index }: { branch: GitHubBranch; item: RepoSnapshotItem; index: number }) {
   const { record, state } = item;
-  const badge = BADGE[state.phase];
+  const badge = snapshotBadge(item);
   const titleId = `repo-snapshot-title-${index}`;
   const size = state.phase === 'ok' ? state.computed.size : Number(record.size);
   return (
@@ -101,6 +110,11 @@ function SnapshotCard({ branch, item, index }: { branch: GitHubBranch; item: Rep
           <p className="repo-snapshot-ok">
             Checked in this browser: the code&apos;s git tree hash is the one GitHub reported for commit {branch.commitSha.slice(0, 7)}, and
             its record agrees.
+          </p>
+        ) : state.phase === 'mismatch' && !item.own ? (
+          <p className="muted">
+            A record from another account names this capture, but its code doesn&apos;t match (the {state.differs.join(', ')}{' '}
+            differ{state.differs.length === 1 ? 's' : ''}), so it isn&apos;t used. Anyone can write such a record.
           </p>
         ) : state.phase === 'mismatch' ? (
           <p className="repo-snapshot-bad" role="alert">

@@ -1,12 +1,12 @@
 import type { VerifiedFacts } from '@recall/evidence';
 import { arkivPublic, listAttachments, type ListedAttachment } from '@recall/net';
 import { useEffect, useMemo, useState } from 'react';
-import type { Hex } from 'viem';
+import type { Address, Hex } from 'viem';
 import { getNetConfig } from '../net';
 import { attachmentClaimsFit, computeCode, downloadCode, repoOf, snapshotDiffers, type CodeComputed, type GitHubBranch } from './git';
 
 /** At most this many tarballs are downloaded for one capture (anyone can write a record). */
-const MAX_CHECKED = 2;
+export const MAX_CHECKED = 5;
 
 export type SnapshotState =
   | { phase: 'downloading'; received: number; total: number | null }
@@ -16,7 +16,33 @@ export type SnapshotState =
   | { phase: 'mismatch'; differs: string[] }
   | { phase: 'unavailable'; reason: string };
 
-export type RepoSnapshotItem = { record: ListedAttachment; state: SnapshotState };
+/** `own`: the record was created by the account that created the capture. */
+export type RepoSnapshotItem = { record: ListedAttachment; own: boolean; state: SnapshotState };
+
+/**
+ * The records worth downloading for a capture: those that fit it, the capture creator's own first
+ * (so records by other accounts can't crowd them out), one per tarball, at most MAX_CHECKED.
+ */
+export function chooseSnapshots(
+  rows: ListedAttachment[],
+  parent: Parameters<typeof attachmentClaimsFit>[1],
+  creator: string | null | undefined,
+): { record: ListedAttachment; own: boolean }[] {
+  const mine = creator?.toLowerCase();
+  const own = (r: ListedAttachment) => mine !== undefined && r.creator?.toLowerCase() === mine;
+  const fit = rows.filter((r) => attachmentClaimsFit(r, parent));
+  const ordered = [...fit.filter(own), ...fit.filter((r) => !own(r))];
+  const seen = new Set<string>();
+  const out: { record: ListedAttachment; own: boolean }[] = [];
+  for (const record of ordered) {
+    const k = `${record.evidenceRef.toLowerCase()}:${record.sha256.toLowerCase()}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push({ record, own: own(record) });
+    if (out.length === MAX_CHECKED) break;
+  }
+  return out;
+}
 
 export type RepoSnapshots =
   | { phase: 'none' }
@@ -30,7 +56,11 @@ export type RepoSnapshots =
  * Each tarball is downloaded (capped), its tree recomputed here and compared with the notarized
  * commit and with its record; only then is it "ok".
  */
-export function useRepoSnapshot(captureKey: Hex | null | undefined, verifiedFacts: VerifiedFacts | null | undefined): RepoSnapshots {
+export function useRepoSnapshot(
+  captureKey: Hex | null | undefined,
+  verifiedFacts: VerifiedFacts | null | undefined,
+  creator?: Address | null,
+): RepoSnapshots {
   const branch = useMemo(() => repoOf(verifiedFacts), [verifiedFacts]);
   const [state, setState] = useState<RepoSnapshots>({ phase: 'none' });
   const branchKey = branch ? `${branch.owner}/${branch.repo}@${branch.branch}#${branch.commitSha}` : '';
@@ -54,17 +84,9 @@ export function useRepoSnapshot(captureKey: Hex | null | undefined, verifiedFact
         set({ phase: 'error', branch, reason: e instanceof Error ? e.message : String(e) });
         return;
       }
-      // Records that can't describe this capture are not downloaded; one per tarball.
-      const seen = new Set<string>();
-      const fit = rows.filter((r) => {
-        if (!attachmentClaimsFit(r, parent)) return false;
-        const k = `${r.evidenceRef.toLowerCase()}:${r.sha256.toLowerCase()}`;
-        if (seen.has(k)) return false;
-        seen.add(k);
-        return true;
-      });
-      const chosen = fit.slice(0, MAX_CHECKED);
-      let items: RepoSnapshotItem[] = chosen.map((record) => ({ record, state: { phase: 'downloading', received: 0, total: null } }));
+      // Records that can't describe this capture are not downloaded; the creator's own first.
+      const chosen = chooseSnapshots(rows, parent, creator);
+      let items: RepoSnapshotItem[] = chosen.map(({ record, own }) => ({ record, own, state: { phase: 'downloading', received: 0, total: null } }));
       const ignored = rows.length - chosen.length;
       const update = (i: number, s: SnapshotState) => {
         items = items.map((it, j) => (j === i ? { ...it, state: s } : it));
@@ -72,7 +94,7 @@ export function useRepoSnapshot(captureKey: Hex | null | undefined, verifiedFact
       };
       set({ phase: 'ready', branch, items, ignored });
       for (let i = 0; i < chosen.length; i++) {
-        const record = chosen[i]!;
+        const { record } = chosen[i]!;
         let bytes: Uint8Array;
         try {
           let last = 0;
@@ -113,7 +135,7 @@ export function useRepoSnapshot(captureKey: Hex | null | undefined, verifiedFact
     };
     // branchKey stands for `branch` (a new object per facts object).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [captureKey, branchKey]);
+  }, [captureKey, branchKey, creator]);
 
   return state;
 }

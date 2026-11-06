@@ -14,6 +14,8 @@ import {
 } from '../src/attachments/git';
 
 vi.mock('../src/wallet', () => ({ isUserRejection: () => false }));
+const { chooseSnapshots, MAX_CHECKED } = await import('../src/attachments/useRepoSnapshot');
+const { snapshotBadge } = await import('../src/components/RepoSnapshot');
 vi.mock('../src/settings', () => ({ getSettings: () => ({}), defaultSettings: () => ({}), isSharedOrigin: () => false }));
 const { ATTACHMENT_DEPTH, DEPTH, depthFor } = await import('../src/storage/buy');
 
@@ -78,6 +80,36 @@ describe('repository snapshot (R46)', () => {
     expect(attachmentClaimsFit({ ...record, urlHash: h('6') }, parent)).toBe(false);
     expect(attachmentClaimsFit({ ...record, size: 26n * 1024n * 1024n }, parent)).toBe(false);
     expect(attachmentClaimsFit({ ...record, evidenceRef: '0x12' as Hex }, parent)).toBe(false);
+  });
+
+  it("checks the capture creator's records first, so other accounts can't crowd them out", async () => {
+    const { record } = await setup();
+    const OWNER = '0x00000000000000000000000000000000000000Aa' as const;
+    const other = (n: number): ListedAttachment => ({
+      ...record,
+      entityKey: h(String(n)),
+      creator: '0x0000000000000000000000000000000000000bad',
+      evidenceRef: `0x${String(n).repeat(64)}` as Hex,
+    });
+    const mine = { ...record, entityKey: h('f'), creator: OWNER.toLowerCase() as `0x${string}`, evidenceRef: h('e') };
+    // Six records by another account come first in Arkiv's order, then the creator's own, plus a
+    // copy of the creator's record (same tarball) written earlier by someone else.
+    const copy = { ...mine, entityKey: h('d'), creator: other(1).creator };
+    const rows = [copy, other(2), other(3), other(4), other(5), other(6), other(7), mine];
+    const chosen = chooseSnapshots(rows, parent, OWNER);
+    expect(chosen).toHaveLength(MAX_CHECKED);
+    expect(chosen[0]).toEqual({ record: mine, own: true });
+    expect(chosen.slice(1).every((c) => !c.own)).toBe(true);
+    expect(chosen.some((c) => c.record === copy)).toBe(false); // the creator's copy wins the tarball
+    // Without a known creator nothing is "own", and Arkiv's order is kept.
+    expect(chooseSnapshots(rows, parent, null).map((c) => c.own)).toEqual([false, false, false, false, false]);
+  });
+
+  it("shows another account's failing record as a neutral note, the creator's as a failure", () => {
+    const mismatch = { phase: 'mismatch' as const, differs: ['code'] };
+    expect(snapshotBadge({ own: false, state: mismatch })).toEqual({ status: 'unavailable', label: 'Not used' });
+    expect(snapshotBadge({ own: true, state: mismatch }).status).toBe('fail');
+    expect(snapshotBadge({ own: false, state: { phase: 'checking' } }).status).toBe('pending');
   });
 
   it("refuses an extension summary that disagrees with the page's own facts", () => {

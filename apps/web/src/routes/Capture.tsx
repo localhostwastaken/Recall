@@ -38,7 +38,7 @@ export function Capture({ entityKey }: { entityKey: Hex }) {
   // R46: a capture of GitHub's branch API names a commit; its code snapshot is checked only
   // against facts whose checks passed and that agree with their record.
   const verified = v.facts && isVerifiedReport(v.report) && !v.report.mismatch?.length ? v.facts : null;
-  const snapshots = useRepoSnapshot(v.record?.entityKey ?? null, verified);
+  const snapshots = useRepoSnapshot(v.record?.entityKey ?? null, verified, v.record?.creator ?? null);
   const branch = repoOf(v.facts);
 
   const onFile = async (f: File) => {
