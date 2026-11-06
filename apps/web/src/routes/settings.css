@@ -161,7 +161,7 @@ textarea.input {
   padding: var(--space-2) var(--space-4);
   border-radius: var(--radius-2);
   font-weight: 600;
-  color: var(--accent);
+  color: var(--accent-text);
   cursor: pointer;
   list-style: none;
 }

@@ -128,12 +128,12 @@ progress {
 
 .btn-ghost {
   background: transparent;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .btn-ghost:hover:not(:disabled) {
   background: var(--accent-soft);
-  color: var(--accent-hover);
+  color: var(--text);
 }
 
 .btn-danger {
@@ -426,7 +426,7 @@ progress {
 
 .check-how summary {
   cursor: pointer;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .check-how-body {
@@ -458,7 +458,7 @@ progress {
   border: 0;
   border-radius: var(--radius-1);
   background: transparent;
-  color: var(--accent);
+  color: var(--accent-text);
   font: inherit;
   font-size: var(--text-sm);
   font-weight: 600;
