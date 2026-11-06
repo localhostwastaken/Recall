@@ -1,5 +1,5 @@
 import { checkAddress, checkUrl } from '@recall/net';
-import { CircleCheck, TriangleAlert } from 'lucide-react';
+import { ChevronDown, CircleCheck, TriangleAlert } from 'lucide-react';
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { hasBuiltInArkivKey } from '../defaults';
 import { getExtensionInfo } from '../ext';
@@ -203,6 +203,8 @@ export function Settings() {
   // Which invalid field to focus next: the add-witness form after a failed Add, else the settings fields.
   const [focusInvalid, setFocusInvalid] = useState<{ n: number; scope: string }>({ n: 0, scope: '' });
   const [witnessNote, setWitnessNote] = useState('');
+  // Everything is preconfigured, so the form stays folded away until someone asks for it.
+  const [advanced, setAdvanced] = useState(false);
   const form = useRef<HTMLDivElement>(null);
   const resetTrigger = useRef<HTMLButtonElement>(null);
   const defaults = defaultSettings();
@@ -299,7 +301,7 @@ export function Settings() {
   return (
     <>
       <h1 tabIndex={-1}>Settings</h1>
-      <p className="lede muted">Saved in this browser only.</p>
+      <p className="lede muted">Everything is preconfigured. You don&apos;t need to change anything here.</p>
 
       {shared ? (
         <Notice kind="warn" title="Shared address">
@@ -308,233 +310,243 @@ export function Settings() {
         </Notice>
       ) : null}
 
-      <div ref={form} className="stack settings-form">
-        <fieldset className="settings-fieldset" disabled={shared}>
-        <legend className="visually-hidden">Witnesses, endpoints and extension</legend>
-        <section className="settings-section" aria-labelledby="witnesses-heading">
-          <h2 id="witnesses-heading" className="section-title">
-            Trusted witnesses
-          </h2>
-          <Notice kind="warn" title="Only add witnesses you trust">
-            Check C passes only for witnesses in this list. Add a witness only if you trust whoever runs it.
-          </Notice>
-          {draft.witnesses.length === 0 ? (
-            <p className="muted">No trusted witnesses. Every signature shows as an unknown witness until you add one.</p>
-          ) : (
-            <ul className="witness-list" aria-label="Trusted witnesses">
-              {draft.witnesses.map((w) => (
-                <li key={w.address} className="witness-row">
-                  <div>
-                    <span className="witness-name">{label(w)}</span>
-                    <MonoValue value={w.address} />
-                  </div>
-                  <button type="button" className="btn btn-secondary btn-compact" onClick={() => removeWitness(w)}>
-                    Remove<span className="visually-hidden"> {label(w)}</span>
+      <details className="settings-advanced" open={advanced} onToggle={(e) => setAdvanced(e.currentTarget.open)}>
+        <summary className="settings-advanced-summary">
+          <span>Advanced: everything is preconfigured</span>
+          <ChevronDown size={20} strokeWidth={1.75} aria-hidden="true" />
+        </summary>
+        <div className="settings-advanced-body">
+          <p className="muted">Saved in this browser only.</p>
+
+          <div ref={form} className="stack settings-form">
+            <fieldset className="settings-fieldset" disabled={shared}>
+            <legend className="visually-hidden">Witnesses, endpoints and extension</legend>
+            <section className="settings-section" aria-labelledby="witnesses-heading">
+              <h2 id="witnesses-heading" className="section-title">
+                Trusted witnesses
+              </h2>
+              <Notice kind="warn" title="Only add witnesses you trust">
+                Check C passes only for witnesses in this list. Add a witness only if you trust whoever runs it.
+              </Notice>
+              {draft.witnesses.length === 0 ? (
+                <p className="muted">No trusted witnesses. Every signature shows as an unknown witness until you add one.</p>
+              ) : (
+                <ul className="witness-list" aria-label="Trusted witnesses">
+                  {draft.witnesses.map((w) => (
+                    <li key={w.address} className="witness-row">
+                      <div>
+                        <span className="witness-name">{label(w)}</span>
+                        <MonoValue value={w.address} />
+                      </div>
+                      <button type="button" className="btn btn-secondary btn-compact" onClick={() => removeWitness(w)}>
+                        Remove<span className="visually-hidden"> {label(w)}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="muted" role="status">
+                {witnessNote}
+              </p>
+              <div className="witness-form">
+                <Field
+                  label="Witness address (0x…)"
+                  value={newAddress}
+                  error={errors.newAddress}
+                  reserveError
+                  spellCheck={false}
+                  autoComplete="off"
+                  onChange={(e) => {
+                    setNewAddress(e.target.value);
+                    setErrors((x) => (x.newAddress ? { ...x, newAddress: undefined } : x));
+                  }}
+                  onBlur={() => {
+                    if (newAddress.trim()) setErrors((x) => ({ ...x, newAddress: checkAddress(newAddress).ok ? undefined : ADDRESS_ERROR }));
+                  }}
+                />
+                <Field
+                  label="Label"
+                  value={newLabel}
+                  error={errors.newLabel}
+                  reserveError
+                  maxLength={MAX_LABEL}
+                  autoComplete="off"
+                  helper="A name you will recognise, such as the operator. It is shown with “(added in this browser)”."
+                  onBlur={() => {
+                    if (newLabel.trim()) setErrors((x) => ({ ...x, newLabel: labelError(newLabel) }));
+                  }}
+                  onChange={(e) => {
+                    setNewLabel(e.target.value);
+                    setErrors((x) => (x.newLabel ? { ...x, newLabel: undefined } : x));
+                  }}
+                />
+                <div>
+                  <button type="button" className="btn btn-secondary" onClick={addWitness}>
+                    Add witness
                   </button>
-                </li>
-              ))}
-            </ul>
-          )}
-          <p className="muted" role="status">
-            {witnessNote}
-          </p>
-          <div className="witness-form">
-            <Field
-              label="Witness address (0x…)"
-              value={newAddress}
-              error={errors.newAddress}
-              reserveError
-              spellCheck={false}
-              autoComplete="off"
-              onChange={(e) => {
-                setNewAddress(e.target.value);
-                setErrors((x) => (x.newAddress ? { ...x, newAddress: undefined } : x));
-              }}
-              onBlur={() => {
-                if (newAddress.trim()) setErrors((x) => ({ ...x, newAddress: checkAddress(newAddress).ok ? undefined : ADDRESS_ERROR }));
-              }}
-            />
-            <Field
-              label="Label"
-              value={newLabel}
-              error={errors.newLabel}
-              reserveError
-              maxLength={MAX_LABEL}
-              autoComplete="off"
-              helper="A name you will recognise, such as the operator. It is shown with “(added in this browser)”."
-              onBlur={() => {
-                if (newLabel.trim()) setErrors((x) => ({ ...x, newLabel: labelError(newLabel) }));
-              }}
-              onChange={(e) => {
-                setNewLabel(e.target.value);
-                setErrors((x) => (x.newLabel ? { ...x, newLabel: undefined } : x));
-              }}
-            />
-            <div>
-              <button type="button" className="btn btn-secondary" onClick={addWitness}>
-                Add witness
-              </button>
-            </div>
+                </div>
+              </div>
+            </section>
+
+            <section className="settings-section" aria-labelledby="endpoints-heading">
+              <h2 id="endpoints-heading" className="section-title">
+                Endpoints
+              </h2>
+
+              <div className="settings-field">
+                <Field
+                  label="Arkiv RPC URL"
+                  type="url"
+                  inputMode="url"
+                  data-settings-field=""
+                  value={draft.arkivRpcUrl}
+                  error={errors.arkivRpcUrl}
+                  reserveError
+                  spellCheck={false}
+                  autoComplete="off"
+                  onChange={(e) => setField('arkivRpcUrl', e.target.value)}
+                  onBlur={(e) => validate('arkivRpcUrl', e.target.value)}
+                />
+                <div className="field-actions">
+                  <ResetButton what="Arkiv RPC URL" onClick={() => setField('arkivRpcUrl', defaults.arkivRpcUrl)} />
+                </div>
+              </div>
+
+              <div className="settings-field">
+                <SecretField
+                  label="Arkiv access key"
+                  value={draft.arkivAccessKey}
+                  error={errors.arkivAccessKey}
+                  shown={showKey}
+                  onToggle={() => setShowKey((v) => !v)}
+                  placeholder={builtInKey ? 'Built-in key (default)' : 'Optional'}
+                  helper={keyHelper(builtInKey, draft.arkivAccessKey.trim() !== '')}
+                  onChange={(v) => setField('arkivAccessKey', v)}
+                  onBlur={(v) => validate('arkivAccessKey', v)}
+                />
+                <div className="field-actions">
+                  <ResetButton what="Arkiv access key" onClick={() => setField('arkivAccessKey', '')} />
+                </div>
+              </div>
+
+              <div className="settings-field">
+                <Field
+                  label="Swarm upload gateway"
+                  type="url"
+                  inputMode="url"
+                  data-settings-field=""
+                  value={draft.uploadUrl}
+                  error={errors.uploadUrl}
+                  reserveError
+                  spellCheck={false}
+                  autoComplete="off"
+                  helper="Used to check that new storage is ready."
+                  onChange={(e) => setField('uploadUrl', e.target.value)}
+                  onBlur={(e) => validate('uploadUrl', e.target.value)}
+                />
+                <div className="field-actions">
+                  <ResetButton what="Swarm upload gateway" onClick={() => setField('uploadUrl', defaults.uploadUrl)} />
+                </div>
+              </div>
+
+              <div className="settings-field">
+                <TextAreaField
+                  label="Swarm download gateway"
+                  value={draft.downloadText}
+                  error={errors.downloadText}
+                  helper="Use a different gateway from upload, so checks don't rely on one node. One address per line, tried in order."
+                  onChange={(v) => setField('downloadText', v)}
+                  onBlur={() => validate('downloadText', draft.downloadText)}
+                />
+                <div className="field-actions">
+                  <ResetButton what="Swarm download gateway" onClick={() => setField('downloadText', defaults.downloadUrls.join('\n'))} />
+                </div>
+              </div>
+
+              <div className="settings-field">
+                <Field
+                  label="Gnosis RPC URL"
+                  type="url"
+                  inputMode="url"
+                  data-settings-field=""
+                  value={draft.gnosisRpcUrl}
+                  error={errors.gnosisRpcUrl}
+                  reserveError
+                  spellCheck={false}
+                  autoComplete="off"
+                  onChange={(e) => setField('gnosisRpcUrl', e.target.value)}
+                  onBlur={(e) => validate('gnosisRpcUrl', e.target.value)}
+                />
+                <div className="field-actions">
+                  <ResetButton what="Gnosis RPC URL" onClick={() => setField('gnosisRpcUrl', defaults.gnosisRpcUrl)} />
+                </div>
+              </div>
+            </section>
+
+            <section className="settings-section" aria-labelledby="extension-heading">
+              <h2 id="extension-heading" className="section-title">
+                Extension
+              </h2>
+              <div className="settings-field">
+                <Field
+                  label="Extension ID"
+                  data-settings-field=""
+                  value={draft.extensionId}
+                  error={errors.extensionId}
+                  reserveError
+                  spellCheck={false}
+                  autoComplete="off"
+                  helper={
+                    defaults.extensionId
+                      ? 'Advanced. The Recall extension you load from the release is found automatically. Change this only for a build you made yourself; its ID is on chrome://extensions.'
+                      : 'Find it on chrome://extensions.'
+                  }
+                  onChange={(e) => setField('extensionId', e.target.value)}
+                  onBlur={(e) => validate('extensionId', e.target.value)}
+                />
+                <div className="field-actions">
+                  <ResetButton what="Extension ID" onClick={() => setField('extensionId', defaults.extensionId)} />
+                </div>
+              </div>
+              <p className="muted" role="status" data-testid="extension-status">
+                {ext.kind === 'checking' ? 'Checking the extension…' : null}
+                {ext.kind === 'connected' ? (
+                  <span className="inline-ok">
+                    <CircleCheck size={16} strokeWidth={1.75} aria-hidden="true" />{' '}
+                    {ext.version ? `Connected · v${ext.version}` : 'Connected'}
+                  </span>
+                ) : null}
+                {ext.kind === 'not-connected' ? (
+                  <span className="inline-ok">
+                    <TriangleAlert size={16} strokeWidth={1.75} aria-hidden="true" /> Not connected. Check the ID matches chrome://extensions.
+                  </span>
+                ) : null}
+              </p>
+            </section>
+
+            </fieldset>
+
           </div>
-        </section>
 
-        <section className="settings-section" aria-labelledby="endpoints-heading">
-          <h2 id="endpoints-heading" className="section-title">
-            Endpoints
-          </h2>
+          {notStored ? (
+            <Notice kind="warn" title="Applied for this visit only">
+              This browser did not let Recall store the settings, so they are lost when you close this page.
+            </Notice>
+          ) : null}
 
-          <div className="settings-field">
-            <Field
-              label="Arkiv RPC URL"
-              type="url"
-              inputMode="url"
-              data-settings-field=""
-              value={draft.arkivRpcUrl}
-              error={errors.arkivRpcUrl}
-              reserveError
-              spellCheck={false}
-              autoComplete="off"
-              onChange={(e) => setField('arkivRpcUrl', e.target.value)}
-              onBlur={(e) => validate('arkivRpcUrl', e.target.value)}
-            />
-            <div className="field-actions">
-              <ResetButton what="Arkiv RPC URL" onClick={() => setField('arkivRpcUrl', defaults.arkivRpcUrl)} />
-            </div>
+          <div className="settings-actions">
+            <button type="button" className="btn btn-primary" disabled={shared} onClick={save}>
+              Save settings
+            </button>
+            <button type="button" className="btn btn-secondary" ref={resetTrigger} disabled={shared} onClick={() => setConfirmReset(true)}>
+              Reset all
+            </button>
+            <p className="settings-dirty muted" role="status">
+              {dirty ? 'You have changes that are not saved yet.' : ''}
+            </p>
           </div>
-
-          <div className="settings-field">
-            <SecretField
-              label="Arkiv access key"
-              value={draft.arkivAccessKey}
-              error={errors.arkivAccessKey}
-              shown={showKey}
-              onToggle={() => setShowKey((v) => !v)}
-              placeholder={builtInKey ? 'Built-in key (default)' : 'Optional'}
-              helper={keyHelper(builtInKey, draft.arkivAccessKey.trim() !== '')}
-              onChange={(v) => setField('arkivAccessKey', v)}
-              onBlur={(v) => validate('arkivAccessKey', v)}
-            />
-            <div className="field-actions">
-              <ResetButton what="Arkiv access key" onClick={() => setField('arkivAccessKey', '')} />
-            </div>
-          </div>
-
-          <div className="settings-field">
-            <Field
-              label="Swarm upload gateway"
-              type="url"
-              inputMode="url"
-              data-settings-field=""
-              value={draft.uploadUrl}
-              error={errors.uploadUrl}
-              reserveError
-              spellCheck={false}
-              autoComplete="off"
-              helper="Used to check that new storage is ready."
-              onChange={(e) => setField('uploadUrl', e.target.value)}
-              onBlur={(e) => validate('uploadUrl', e.target.value)}
-            />
-            <div className="field-actions">
-              <ResetButton what="Swarm upload gateway" onClick={() => setField('uploadUrl', defaults.uploadUrl)} />
-            </div>
-          </div>
-
-          <div className="settings-field">
-            <TextAreaField
-              label="Swarm download gateway"
-              value={draft.downloadText}
-              error={errors.downloadText}
-              helper="Use a different gateway from upload, so checks don't rely on one node. One address per line, tried in order."
-              onChange={(v) => setField('downloadText', v)}
-              onBlur={() => validate('downloadText', draft.downloadText)}
-            />
-            <div className="field-actions">
-              <ResetButton what="Swarm download gateway" onClick={() => setField('downloadText', defaults.downloadUrls.join('\n'))} />
-            </div>
-          </div>
-
-          <div className="settings-field">
-            <Field
-              label="Gnosis RPC URL"
-              type="url"
-              inputMode="url"
-              data-settings-field=""
-              value={draft.gnosisRpcUrl}
-              error={errors.gnosisRpcUrl}
-              reserveError
-              spellCheck={false}
-              autoComplete="off"
-              onChange={(e) => setField('gnosisRpcUrl', e.target.value)}
-              onBlur={(e) => validate('gnosisRpcUrl', e.target.value)}
-            />
-            <div className="field-actions">
-              <ResetButton what="Gnosis RPC URL" onClick={() => setField('gnosisRpcUrl', defaults.gnosisRpcUrl)} />
-            </div>
-          </div>
-        </section>
-
-        <section className="settings-section" aria-labelledby="extension-heading">
-          <h2 id="extension-heading" className="section-title">
-            Extension
-          </h2>
-          <div className="settings-field">
-            <Field
-              label="Extension ID"
-              data-settings-field=""
-              value={draft.extensionId}
-              error={errors.extensionId}
-              reserveError
-              spellCheck={false}
-              autoComplete="off"
-              helper={
-                defaults.extensionId
-                  ? 'Advanced. The Recall extension you load from the release is found automatically. Change this only for a build you made yourself; its ID is on chrome://extensions.'
-                  : 'Find it on chrome://extensions.'
-              }
-              onChange={(e) => setField('extensionId', e.target.value)}
-              onBlur={(e) => validate('extensionId', e.target.value)}
-            />
-            <div className="field-actions">
-              <ResetButton what="Extension ID" onClick={() => setField('extensionId', defaults.extensionId)} />
-            </div>
-          </div>
-          <p className="muted" role="status" data-testid="extension-status">
-            {ext.kind === 'checking' ? 'Checking the extension…' : null}
-            {ext.kind === 'connected' ? (
-              <span className="inline-ok">
-                <CircleCheck size={16} strokeWidth={1.75} aria-hidden="true" />{' '}
-                {ext.version ? `Connected · v${ext.version}` : 'Connected'}
-              </span>
-            ) : null}
-            {ext.kind === 'not-connected' ? (
-              <span className="inline-ok">
-                <TriangleAlert size={16} strokeWidth={1.75} aria-hidden="true" /> Not connected. Check the ID matches chrome://extensions.
-              </span>
-            ) : null}
-          </p>
-        </section>
-
-        </fieldset>
-
-      </div>
-
-      {notStored ? (
-        <Notice kind="warn" title="Applied for this visit only">
-          This browser did not let Recall store the settings, so they are lost when you close this page.
-        </Notice>
-      ) : null}
-
-      <div className="settings-actions">
-        <button type="button" className="btn btn-primary" disabled={shared} onClick={save}>
-          Save settings
-        </button>
-        <button type="button" className="btn btn-secondary" ref={resetTrigger} disabled={shared} onClick={() => setConfirmReset(true)}>
-          Reset all
-        </button>
-        <p className="settings-dirty muted" role="status">
-          {dirty ? 'You have changes that are not saved yet.' : ''}
-        </p>
-      </div>
+        </div>
+      </details>
 
       <ConfirmDialog
         open={confirmReset}

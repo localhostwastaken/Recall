@@ -143,3 +143,55 @@ textarea.input {
 .settings-section {
   padding-top: var(--space-6);
 }
+
+/* The one disclosure that holds the whole form: everything is preconfigured. */
+.settings-advanced {
+  max-width: var(--measure);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+}
+
+.settings-advanced-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: var(--control-h);
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-2);
+  font-weight: 600;
+  color: var(--accent);
+  cursor: pointer;
+  list-style: none;
+}
+
+.settings-advanced-summary::-webkit-details-marker {
+  display: none;
+}
+
+.settings-advanced-summary:hover {
+  background: var(--surface-sunken);
+}
+
+.settings-advanced-summary svg {
+  flex: none;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.settings-advanced[open] > .settings-advanced-summary svg {
+  transform: rotate(180deg);
+}
+
+.settings-advanced-body {
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-4) var(--space-5);
+  border-top: 1px solid var(--border);
+}
+
+/* Inside the card the first section needs no rule of its own. */
+.settings-advanced-body .settings-fieldset > .settings-section:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
