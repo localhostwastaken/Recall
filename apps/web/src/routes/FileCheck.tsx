@@ -32,12 +32,12 @@ export function FileCheck() {
   const facts = report?.facts ?? null;
   return (
     <>
-      <h1 tabIndex={-1}>{captureTitle(facts)}</h1>
+      <h1 tabIndex={-1}>{captureTitle(facts, report?.C.status)}</h1>
       <p className="muted">
         File: <span className="mono">{dropped.name}</span>
       </p>
       <Notice kind="info" title="Checked offline. A–C ran in your browser; storage (E) was not checked." />
-      {facts ? <ExhibitCard facts={facts} /> : null}
+      {facts ? <ExhibitCard facts={facts} unverified={report?.C.status !== 'pass'} /> : null}
       <VerdictLine verdict={verdictOf(report, file?.bytes)} />
       <WhyWitness />
       <CheckPanel

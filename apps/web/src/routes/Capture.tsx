@@ -113,13 +113,15 @@ export function Capture({ entityKey }: { entityKey: Hex }) {
 
   return (
     <>
-      <h1 tabIndex={-1}>{captureTitle(v.facts)}</h1>
+      <h1 tabIndex={-1}>{captureTitle(v.facts, v.report?.C.status)}</h1>
       {v.phase === 'loading' ? (
         <p className="muted" role="status">
           Loading the record from Arkiv…
         </p>
       ) : null}
-      {v.facts ? <ExhibitCard facts={v.facts} evidenceRef={v.record?.evidenceRef} /> : null}
+      {v.facts ? (
+        <ExhibitCard facts={v.facts} evidenceRef={v.record?.evidenceRef} unverified={v.report?.C.status !== 'pass'} />
+      ) : null}
       <VerdictLine verdict={verdict} />
       {v.report?.mismatch?.length ? (
         <Notice kind="error" title="Record does not match its evidence">

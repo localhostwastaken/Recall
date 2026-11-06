@@ -239,7 +239,15 @@ test('@p3 verify an impossible signed time cannot crash the page or pass', async
     await page.goto(`${APP}/#/`);
     await fileInput(page, 'Evidence file').setInputFiles(file('evidence.json', encodeEvidence(signed.evidence), 'application/json'));
     await expect(page).toHaveURL(/#\/file$/);
-    await expect(page.getByRole('heading', { level: 1 }), who).toContainText(NOTICE_HOST);
+    // An unpinned witness's capture is labelled as unverified; its facts stay visible as its claim.
+    if (kind === 'warn') {
+      await expect(page.getByRole('heading', { level: 1 }), who).toHaveText('Unverified capture');
+      await expect(page.locator('.exhibit-title'), who).toHaveText('Unverified: what a witness you have not pinned says it saw');
+    } else {
+      await expect(page.getByRole('heading', { level: 1 }), who).toContainText(NOTICE_HOST);
+      await expect(page.locator('.exhibit-title'), who).toHaveText('What the witness saw');
+    }
+    await expect(page.locator('.exhibit'), who).toContainText(NOTICE_HOST);
     await expect(page.locator('.exhibit'), who).toContainText('Invalid time');
     await expect(page.locator('time[datetime]'), who).toHaveCount(0);
     await expect(page.getByText(/Couldn't display/), who).toHaveCount(0);
@@ -293,6 +301,10 @@ test('@p3 verify unknown witness shows C warning', async ({ page }) => {
   await expect(status(page, 'B')).toHaveAttribute('data-status', 'pass');
   await expect(verdict(page)).toHaveAttribute('data-verdict', 'warn');
   await expect(verdict(page)).toHaveText("Valid signature, but from a witness you haven't trusted.");
+  // The detail page does not title it as a capture of the host; the facts stay, labelled.
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Unverified capture');
+  await expect(page.locator('.exhibit-title')).toHaveText('Unverified: what a witness you have not pinned says it saw');
+  await expect(page.locator('.exhibit')).toContainText(NOTICE_HOST);
 });
 
 test('@p3 verify gateway serving altered bytes shows A unavailable, never verified', async ({ page }) => {

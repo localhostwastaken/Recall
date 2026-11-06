@@ -7,9 +7,18 @@ import { witnessLabel } from '../witness';
 /**
  * What the witness saw, as a hairline-framed list of labelled facts. Every value comes from
  * `facts` (the verified evidence); `evidenceRef` is the Swarm reference the evidence was
- * downloaded from, which was checked against the downloaded bytes.
+ * downloaded from, which was checked against the downloaded bytes. `unverified`: the witness is
+ * not one you trust (check C did not pass), so the facts are shown as its claim.
  */
-export function ExhibitCard({ facts, evidenceRef }: { facts: VerifiedFacts; evidenceRef?: string }) {
+export function ExhibitCard({
+  facts,
+  evidenceRef,
+  unverified = false,
+}: {
+  facts: VerifiedFacts;
+  evidenceRef?: string;
+  unverified?: boolean;
+}) {
   const label = witnessLabel(facts.witness);
   // The signed time comes from evidence anyone can make: an impossible one must not crash the page.
   const when = safeDate(facts.signedAt);
@@ -22,7 +31,7 @@ export function ExhibitCard({ facts, evidenceRef }: { facts: VerifiedFacts; evid
   return (
     <section className="exhibit" aria-labelledby="exhibit-title">
       <h2 className="exhibit-title" id="exhibit-title">
-        What the witness saw
+        {unverified ? 'Unverified: what a witness you have not pinned says it saw' : 'What the witness saw'}
       </h2>
       <dl className="exhibit-list">
         {row('Site', <span className="mono">{facts.serverName}</span>)}
