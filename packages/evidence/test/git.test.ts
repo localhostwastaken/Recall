@@ -144,6 +144,88 @@ describe('gitTreeFromTarGz', () => {
     });
   });
 
+  // Guards against parser differentials: whatever this function hashes must be exactly what a
+  // system tar/gzip extracts from the same bytes, so anything two readers could read differently
+  // is refused.
+  describe('refuses what another tar or gzip reader could read differently', () => {
+    const ok = [dir('x/'), file('x/a', '1')];
+    const throwsOn = (bytes: Uint8Array, err: RegExp) => expect(() => gitTreeFromTarGz(bytes)).toThrow(err);
+    const concat = (...parts: Uint8Array[]) => {
+      const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+      let at = 0;
+      for (const p of parts) (out.set(p, at), (at += p.length));
+      return out;
+    };
+
+    it('(1) a pax global header with any key but comment', () => {
+      const g = (rec: Record<string, string>) => ({ name: 'pax_global_header', type: 'g', data: paxData(rec) });
+      expect(gitTreeFromTarGz(tgz([g({ comment: 'abc' }), ...ok])).files).toBe(1);
+      throwsOn(tgz([g({ comment: 'abc', path: 'x/evil' }), ...ok]), /global/);
+      throwsOn(tgz([g({ mtime: '1' }), ...ok]), /global/);
+    });
+
+    it('(2) stacked or conflicting extended headers', () => {
+      const x = (rec: Record<string, string>) => ({ name: 'P', type: 'x', data: paxData(rec) });
+      const L = (v: string) => ({ name: '././@LongLink', type: 'L', data: v + '\0', magic: 'gnu' as const });
+      const K = (v: string) => ({ name: '././@LongLink', type: 'K', data: v + '\0', magic: 'gnu' as const });
+      throwsOn(tgz([dir('x/'), x({ path: 'x/a' }), x({ path: 'x/b' }), file('x/c', '1')]), /extended header/);
+      throwsOn(tgz([dir('x/'), L('x/a'), L('x/b'), file('x/c', '1')]), /long name/);
+      throwsOn(tgz([dir('x/'), file('x/t', '1'), K('t'), K('x/t'), { name: 'x/l', type: '2', linkname: 't' }]), /long (link|name)/);
+      throwsOn(tgz([dir('x/'), x({ path: 'x/a' }), L('x/b'), file('x/c', '1')]), /both/);
+      throwsOn(
+        tgz([dir('x/'), file('x/t', '1'), x({ linkpath: 't' }), K('x/t'), { name: 'x/l', type: '2', linkname: 't' }]),
+        /both/,
+      );
+    });
+
+    it('(3) anything but two or more zero blocks closing the archive', () => {
+      throwsOn(tgz(ok, new Uint8Array(512)), /zero blocks/); // one zero block only
+      throwsOn(tgz(ok, new Uint8Array(0)), /truncated|zero blocks/);
+      // a lone zero block, then an entry other readers would extract
+      const hidden = tar([file('x/hidden', 'boo')]);
+      throwsOn(gzipSync(concat(tar(ok, new Uint8Array(512)), hidden)), /after the end|zero blocks/);
+      const tail = new Uint8Array(10240);
+      tail[5000] = 1;
+      throwsOn(tgz(ok, tail), /after the end/);
+      expect(gitTreeFromTarGz(tgz(ok, new Uint8Array(10240))).files).toBe(1); // record padding is fine
+    });
+
+    it('(4) a multi-member gzip, or bytes after the first member', () => {
+      const raw = tar(ok);
+      throwsOn(concat(gzipSync(raw.subarray(0, 1024)), gzipSync(raw.subarray(1024))), /member/);
+      throwsOn(concat(gzipSync(raw), gzipSync(new Uint8Array(0))), /member/);
+      const gz = gzipSync(raw);
+      for (const extra of [[1], [1, 2, 3], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], Array.from('trailing garbage', (c) => c.charCodeAt(0))]) {
+        throwsOn(concat(gz, new Uint8Array(extra)), /gzip/);
+      }
+      const badCrc = gz.slice();
+      badCrc[badCrc.length - 8]! ^= 1;
+      throwsOn(badCrc, /gzip/);
+      const badFlags = gz.slice();
+      badFlags[3]! |= 0x20;
+      throwsOn(badFlags, /gzip/);
+    });
+
+    it('(5) pax keys outside the allowlist, a NUL in a path, a link path on a non-link, a repeated key', () => {
+      const x = (rec: Record<string, string>) => ({ name: 'P', type: 'x', data: paxData(rec) });
+      for (const k of ['GNU.sparse.size', 'GNU.sparse.map', 'SCHILY.xattr.user.a', 'LIBARCHIVE.xattr.a', 'hdrcharset', 'charset', 'realtime.x']) {
+        throwsOn(tgz([dir('x/'), x({ [k]: '1' }), file('x/a', '1')]), /pax key/);
+      }
+      const fine = { mtime: '1.5', atime: '1', ctime: '1', uid: '0', gid: '0', uname: 'root', gname: 'root', comment: 'c' };
+      expect(gitTreeFromTarGz(tgz([dir('x/'), x(fine), file('x/a', '1')])).files).toBe(1);
+      throwsOn(tgz([dir('x/'), x({ path: 'x/a\0b' }), file('x/a', '1')]), /NUL/);
+      throwsOn(tgz([dir('x/'), x({ linkpath: 'x/b' }), file('x/a', '1')]), /link/);
+      throwsOn(tgz([dir('x/'), { name: 'P', type: 'x', data: paxData({ path: 'x/a' }) + paxData({ path: 'x/b' }) }, file('x/c', '1')]), /twice/);
+    });
+
+    it('also: an unknown header format, a stray link name, data on a directory or symlink', () => {
+      throwsOn(tgz([dir('x/'), { ...file('x/a', '1'), magic: 'none' }]), /format/);
+      throwsOn(tgz([dir('x/'), { ...file('x/a', '1'), linkname: 'x/b' }]), /link/);
+      throwsOn(tgz([dir('x/'), file('x/a', '1'), { name: 'x/d/', type: '5', data: 'zz' }]), /data/);
+      throwsOn(tgz([dir('x/'), file('x/a', '1'), { name: 'x/l', type: '2', linkname: 'a', data: 'zz' }]), /data/);
+    });
+  });
+
   it.skipIf(!process.env.RECALL_LIVE_GIT)(
     'live: the codeload tarball of a real bitchat commit hashes to the tree GitHub reports',
     async () => {

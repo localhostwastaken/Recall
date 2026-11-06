@@ -7,8 +7,8 @@ export type TarEntry = {
   mode?: number;
   data?: Uint8Array | string;
   linkname?: string;
-  /** ustar (default), or GNU magic, whose prefix field is not a path prefix. */
-  magic?: 'ustar' | 'gnu';
+  /** ustar (default), GNU magic (whose prefix field is not a path prefix), or none (old v7 tar). */
+  magic?: 'ustar' | 'gnu' | 'none';
   /** Overrides the stored checksum (to test a corrupt header). */
   badChecksum?: boolean;
 };
@@ -37,7 +37,7 @@ export function header(e: TarEntry, size: number): Uint8Array {
   h[156] = (e.type ?? '0').charCodeAt(0);
   if (e.linkname) put(h, 157, 100, e.linkname);
   if (e.magic === 'gnu') put(h, 257, 8, 'ustar  \0');
-  else put(h, 257, 8, 'ustar\x0000');
+  else if (e.magic !== 'none') put(h, 257, 8, 'ustar\x0000');
   let sum = 0;
   for (const b of h) sum += b;
   if (e.badChecksum) sum += 1;
@@ -58,7 +58,8 @@ export function paxData(records: Record<string, string>): string {
   return out;
 }
 
-export function tar(entries: TarEntry[]): Uint8Array {
+/** A tar archive; `end` replaces the two zero blocks that close it. */
+export function tar(entries: TarEntry[], end: Uint8Array = new Uint8Array(1024)): Uint8Array {
   const parts: Uint8Array[] = [];
   for (const e of entries) {
     const data = typeof e.data === 'string' ? enc.encode(e.data) : (e.data ?? new Uint8Array(0));
@@ -69,7 +70,7 @@ export function tar(entries: TarEntry[]): Uint8Array {
       parts.push(padded);
     }
   }
-  parts.push(new Uint8Array(1024));
+  parts.push(end);
   const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
   let at = 0;
   for (const p of parts) {
@@ -79,4 +80,4 @@ export function tar(entries: TarEntry[]): Uint8Array {
   return out;
 }
 
-export const tgz = (entries: TarEntry[]): Uint8Array => gzipSync(tar(entries));
+export const tgz = (entries: TarEntry[], end?: Uint8Array): Uint8Array => gzipSync(tar(entries, end));
