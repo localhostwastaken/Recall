@@ -248,15 +248,17 @@ test.describe('@p1 capture', () => {
       const button = popup.getByRole('button', { name: 'Capture this page' });
       await expect(button).toBeEnabled();
       await button.click();
-      // A pinned witness adds the same-page check to the steps; with no storage there is no
-      // upload, so no approval tab step either.
+      // A pinned witness adds the same-page check to the steps. Storage is chosen afterwards in
+      // the Recall tab (R44), so there is no upload step.
       await expect(popup.getByText('Step 2 of 4')).toBeVisible({ timeout: 30_000 });
-      await expect(popup.getByText('Proving the page with the witness')).toBeVisible();
+      await expect(popup.getByText('Recording the page (~30 s)')).toBeVisible();
       await expect(popup.getByText('Looking for earlier captures')).toBeVisible();
-      await expect(popup.getByText('Opening the approval tab')).toHaveCount(0);
+      await expect(popup.getByText(/Upload/)).toHaveCount(0);
       await expect(popup.getByText(/elapsed · usually 15–30 s/)).toBeVisible();
 
       await expect(popup.getByRole('heading', { name: 'Checks passed' })).toBeVisible({ timeout: 120_000 });
+      // Kept, not uploaded: the person continues in the Recall tab.
+      await expect(popup.getByRole('heading', { name: 'Continue in the Recall tab' })).toBeVisible();
       await expect(popup.getByText(`The witness saw these exact bytes from ${NOTICE_HOST}`)).toBeVisible();
       // Passed checks sit behind one summary line; "Show details" opens the rows.
       await popup.getByRole('button', { name: 'Show details' }).click();

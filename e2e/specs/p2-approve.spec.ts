@@ -24,10 +24,11 @@ import {
 
 // The whole publish flow with the real dev extension, the devnet witness, local Bee and the
 // local Arkiv node; MetaMask is the only stand-in (a mock wallet with a real, funded key):
-// capture -> evidence on Swarm (or, for unchanged bytes, a confirmation with the evidence
-// inline) -> the extension opens the approval tab -> MetaMask writes the Arkiv record -> the
-// extension marks it published. Plus the same-page rules (only a VERIFIED identical capture
-// suppresses an upload) and witness discovery from an Arkiv profile.
+// capture (nothing uploaded yet, R44) -> the extension opens the publish tab -> Upload and
+// publish (the extension uploads with a pool batch; or, for unchanged bytes, a confirmation with
+// the evidence inline and no upload) -> MetaMask writes the Arkiv record -> the extension marks
+// it published. Plus the same-page rules (only a VERIFIED identical capture makes a
+// confirmation) and witness discovery from an Arkiv profile.
 //
 // Each run captures its own page address (?run=<random>; the fixture ignores the query), so
 // records left on the devnet by earlier runs never change what this run sees.
@@ -48,9 +49,9 @@ type Facts = {
   witness: Address;
 };
 type Upload =
-  | { status: 'uploaded'; captureId: string; evidenceRef: Hex; batchId: Hex }
+  | { status: 'pending'; captureId: string }
   | { status: 'confirmation'; captureId: string; captureKey: Hex; since: string }
-  | { status: 'no_storage' | 'skipped' | 'failed'; reason?: string; error?: string };
+  | { status: 'skipped' | 'failed'; reason?: string; error?: string };
 type CaptureResult =
   | { evidence: EvidenceFile; checks: Record<'A' | 'B' | 'C', { status: string }> & { facts?: Facts }; upload?: Upload }
   | { error: string };
@@ -168,7 +169,7 @@ async function capture(page: string): Promise<Exclude<CaptureResult, { error: st
   return r;
 }
 
-/** The approval tab the extension opened for `captureId`, with the mock wallet installed. */
+/** The publish tab the extension opened for `captureId`, with the mock wallet installed. */
 async function approvalTab(captureId: string, chainId = 1337): Promise<{ page: Page; wallet: MockWallet }> {
   let page: Page | undefined;
   await expect
@@ -188,24 +189,29 @@ async function approvalTab(captureId: string, chainId = 1337): Promise<{ page: P
   return { page: page!, wallet };
 }
 
-/** Connect, switch if needed, publish; returns the new record's key. */
-async function publish(page: Page, kind: 'capture' | 'confirmation'): Promise<Hex> {
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText(
-    kind === 'capture' ? 'Publish this capture' : 'Publish this confirmation',
-  );
+/** The one primary action of the publish tab, per path (R44). */
+const ACTION = {
+  upload: 'Upload and publish',
+  uploaded: 'Publish record',
+  confirmation: "Confirm it's still the same",
+} as const;
+
+/** The primary action (connect, switch if needed, then upload and/or publish); returns the new record's key. */
+async function publish(page: Page, path: keyof typeof ACTION): Promise<Hex> {
+  if (path === 'confirmation') await expect(page.getByRole('heading', { level: 1 })).toHaveText(/^Unchanged since /);
+  else await expect(page.getByRole('heading', { level: 1 })).toHaveText('Save this capture');
   // The page ran the checks itself before offering to publish.
   for (const k of ['A', 'B', 'C']) {
     await expect(page.locator(`.approve-check-list [data-check="${k}"] .badge`)).toHaveAttribute('data-status', 'pass');
   }
-  await page.locator('main').getByRole('button', { name: 'Connect MetaMask' }).click();
-  await page.getByRole('button', { name: kind === 'capture' ? 'Publish record' : 'Publish confirmation' }).click();
+  await page.getByRole('button', { name: ACTION[path] }).click();
   return published(page);
 }
 
 async function published(page: Page): Promise<Hex> {
-  await expect(page.getByRole('heading', { name: 'Published', exact: true })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByRole('heading', { name: 'Published', exact: true })).toBeVisible({ timeout: 200_000 });
   await expect(page.getByText(/Record on Arkiv until /)).toBeVisible();
-  await expect(page.getByText('Step 3 of 3')).toBeVisible();
+  await expect(page.getByText(/^Step (\d+) of \1$/)).toBeVisible();
   const key = (await page.locator('.approve-record .mono-value').first().getAttribute('title')) as Hex;
   expect(key).toMatch(/^0x[0-9a-f]{64}$/i);
   return key;
@@ -305,20 +311,23 @@ test.describe('@p2 approve', () => {
     const before = await unused();
     const r = await capture(PAGE);
     expect([r.checks.A.status, r.checks.B.status, r.checks.C.status]).toEqual(['pass', 'pass', 'pass']);
-    expect(r.upload?.status, JSON.stringify(r.upload)).toBe('uploaded');
-    const up = r.upload as Extract<Upload, { status: 'uploaded' }>;
-    expect(await unused()).toBe(before - 1);
+    expect(r.upload?.status, JSON.stringify(r.upload)).toBe('pending');
+    const up = r.upload as Extract<Upload, { status: 'pending' }>;
+    // Capture first (R44): nothing is uploaded before the person chooses in the publish tab.
+    expect(await unused()).toBe(before);
+    expect(await pendingOf(up.captureId)).toMatchObject({ kind: 'capture', upload: { status: 'none' }, storage: 'ok' });
     v1Body = r.checks.facts!.bodySha256;
 
     const { page } = await approvalTab(up.captureId);
     // Design brief 7: the page fits 375 px without horizontal scroll (SHOTS=<dir> saves screenshots).
     await page.setViewportSize({ width: 375, height: 812 });
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Publish this capture');
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Save this capture');
     await expect(page.locator('.approve-check-list [data-check="C"] .badge')).toHaveAttribute('data-status', 'pass');
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
     if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/approve-375.png`, fullPage: true });
     await page.setViewportSize({ width: 1280, height: 900 });
-    const entityKey = await publish(page, 'capture');
+    const entityKey = await publish(page, 'upload');
+    expect(await unused()).toBe(before - 1);
     if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/approve-published.png`, fullPage: true });
     await expect(page.getByRole('link', { name: 'View timeline' })).toHaveAttribute('href', `#/u/${hashOf(PAGE)}`);
     await expect(page.getByRole('link', { name: 'View this capture' })).toHaveAttribute('href', `#/c/${entityKey}`);
@@ -329,8 +338,8 @@ test.describe('@p2 approve', () => {
     expect(row?.kind).toBe('capture');
     const capRow = row as Extract<Listed, { kind: 'capture' }>;
     expect(capRow.owner.toLowerCase()).toBe(walletAddress.toLowerCase());
-    expect(capRow.evidenceRef).toBe(up.evidenceRef);
-    expect(capRow.batchId).toBe(up.batchId);
+    // The batch the extension stamped with, now used.
+    expect((await pool()).find((b) => b.batchId.toLowerCase() === capRow.batchId.toLowerCase())?.used).toBe(true);
     expect(capRow.canonicalUrl).toBe(canonicalUrl(PAGE));
     expect(capRow.httpStatus).toBe(200);
     expect(capRow.expiresAtBlock).toBeGreaterThan(await pub.getBlockNumber());
@@ -370,17 +379,16 @@ test.describe('@p2 approve', () => {
     expect(pending.kind).toBe('confirmation');
     expect(pending.evidenceRef).toBeUndefined();
 
-    // The popup says so and offers the confirmation.
+    // The popup says so and sends the person to the Recall tab.
     const { tab, popup } = await openPopup(PAGE);
     try {
-      await expect(popup.getByRole('heading', { name: /^Unchanged since / })).toBeVisible();
+      await expect(popup.getByRole('heading', { name: 'Continue in the Recall tab' })).toBeVisible();
       if (process.env.SHOTS) {
         await popup.setViewportSize({ width: 360, height: 560 });
         await popup.screenshot({ path: `${process.env.SHOTS}/popup-unchanged.png` });
       }
-      await expect(popup.getByText(/No new upload is needed\./)).toBeVisible();
-      await expect(popup.getByRole('button', { name: 'Publish confirmation' })).toBeVisible();
-      await expect(popup.getByRole('button', { name: 'Keep earlier capture alive' })).toBeVisible();
+      await expect(popup.getByText(/^Unchanged since .*no upload is needed\.$/)).toBeVisible();
+      await expect(popup.getByRole('button', { name: 'Open Recall tab' })).toBeVisible();
     } finally {
       await popup.close();
       await tab.close();
@@ -388,7 +396,15 @@ test.describe('@p2 approve', () => {
 
     const { page } = await approvalTab(c.captureId);
     await expect(page.getByText(/^Unchanged since .*nothing new is uploaded\.$/)).toBeVisible();
+    // Path (a): confirm (primary), keep the earlier capture alive, or discard.
+    await expect(page.getByRole('link', { name: 'Keep the earlier capture alive…' })).toHaveAttribute(
+      'href',
+      `#/c/${firstCapture.entityKey}`,
+    );
+    await expect(page.getByRole('button', { name: 'Discard capture' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Upload and publish' })).toHaveCount(0);
     const entityKey = await publish(page, 'confirmation');
+    expect(await pool()).toEqual(poolBefore);
     await expect(page.getByRole('link', { name: 'View the earlier capture' })).toHaveAttribute(
       'href',
       `#/c/${firstCapture.entityKey}`,
@@ -411,12 +427,11 @@ test.describe('@p2 approve', () => {
     const c = r.upload as Extract<Upload, { status: 'confirmation' }>;
     expect(c.status).toBe('confirmation');
     const { page } = await approvalTab(c.captureId);
-    await page.locator('main').getByRole('button', { name: 'Connect MetaMask' }).click();
-    await expect(page.getByRole('button', { name: 'Publish confirmation' })).toBeEnabled();
+    await expect(page.getByRole('button', { name: ACTION.confirmation })).toBeEnabled({ timeout: 30_000 });
     await page.evaluate(() => {
       (window as unknown as { __rejectNext: unknown }).__rejectNext = 'eth_sendTransaction';
     });
-    await page.getByRole('button', { name: 'Publish confirmation' }).click();
+    await page.getByRole('button', { name: ACTION.confirmation }).click();
     await expect(page.getByRole('heading', { name: 'Not published' })).toBeVisible({ timeout: 30_000 });
     if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/approve-rejected.png`, fullPage: true });
     await expect(
@@ -424,7 +439,7 @@ test.describe('@p2 approve', () => {
     ).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Published', exact: true })).toHaveCount(0);
     // One way forward: the notice's Try again (the action bar steps aside).
-    await expect(page.getByRole('button', { name: 'Publish confirmation' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: ACTION.confirmation })).toHaveCount(0);
     // Still pending in the extension.
     expect((await pendingOf(c.captureId)).captureId).toBe(c.captureId);
 
@@ -441,12 +456,11 @@ test.describe('@p2 approve', () => {
     expect(c.status).toBe('confirmation');
     const before = (await rows(PAGE)).length;
     const { page } = await approvalTab(c.captureId);
-    await page.locator('main').getByRole('button', { name: 'Connect MetaMask' }).click();
-    await expect(page.getByRole('button', { name: 'Publish confirmation' })).toBeEnabled();
+    await expect(page.getByRole('button', { name: ACTION.confirmation })).toBeEnabled({ timeout: 30_000 });
     await page.evaluate(() => {
       (window as unknown as { __rejectNext: unknown }).__rejectNext = 'eth_sendTransaction';
     });
-    await page.getByRole('button', { name: 'Publish confirmation' }).click();
+    await page.getByRole('button', { name: ACTION.confirmation }).click();
     await expect(page.getByRole('heading', { name: 'Not published' })).toBeVisible({ timeout: 30_000 });
 
     // The confirm dialog: Esc closes it and focus goes back to the button; nothing changes.
@@ -483,7 +497,7 @@ test.describe('@p2 approve', () => {
     const arkivOrigin = new URL(LOCAL.arkiv.rpcUrl).origin;
     await page.route((u) => u.origin === arkivOrigin, (route) => route.abort());
     await page.reload();
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Publish this confirmation');
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Confirm this capture');
     await expect(page.getByText("Couldn't reach Arkiv or Swarm")).toBeVisible({ timeout: 30_000 });
     await expect(page.getByRole('button', { name: 'Try again' })).toBeVisible();
     await page.getByRole('button', { name: 'Discard capture' }).click();
@@ -504,11 +518,12 @@ test.describe('@p2 approve', () => {
     expect(c.status).toBe('confirmation');
     const { page, wallet } = await approvalTab(c.captureId, 100);
     expect(wallet.chainId()).toBe(100);
-    await page.locator('main').getByRole('button', { name: 'Connect MetaMask' }).click();
+    // Connected from the header: the page names the wrong network before anything is sent.
+    await page.locator('header').getByRole('button', { name: 'Connect MetaMask' }).click();
     await expect(page.getByText('MetaMask is on Gnosis. Records are published on Arkiv local.')).toBeVisible();
     if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/approve-wrong-network.png`, fullPage: true });
-    await page.getByRole('button', { name: 'Switch to Arkiv local' }).click();
-    await page.getByRole('button', { name: 'Publish confirmation' }).click();
+    // The one action switches to Arkiv, then publishes.
+    await page.getByRole('button', { name: ACTION.confirmation }).click();
     await published(page);
     expect(wallet.chainId()).toBe(1337);
     await page.close();
@@ -518,9 +533,23 @@ test.describe('@p2 approve', () => {
     await setVersion(2);
     const before = await unused();
     const r = await capture(PAGE);
-    expect(r.upload?.status, JSON.stringify(r.upload)).toBe('uploaded');
+    expect(r.upload?.status, JSON.stringify(r.upload)).toBe('pending');
+    expect(await unused()).toBe(before);
+    const kept = r.upload as Extract<Upload, { status: 'pending' }>;
+    // The publish tab's upload request (recall.uploadPending) runs it in the extension; asked
+    // twice, it uploads once.
+    expect(await api({ type: 'recall.uploadPending', captureId: kept.captureId, mode: 'stamped' })).toEqual({ status: 'uploading' });
+    expect((await api<{ status?: string }>({ type: 'recall.uploadPending', captureId: kept.captureId, mode: 'stamped' })).status).toMatch(
+      /^(uploading|uploaded)$/,
+    );
+    let state: { status?: string; evidenceRef?: Hex; batchId?: Hex } = {};
+    await expect
+      .poll(async () => (state = ((await pendingOf(kept.captureId)).upload ?? {}) as typeof state).status, { timeout: 150_000 })
+      .toBe('uploaded');
     expect(await unused()).toBe(before - 1);
-    const up = r.upload as Extract<Upload, { status: 'uploaded' }>;
+    expect(await api({ type: 'recall.uploadPending', captureId: kept.captureId, mode: 'stamped' })).toMatchObject({ status: 'uploaded' });
+    expect(await unused()).toBe(before - 1);
+    const up = { captureId: kept.captureId, evidenceRef: state.evidenceRef!, batchId: state.batchId! };
     const { page } = await approvalTab(up.captureId);
     // Duplicate guard: as if an earlier attempt's transaction landed after the page gave up,
     // this account already wrote the record. Publishing reuses it instead of writing again.
@@ -539,7 +568,7 @@ test.describe('@p2 approve', () => {
         canonicalUrl: f.canonicalUrl,
       }),
     );
-    expect((await publish(page, 'capture')).toLowerCase()).toBe(already.toLowerCase());
+    expect((await publish(page, 'uploaded')).toLowerCase()).toBe(already.toLowerCase());
     expect(await pendingOf(up.captureId)).toEqual({ error: expect.any(String) });
     await page.close();
 
@@ -582,11 +611,12 @@ test.describe('@p2 approve', () => {
       writeCapture(devArkiv, { ...junk, signedAt: firstCapture.signedAt, evidenceRef: firstCapture.evidenceRef }),
     );
 
-    const before = await unused();
     const r = await capture(JUNK_PAGE);
     expect(r.checks.facts?.bodySha256).toBe(v1Body);
-    expect(r.upload?.status, JSON.stringify(r.upload)).toBe('uploaded');
-    expect(await unused()).toBe(before - 1);
+    // A new capture (not a confirmation of the junk): kept for an upload, not confirmed.
+    expect(r.upload?.status, JSON.stringify(r.upload)).toBe('pending');
+    const kept = r.upload as Extract<Upload, { status: 'pending' }>;
+    expect(await pendingOf(kept.captureId)).toMatchObject({ kind: 'capture', upload: { status: 'none' } });
 
     // Junk is never counted as an earlier capture, and it is not "no captures" either: the
     // record whose evidence can't be downloaded is Not checked (design brief 5).
