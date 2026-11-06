@@ -14,17 +14,30 @@
 //                      into a used batch can reuse a slot and drop an earlier chunk.
 //   --days <n>         Lifetime of a bought batch (default 30).
 //   --depth 17|18      Depth of a bought batch (default 18, about 21 MB of stamp capacity).
-//   --dir <path>       Publish this folder instead of building apps/web first.
+//   --dir <path>       Publish this folder instead of building apps/web first. A warning is
+//                      printed when the folder was built for the other network than --net.
+//   --gnosis-rpc <url> Gnosis RPC to read and pay on (default: the net's own).
+//   --feed             Also write a Swarm feed update that points at the new site, and print the
+//                      feed manifest reference: a URL that keeps working when the site is
+//                      published again. The feed is owned by HOSTING_FEED_KEY (.env.local), else
+//                      by the payer key. Stamps come from the same batch, no extra cost.
+//   --feed-topic <t>   The feed's topic name (default recall-app).
 //   --yes              Required with --net live when buying a batch: that spends real xBZZ
 //                      (the dry run without it prints the price and the payer, then stops).
-//   --no-wait          Do not wait for Bee to accept stamps of a fresh batch (public gateways
-//                      do not expose /batches, so waiting on them cannot succeed).
+//   --no-wait          Do not wait for the node to accept stamps of a fresh batch. The wait works
+//                      on a node (it reads /chainstate and /batches) and on a public gateway
+//                      (which hides them: the batch counts as usable some blocks after creation,
+//                      judged from the Gnosis chain).
 //
 // How it works. No Bee node owns the batch, so every chunk is stamped here, on the client:
 // each file is split into chunks, each chunk is stamped with the batch owner's key (`Stamper`)
 // and pushed with `POST /chunks`. The mantaray manifest that maps paths to files (index
 // document `index.html`) is built with `MantarayNode.saveRecursively(onChunk)`, whose chunks
 // take the same route. The resulting root reference is the website: `/bzz/<ref>/`.
+//
+// Every chunk push has a 30 s time limit and is tried 3 times (the stamp is made once, so a retry
+// never uses another slot). The guard that stops a live run without --yes comes before the
+// build, and the build gets only a minimal environment (no wallet keys).
 //
 // Type-checking the app is `pnpm --filter web typecheck` (CI does it); this script only runs
 // `vite build`, so a half-edited source tree that still bundles can be published locally.
@@ -48,15 +61,24 @@ import {
   normalizeKey,
   waitBatchUsable,
 } from '../packages/net/src/index';
-// bee-js is a dependency of packages/net only, so it is imported by its real path (the same
-// module instance packages/net uses). It re-exports core-sdk's chunking and Mantaray classes.
+// bee-js comes through packages/net's hosting helper (it is a dependency of that package only).
 import {
   Bee,
   ChunkSplitter,
   MantarayNode,
   NULL_ADDRESS,
   Reference,
-} from '../packages/net/node_modules/@ethersphere/bee-js/dist/mjs/index.js';
+  builtNetOf,
+  feedManifest,
+  feedOwnerOf,
+  feedTopic,
+  feedUpdate,
+  nextFeedIndex,
+  pushFeedUpdate,
+  readFeed,
+  REQUEST_TIMEOUT_MS,
+  retryWithBackoff,
+} from '../packages/net/src/hosting';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const WEB = join(ROOT, 'apps', 'web');
@@ -127,12 +149,21 @@ function listFiles(dir: string): { path: string; abs: string }[] {
   return out;
 }
 
+/** The only variables the web build gets: no wallet keys, no tokens, nothing else from this shell. */
+const BUILD_ENV_KEEP = /^(PATH|HOME|NODE_[A-Z0-9_]*|VITE_[A-Z0-9_]*|ARKIV_ACCESS_KEY)$/;
+
 function buildWeb(net: 'local' | 'live'): string {
   const outDir = join(WEB, 'dist');
   say(`Building apps/web for the ${net} network...`);
+  const env: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(process.env)) if (v !== undefined && BUILD_ENV_KEEP.test(k)) env[k] = v;
+  env.VITE_RECALL_NET = net;
+  // R30: a live build bakes the (public) Arkiv access key in; vite.config.ts also reads .env.local itself.
+  const arkivKey = net === 'live' ? envLocal('ARKIV_ACCESS_KEY') : undefined;
+  if (arkivKey) env.ARKIV_ACCESS_KEY = arkivKey;
   const r = spawnSync('pnpm', ['--filter', 'web', 'exec', 'vite', 'build', '--emptyOutDir'], {
     cwd: ROOT,
-    env: { ...process.env, VITE_RECALL_NET: net },
+    env,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
   });
@@ -148,6 +179,21 @@ const postageAbi = parseAbi([
   'function batchDepth(bytes32 _batchId) view returns (uint8)',
 ]);
 
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/** GET with a few tries: a gateway may lag behind the push. Resolves with the last response, or undefined. */
+async function fetchWithTries(url: string, tries: number, waitMs: number, ok: (r: Response) => boolean): Promise<Response | undefined> {
+  let last: Response | undefined;
+  for (let i = 0; i < tries; i++) {
+    last = await fetch(url, { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }).catch(() => undefined);
+    if (last && ok(last)) return last;
+    if (i < tries - 1) await sleep(waitMs);
+  }
+  return last;
+}
+
+const encodePath = (p: string) => p.split('/').map(encodeURIComponent).join('/');
+
 async function main() {
   const { values } = parseArgs({
     options: {
@@ -157,6 +203,9 @@ async function main() {
       days: { type: 'string', default: '30' },
       depth: { type: 'string', default: '18' },
       dir: { type: 'string' },
+      'gnosis-rpc': { type: 'string' },
+      feed: { type: 'boolean', default: false },
+      'feed-topic': { type: 'string', default: 'recall-app' },
       yes: { type: 'boolean', default: false },
       'no-wait': { type: 'boolean', default: false },
     },
@@ -171,6 +220,7 @@ async function main() {
   if (depth !== 17 && depth !== 18) fail('--depth must be 17 or 18');
   const cfg = net === 'local' ? LOCAL : liveConfig({});
   const beeUrl = (values.bee ?? cfg.swarm.uploadUrl).replace(/\/+$/, '');
+  const gnosisRpc = values['gnosis-rpc'] ?? cfg.gnosis.rpcUrl;
 
   // The payer is also the batch owner, so it is also the stamp key.
   let payerKey: Hex;
@@ -182,16 +232,20 @@ async function main() {
     payerKey = normalizeKey(raw);
   }
   const account = privateKeyToAccount(payerKey);
-  const transport = http(cfg.gnosis.rpcUrl);
+  const transport = http(gnosisRpc);
   const pub = createPublicClient({ chain: gnosis, transport });
 
-  const webDir = values.dir ? resolve(values.dir) : buildWeb(net);
-  if (!existsSync(join(webDir, INDEX_DOCUMENT))) fail(`${webDir} has no ${INDEX_DOCUMENT}`);
-  const files = listFiles(webDir);
-  say(`Site: ${files.length} files from ${relative(ROOT, webDir) || '.'}`);
+  // The feed key: HOSTING_FEED_KEY, else the payer key. Never printed.
+  let feedKey: Hex | undefined;
+  if (values.feed) {
+    const raw = net === 'live' ? envLocal('HOSTING_FEED_KEY') : process.env.HOSTING_FEED_KEY;
+    feedKey = raw ? normalizeKey(raw) : payerKey;
+    if (!/^0x[0-9a-fA-F]{64}$/.test(feedKey)) fail('HOSTING_FEED_KEY must be a 32-byte hex key');
+    say(`Feed owner: ${privateKeyToAccount(feedKey).address} (${raw ? 'HOSTING_FEED_KEY' : 'the payer key'}), topic "${values['feed-topic']}".`);
+  }
 
-  // Batch: bought here (owner = payer), or an existing one the payer owns.
-  let batchId: Hex;
+  // Everything that can refuse the run comes first, before the build and before any spend.
+  let batchId: Hex | undefined;
   let batchDepth = depth;
   if (values.batch) {
     batchId = (values.batch.startsWith('0x') ? values.batch : `0x${values.batch}`) as Hex;
@@ -208,16 +262,38 @@ async function main() {
     const cost = await costFor(pub, depth, days);
     const balance = await pub.readContract({ address: XBZZ, abi: erc20Abi, functionName: 'balanceOf', args: [account.address] });
     say(`A depth-${depth} batch for ${days} days costs ${formatUnits(cost, 16)} xBZZ; ${account.address} holds ${formatUnits(balance, 16)}.`);
-    if (balance < cost) fail('the payer does not hold enough xBZZ for the batch');
     if (net === 'live' && !values.yes) fail('this spends real xBZZ on Gnosis mainnet; run again with --yes to buy the batch');
+    if (balance < cost) fail('the payer does not hold enough xBZZ for the batch');
+  }
+
+  let webDir: string;
+  if (values.dir) {
+    webDir = resolve(values.dir);
+    if (!existsSync(join(webDir, INDEX_DOCUMENT))) fail(`${webDir} has no ${INDEX_DOCUMENT}`);
+    const built = builtNetOf(webDir);
+    if (built && built !== net) {
+      console.warn(`Warning: ${relative(ROOT, webDir) || webDir} was built for the ${built} network but --net is ${net}. Publishing it as is.`);
+    } else if (!built) {
+      say(`Note: could not tell which network ${relative(ROOT, webDir) || webDir} was built for; it must match --net ${net}.`);
+    }
+  } else {
+    webDir = buildWeb(net);
+    if (!existsSync(join(webDir, INDEX_DOCUMENT))) fail(`${webDir} has no ${INDEX_DOCUMENT}`);
+  }
+  const files = listFiles(webDir);
+  say(`Site: ${files.length} files from ${relative(ROOT, webDir) || '.'}`);
+
+  // Batch: bought here (owner = payer), or the existing one checked above.
+  if (!batchId) {
     const wallet = createWalletClient({ account, chain: gnosis, transport });
-    ({ batchId } = await buyBatch(wallet, { owner: account.address, depth, days }));
+    ({ batchId } = await buyBatch(wallet, { owner: account.address, depth: depth as 17 | 18, days }));
     say(`Batch ${batchId} created (owner ${account.address}).`);
   }
   if (!values['no-wait']) {
     say(`Waiting until ${beeUrl} accepts stamps of the batch (about a minute)...`);
-    await waitBatchUsable(beeUrl, batchId, 10 * 60_000).catch((e: Error) => {
-      fail(`${e.message}. A node that hides /batches cannot be waited on: retry with --batch ${batchId} --no-wait`);
+    // A node with /chainstate and /batches is asked; a public gateway without them is judged by the chain.
+    await waitBatchUsable(beeUrl, batchId, 10 * 60_000, { chain: pub }).catch((e: Error) => {
+      fail(`${e.message}. Retry with --batch ${batchId} --no-wait`);
     });
   }
 
@@ -235,9 +311,11 @@ async function main() {
     const address = chunk.hash().toHex();
     if (seen.has(address)) return; // identical chunks (e.g. two empty files) are stored once
     seen.add(address);
-    const envelope = stamper.stamp(chunk.hash().toUint8Array());
-    const task = bee.chunk
-      .upload(envelope, chunk.build(), { deferred: false })
+    const envelope = stamper.stamp(chunk.hash().toUint8Array()); // once: a retry re-sends this stamp
+    const data = chunk.build();
+    const task: Promise<void> = retryWithBackoff(`push of chunk ${address.slice(0, 8)}`, (signal) =>
+      bee.chunk.upload(envelope, data, { deferred: false }, { signal }),
+    )
       .then(() => void pushed++)
       .catch((e: unknown) => void (failure ??= e))
       .finally(() => void inflight.delete(task));
@@ -272,18 +350,76 @@ async function main() {
   await settle();
 
   const ref = Buffer.from(reference).toString('hex');
-  say(`Uploaded ${pushed} chunks (${bytesTotal} bytes of files).`);
+  say(`Uploaded ${pushed} chunks (${bytesTotal} bytes of files). Site manifest: ${ref}`);
 
-  // Read it back through the node the way a visitor would: index document served at /bzz/<ref>/.
-  const served = await fetch(`${beeUrl}/bzz/${ref}/`).catch(() => undefined);
-  const want = readFileSync(join(webDir, INDEX_DOCUMENT));
-  const ok = served?.ok === true && Buffer.from(await served.arrayBuffer()).equals(want);
-  if (ok) say(`Verified: ${beeUrl}/bzz/${ref}/ serves ${INDEX_DOCUMENT}.`);
-  else {
-    const why = `${beeUrl}/bzz/${ref}/ did not serve ${INDEX_DOCUMENT} (${served ? `HTTP ${served.status}` : 'unreachable'})`;
-    if (net === 'local') fail(why);
-    // A public gateway may hold HTML back (moderation) or lag behind the push.
-    console.warn(`Warning: ${why}. A gateway can hold HTML until it is approved; check again later.`);
+  // Optional feed: an owner-signed single-owner chunk pointing at the new manifest, stamped here
+  // like every other chunk, plus the feed manifest (the permanent address of the feed).
+  let feed: { owner: string; topicName: string; topicHex: string; index: bigint; manifestRef: string } | undefined;
+  let feedOwner: ReturnType<typeof feedOwnerOf>['owner'] | undefined;
+  let feedTopicValue: ReturnType<typeof feedTopic> | undefined;
+  if (feedKey) {
+    const { signer, owner } = feedOwnerOf(feedKey);
+    feedOwner = owner;
+    feedTopicValue = feedTopic(values['feed-topic']!);
+    const index = await retryWithBackoff('feed index lookup', (signal) => nextFeedIndex(bee, owner, feedTopicValue!, signal));
+    const update = feedUpdate(owner, feedTopicValue, index, reference);
+    const envelope = stamper.stamp(update.address.toUint8Array());
+    await retryWithBackoff(`feed update ${index}`, (signal) => pushFeedUpdate(bee, signer, envelope, update, signal));
+    const { reference: fref } = await feedManifest(owner, feedTopicValue).core.saveRecursively(async (chunk: Pushable) => put(chunk));
+    await settle();
+    feed = {
+      owner: privateKeyToAccount(feedKey).address,
+      topicName: values['feed-topic']!,
+      topicHex: feedTopicValue.toHex(),
+      index,
+      manifestRef: Buffer.from(fref).toString('hex'),
+    };
+    say(`Feed update ${index} pushed. Feed manifest: ${feed.manifestRef}`);
+  }
+
+  // Read it back through the node the way a visitor would. A mismatch is an error locally; on a
+  // public gateway an unreachable page only warns (HTML may be held for moderation, and the
+  // network may lag), but a page that arrives with other bytes is always an error.
+  const problems: string[] = [];
+  const lagTolerant = net === 'live';
+  const tries = lagTolerant ? 4 : 1;
+  const check = async (label: string, url: string, want: Buffer) => {
+    const got = await fetchWithTries(url, tries, 5000, (r) => r.ok);
+    if (got?.ok) {
+      if (Buffer.from(await got.arrayBuffer()).equals(want)) return say(`Verified: ${label} (${url}).`);
+      problems.push(`${label}: ${url} served other bytes than the local file`);
+      return;
+    }
+    const why = `${label}: ${url} did not answer with the file (${got ? `HTTP ${got.status}` : 'unreachable'})`;
+    if (lagTolerant) console.warn(`Warning: ${why}. A gateway can hold content until it is approved; check again later.`);
+    else problems.push(why);
+  };
+  const indexBytes = readFileSync(join(webDir, INDEX_DOCUMENT));
+  await check('index document', `${beeUrl}/bzz/${ref}/`, indexBytes);
+  // One script, read through the manifest: it spans many chunks, so it proves the chunk tree too.
+  const js = files
+    .filter((f) => /\.m?js$/.test(f.path))
+    .map((f) => ({ ...f, size: statSync(f.abs).size }))
+    .sort((a, b) => b.size - a.size)[0];
+  if (js) await check('JS asset', `${beeUrl}/bzz/${ref}/${encodePath(js.path)}`, readFileSync(js.abs));
+  else say('No JS asset in the site to read back.');
+  if (feed && feedOwner && feedTopicValue) {
+    // The feed lookup also asks the network for the next index, so a node may say "not found" for
+    // a few seconds after the push: poll until it names the new manifest.
+    let seenAt: { reference: string; index: string } | undefined;
+    for (let i = 0; i < (lagTolerant ? 24 : 40); i++) {
+      seenAt = await readFeed(beeUrl, feedOwner, feedTopicValue);
+      if (seenAt?.reference === ref) break;
+      await sleep(1500);
+    }
+    if (seenAt?.reference === ref) {
+      say(`Verified: the feed (index ${seenAt.index}) points at ${ref}.`);
+      await check('feed manifest', `${beeUrl}/bzz/${feed.manifestRef}/`, indexBytes);
+    } else {
+      const why = `the feed does not point at ${ref} yet (${seenAt ? `it points at ${seenAt.reference}` : 'no readable update'})`;
+      if (lagTolerant) console.warn(`Warning: ${why}.`);
+      else problems.push(why);
+    }
   }
 
   // A DNS label is at most 63 characters, so the 64-character hex reference cannot be a
@@ -295,6 +431,17 @@ async function main() {
   say(`via your Bee node: ${beeUrl}/bzz/${ref}/`);
   say(`bzz.link: https://${cid}.bzz.link/`);
   say(`bzz.link (path form): https://bzz.link/bzz/${ref}/`);
+  if (feed) {
+    say('');
+    say(`feed owner: ${feed.owner}`);
+    say(`feed topic: ${feed.topicName} (${feed.topicHex})`);
+    say(`feed update: index ${feed.index} -> ${ref}`);
+    say(`feed manifest reference: ${feed.manifestRef}`);
+    say(`feed via your Bee node: ${beeUrl}/bzz/${feed.manifestRef}/`);
+    say(`feed bzz.link: https://${new Reference(feed.manifestRef).toCid('feed')}.bzz.link/`);
+    say(`feed bzz.link (path form): https://bzz.link/bzz/${feed.manifestRef}/`);
+  }
+  if (problems.length) fail(`verification failed:\n  ${problems.join('\n  ')}`);
 }
 
 main().catch((e: unknown) => {

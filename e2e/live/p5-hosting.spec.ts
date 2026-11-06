@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { liveConfig } from '../../packages/net/src/index';
 
 // P5 live check (hosting): the web app, served from GitHub Pages and from Swarm, verifies
 // the P2 live capture against the live networks (Arkiv Rabdi, Gnosis, the Swarm gateways).
@@ -40,6 +41,17 @@ function swarmApp(): string {
   return `https://bzz.link/bzz/${ref}/`;
 }
 
+// The hosts a verified page may talk to: the page's own host (Pages, a gateway or a local Bee) and
+// what the live network config names (the Arkiv, Gnosis and Swarm endpoints). The web app never
+// calls the witness server, and nothing else belongs here: no CDN, font host, tracker or
+// analytics. A gateway may serve a CID link from a subdomain of bzz.link.
+function allowedHosts(app: string): Set<string> {
+  const cfg = liveConfig({});
+  const urls = [app, cfg.app.url, cfg.arkiv.rpcUrl, cfg.gnosis.rpcUrl, cfg.swarm.uploadUrl, ...cfg.swarm.downloadUrls];
+  return new Set(urls.map((u) => new URL(u).hostname));
+}
+const hostAllowed = (host: string, allowed: Set<string>): boolean => allowed.has(host) || host.endsWith('.bzz.link');
+
 async function verifiesTheCapture(page: Page, app: string, label: string): Promise<void> {
   const hosts = new Set<string>();
   const errors: string[] = [];
@@ -57,6 +69,11 @@ async function verifiesTheCapture(page: Page, app: string, label: string): Promi
   }
   await expect(status(page, 'C'), `${label}: check C`).toHaveAttribute('data-status', /^(pass|warn)$/);
   await expect(verdict(page), `${label}: verdict`).toHaveAttribute('data-verdict', /^(pass|warn)$/);
+
+  // Host allowlist: a page that reaches anything else (even if it still verifies) fails.
+  const allowed = allowedHosts(app);
+  const unexpected = [...hosts].filter((h) => !hostAllowed(h, allowed)).sort();
+  expect(unexpected, `${label}: hosts outside the allowlist (${[...allowed].sort().join(', ')})`).toEqual([]);
 
   test.info().annotations.push({
     type: `p5 ${label}`,
