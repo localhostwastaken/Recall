@@ -90,7 +90,7 @@ import './approve.css';
 /** The upload of a pending capture, as the extension reports it. */
 type UploadInfo =
   | { status: 'none' }
-  | { status: 'uploading'; mode?: 'stamped' | 'free' }
+  | { status: 'uploading'; mode?: 'stamped' | 'free'; progress?: { done: number; total: number } }
   /** `attachmentRef`: the repository tarball's Swarm reference (R46), same batch. */
   | { status: 'uploaded'; evidenceRef: Hex; batchId: Hex; attachmentRef?: Hex }
   /** `mode`: the storage the person chose; "Try upload again" uses it again. */
@@ -122,6 +122,8 @@ type PendingRecord = {
 const BUY_DAYS = 7;
 /** How long the page follows an upload the extension runs (batch wait 2 min + upload 1 min). */
 const UPLOAD_WAIT_MS = 6 * 60_000;
+/** With a repository snapshot (up to 25 MB of chunks); any progress of its upload adds this again. */
+const UPLOAD_WAIT_CODE_MS = 20 * 60_000;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Evidence inline in an Arkiv record must stay within this size (spec 3.2). */
@@ -850,11 +852,18 @@ export function Approve({ captureId }: { captureId: string | null }) {
   const followUpload = useCallback(
     async (r: Ready, how: SaveHow): Promise<Ready | null> => {
       setSave({ state: 'uploading', how });
-      const deadline = Date.now() + UPLOAD_WAIT_MS;
+      const wait = r.repo ? UPLOAD_WAIT_CODE_MS : UPLOAD_WAIT_MS;
+      let deadline = Date.now() + wait;
+      let lastDone = -1;
       let up: { evidenceRef: Hex; batchId: Hex; attachmentRef?: Hex } | null = null;
       while (!up) {
         const a = await ext.send<PendingRecord>({ type: 'recall.getPending', captureId }, extOpts);
         const u = a.upload;
+        // An upload that is still moving is not timed out.
+        if (u?.status === 'uploading' && u.progress && u.progress.done > lastDone) {
+          lastDone = u.progress.done;
+          deadline = Math.max(deadline, Date.now() + wait);
+        }
         if (u?.status === 'uploaded') up = u;
         else if (u?.status === 'failed') throw new Error(u.reason);
         else if (!u || u.status === 'none') throw new Error('the upload did not start');
