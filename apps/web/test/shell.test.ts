@@ -142,9 +142,9 @@ describe('SiteFooter', () => {
     );
     expect(Object.keys(hrefs)).toEqual(['GitHub repo', 'Demo video', 'Arkiv notes', 'Run one query yourself']);
     expect(hrefs['GitHub repo'].href).toBe('https://github.com/localhostwastaken/Recall');
-    expect(hrefs['Demo video'].href).toBe('https://github.com/localhostwastaken/Recall#demo-video');
+    expect(hrefs['Demo video'].href).toBe('https://github.com/localhostwastaken/Recall#demo');
     expect(hrefs['Arkiv notes'].href).toBe('https://github.com/localhostwastaken/Recall/tree/main/arkiv');
-    expect(hrefs['Run one query yourself'].href).toBe('https://github.com/localhostwastaken/Recall#run-one-query');
+    expect(hrefs['Run one query yourself'].href).toBe('https://github.com/localhostwastaken/Recall#writer-wallets');
     for (const a of Object.values(hrefs)) {
       expect(a.target).toBe('_blank');
       expect(a.rel).toBe('noopener noreferrer');
