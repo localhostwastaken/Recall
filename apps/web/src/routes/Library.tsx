@@ -1,4 +1,4 @@
-import { Search } from 'lucide-react';
+import { ArrowDownUp, ChevronDown, Search, SearchX, ShieldAlert } from 'lucide-react';
 import { useCallback, useEffect, useId, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import type { Hex } from 'viem';
 import { Duo } from '../brand/Duo';
@@ -140,22 +140,29 @@ export function LibraryCardItem({
   );
 }
 
-/** Placeholder cards while the library is read (same size as a card, so nothing jumps). */
+/**
+ * Placeholder cards while the library is read: the card's own rows (title and address, the status
+ * pill and facts, then days, bar and button) at the card's height, so nothing jumps.
+ */
 export function SkeletonGrid({ count = SKELETON_CARDS }: { count?: number }) {
   return (
     <ul className="lib-grid" aria-hidden="true">
       {Array.from({ length: count }, (_, i) => (
         <li key={i} className="lib-cell">
           <div className="lib-skel">
-            <div className="lib-skel-head">
-              <span className="lib-skel-fav" />
-              <span className="lib-skel-lines">
-                <span className="lib-skel-line" />
-                <span className="lib-skel-line short" />
+            <span className="lib-skel-line title" />
+            <span className="lib-skel-line addr" />
+            <span className="lib-skel-facts">
+              <span className="lib-skel-line pill" />
+              <span className="lib-skel-line meta" />
+            </span>
+            <span className="lib-skel-foot">
+              <span className="lib-skel-life">
+                <span className="lib-skel-line days" />
+                <span className="lib-skel-line bar" />
               </span>
-            </div>
-            <span className="lib-skel-line pill" />
-            <span className="lib-skel-line bar" />
+              <span className="lib-skel-line action" />
+            </span>
           </div>
         </li>
       ))}
@@ -203,6 +210,47 @@ export function LibraryError({ lib }: { lib: Pick<LibraryData, 'error' | 'retry'
         </details>
       ) : null}
     </Notice>
+  );
+}
+
+const TYPE_WORDS: Record<LibraryType, string> = { all: 'captures', page: 'pages', repo: 'repos' };
+
+/**
+ * Nothing to show for this view. With a search or filter: what was asked for and one way back to
+ * everything. Without: every page checked so far failed its checks (they wait behind "Show unverified").
+ */
+function NoResults({ query, kind, onClear }: { query: string | null; kind: LibraryType; onClear: () => void }) {
+  if (query === null) {
+    return (
+      <div className="lib-none">
+        <span className="lib-none-icon" aria-hidden="true">
+          <ShieldAlert size={20} strokeWidth={1.75} />
+        </span>
+        <p className="lib-none-title">Nothing verified yet</p>
+        <p className="lib-none-text">None of the captures checked so far passed their checks in this browser.</p>
+      </div>
+    );
+  }
+  const words = TYPE_WORDS[kind];
+  const action = query && kind !== 'all' ? 'Clear search and filters' : query ? 'Clear search' : 'Show all captures';
+  return (
+    <div className="lib-none">
+      <span className="lib-none-icon" aria-hidden="true">
+        <SearchX size={20} strokeWidth={1.75} />
+      </span>
+      <p className="lib-none-title">{query ? 'No captures match this search.' : `No ${words} in the library yet.`}</p>
+      {query ? (
+        <p className="lib-none-text">
+          Nothing {kind === 'all' ? '' : `among the ${words} `}matches “<span className="lib-none-q">{query}</span>”. Try part of a site
+          name, like github.
+        </p>
+      ) : (
+        <p className="lib-none-text">They show up here as soon as someone captures one with the Recall extension.</p>
+      )}
+      <button type="button" className="btn btn-secondary" onClick={onClear}>
+        {action}
+      </button>
+    </div>
   );
 }
 
@@ -276,17 +324,22 @@ export function Library({ q = '', type = 'all', sort = 'time' }: Partial<Library
   const shownFailed = filterSort(failed, view, lib.titles, lib.days);
   const filtering = query.trim() !== '' || kind !== 'all';
 
+  const searchRef = useRef<HTMLInputElement>(null);
   const clear = () => {
     setText('');
     setQuery('');
     setKind('all');
+    searchRef.current?.focus();
   };
 
   let status = '';
   if (lib.status === 'loading') status = 'Reading the library from Arkiv…';
   else if (lib.status === 'ready' && lib.entries.length > 0) {
     status = filtering ? `Showing ${shown.length} of ${plural(listed.length, 'page', 'pages')}` : plural(listed.length, 'page', 'pages');
+    if (order === 'time' && shown.length > 1) status += ' · ranked by time left';
   }
+  const showTestSwitch = lib.status === 'ready' && tests.length > 0;
+  const showFoot = lib.status === 'ready' && (lib.truncated || shownFailed.length > 0);
 
   return (
     <section className="page library" aria-labelledby="library-title">
@@ -294,9 +347,9 @@ export function Library({ q = '', type = 'all', sort = 'time' }: Partial<Library
         <h1 id="library-title" tabIndex={-1}>
           Library
         </h1>
-        <p className="lede">
-          Every capture anyone has made with Recall, read live from Arkiv. A card says “Verified” only after this browser checks it
-          against its signed evidence.
+        <p className="lib-lede">
+          Every page anyone has captured with Recall, read live from Arkiv. A card says “Verified” only after this browser checks
+          its signed evidence.
         </p>
       </header>
 
@@ -307,6 +360,7 @@ export function Library({ q = '', type = 'all', sort = 'time' }: Partial<Library
           </label>
           <Search size={18} strokeWidth={1.75} aria-hidden="true" className="lib-search-icon" />
           <input
+            ref={searchRef}
             id={searchId}
             className="input lib-search-input"
             type="search"
@@ -324,6 +378,7 @@ export function Library({ q = '', type = 'all', sort = 'time' }: Partial<Library
           <label htmlFor={sortId} className="visually-hidden">
             Sort by
           </label>
+          <ArrowDownUp size={16} strokeWidth={1.75} aria-hidden="true" className="lib-sort-icon" />
           <select id={sortId} className="input lib-sort-select" value={order} onChange={(e) => setOrder(e.target.value as LibrarySort)}>
             {SORTS.map((s) => (
               <option key={s.value} value={s.value}>
@@ -331,12 +386,20 @@ export function Library({ q = '', type = 'all', sort = 'time' }: Partial<Library
               </option>
             ))}
           </select>
+          <ChevronDown size={16} strokeWidth={1.75} aria-hidden="true" className="lib-sort-chevron" />
         </div>
       </div>
 
-      <p className="lib-status" role="status" aria-live="polite">
-        {status}
-      </p>
+      <div className={status || showTestSwitch ? 'lib-meta' : 'lib-meta is-empty'}>
+        <p className="lib-status" role="status" aria-live="polite">
+          {status}
+        </p>
+        {showTestSwitch ? (
+          <div className="lib-quiet" title="Pages we captured ourselves while building Recall">
+            <Switch label={`Show our test pages (${tests.length})`} checked={showTests} onChange={setShowTests} />
+          </div>
+        ) : null}
+      </div>
 
       {lib.status === 'loading' ? <SkeletonGrid /> : null}
 
@@ -345,18 +408,7 @@ export function Library({ q = '', type = 'all', sort = 'time' }: Partial<Library
       {lib.status === 'ready' && lib.entries.length === 0 ? <LibraryEmpty /> : null}
 
       {lib.status === 'ready' && lib.entries.length > 0 && shown.length === 0 ? (
-        <div className="lib-none">
-          <p>
-            {filtering
-              ? 'No captures match this search.'
-              : 'None of the captures checked so far passed their checks in this browser.'}
-          </p>
-          {filtering ? (
-            <button type="button" className="btn btn-secondary" onClick={clear}>
-              Clear search and filters
-            </button>
-          ) : null}
-        </div>
+        <NoResults query={filtering ? query.trim() : null} kind={kind} onClear={clear} />
       ) : null}
 
       {lib.status === 'ready' && shown.length > 0 ? (
@@ -367,19 +419,16 @@ export function Library({ q = '', type = 'all', sort = 'time' }: Partial<Library
         </ul>
       ) : null}
 
-      {lib.status === 'ready' && lib.truncated ? <p className="lib-note">Showing 1,000 captures. Arkiv has more than this page reads.</p> : null}
-
-      {lib.status === 'ready' && tests.length > 0 ? (
-        <div className="lib-unverified">
-          <Switch label={`Show our test pages (${tests.length})`} checked={showTests} onChange={setShowTests} />
-        </div>
-      ) : null}
-
-      {lib.status === 'ready' && shownFailed.length > 0 ? (
-        <div className="lib-unverified">
-          <Switch label={`Show unverified (${shownFailed.length})`} checked={showUnverified} onChange={setShowUnverified} />
-          {showUnverified ? (
-            <section aria-labelledby={unverifiedTitleId}>
+      {showFoot ? (
+        <div className="lib-foot">
+          {lib.truncated ? <p className="lib-note">Showing 1,000 captures. Arkiv has more than this page reads.</p> : null}
+          {shownFailed.length > 0 ? (
+            <div className="lib-quiet">
+              <Switch label={`Show unverified (${shownFailed.length})`} checked={showUnverified} onChange={setShowUnverified} />
+            </div>
+          ) : null}
+          {shownFailed.length > 0 && showUnverified ? (
+            <section className="lib-unverified" aria-labelledby={unverifiedTitleId}>
               <h2 className="section-title" id={unverifiedTitleId}>
                 Unverified
               </h2>
