@@ -272,30 +272,80 @@ function publicFrom(wallet: WalletClient): PublicClient {
 /** Bee accepts stamps only this many blocks after batch creation (measured ~11 on bee 2.8.0). */
 const USABLE_AFTER_BLOCKS = 12;
 
+export type WaitUsableOptions = {
+  /**
+   * Gnosis, for nodes that do not share their chain view. Public gateways answer `/chainstate`
+   * with 404 (and `/batches` with a bare list of every batch on the network, ~2 MB); there the
+   * batch counts as usable USABLE_AFTER_BLOCKS after the block the postage contract recorded for
+   * it, the rule the extension uses for the same gateways.
+   */
+  chain?: PublicClient;
+  /** Delay between polls (default 1 s). */
+  pollMs?: number;
+};
+
+/** Bee's view: the batch's start block from `/batches` (`{batches:[...]}` or a bare list). */
+function startFromBatches(body: unknown, want: string): number | undefined {
+  const list = Array.isArray(body) ? body : (body as { batches?: unknown } | null)?.batches;
+  if (!Array.isArray(list)) return undefined;
+  for (const b of list as { batchID?: unknown; start?: unknown }[]) {
+    if (typeof b?.batchID === 'string' && b.batchID.replace(/^0x/i, '').toLowerCase() === want && typeof b.start === 'number') {
+      return b.start;
+    }
+  }
+  return undefined;
+}
+
 /**
  * Resolves once the Bee node at `beeUrl` accepts stamps for the batch. Batches
  * owned by another key never show up in the node's own `/stamps`, so the signal
- * is the node's chain view: `GET /batches` lists the batch (with its start
- * block) and `GET /chainstate` reports the node's synced block at least
- * USABLE_AFTER_BLOCKS past it. Uploading before that makes `POST /chunks` hang
- * for minutes instead of failing.
+ * is the node's chain view: `GET /chainstate` reports the node's synced block,
+ * and once that answers, `GET /batches` lists the batch with its start block; the
+ * batch is usable USABLE_AFTER_BLOCKS past it. Uploading before that makes
+ * `POST /chunks` hang for minutes instead of failing. A node without `/chainstate`
+ * (public gateways) is judged by the chain instead when `opts.chain` is given (see
+ * WaitUsableOptions); `/batches` is then never downloaded.
  */
-export async function waitBatchUsable(beeUrl: string, batchId: Hex, timeoutMs: number): Promise<void> {
-  const want = batchId.replace(/^0x/, '').toLowerCase();
+export async function waitBatchUsable(
+  beeUrl: string,
+  batchId: Hex,
+  timeoutMs: number,
+  opts: WaitUsableOptions = {},
+): Promise<void> {
+  const base = beeUrl.replace(/\/+$/, '');
+  const want = batchId.replace(/^0x/i, '').toLowerCase();
   const deadline = Date.now() + timeoutMs;
+  let chainStart: bigint | undefined;
   for (;;) {
     try {
-      const [batches, chain] = await Promise.all([fetch(`${beeUrl}/batches`), fetch(`${beeUrl}/chainstate`)]);
-      if (batches.ok && chain.ok) {
-        const list = ((await batches.json()) as { batches?: { batchID: string; start: number }[] }).batches ?? [];
-        const { block } = (await chain.json()) as { block: number };
-        const found = list.find((b) => b.batchID.toLowerCase() === want);
-        if (found && block >= found.start + USABLE_AFTER_BLOCKS) return;
+      const chain = await fetch(`${base}/chainstate`, { cache: 'no-store' });
+      if (chain.ok) {
+        const { block } = (await chain.json()) as { block?: unknown };
+        const batches = await fetch(`${base}/batches`, { cache: 'no-store' });
+        if (batches.ok && typeof block === 'number') {
+          const start = startFromBatches(await batches.json(), want);
+          if (start !== undefined && block >= start + USABLE_AFTER_BLOCKS) return;
+        } else {
+          await batches.body?.cancel().catch(() => undefined);
+        }
+      } else {
+        await chain.body?.cancel().catch(() => undefined);
+        if (opts.chain) {
+          if (chainStart === undefined) {
+            const [owner, , , , , lastUpdated] = await opts.chain.readContract({
+              address: POSTAGE_STAMP, abi: postageAbi, functionName: 'batches', args: [batchId],
+            });
+            if (!/^0x0+$/.test(owner)) chainStart = lastUpdated;
+          }
+          if (chainStart !== undefined && (await opts.chain.getBlockNumber({ cacheTime: 0 })) >= chainStart + BigInt(USABLE_AFTER_BLOCKS)) {
+            return;
+          }
+        }
       }
     } catch {
-      /* node not reachable yet */
+      /* node or RPC not reachable right now: poll again */
     }
     if (Date.now() > deadline) throw new Error(`batch ${batchId} not usable on ${beeUrl} after ${timeoutMs}ms`);
-    await new Promise((r) => setTimeout(r, 1000));
+    await new Promise((r) => setTimeout(r, opts.pollMs ?? 1000));
   }
 }

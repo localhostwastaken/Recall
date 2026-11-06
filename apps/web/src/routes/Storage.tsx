@@ -180,7 +180,7 @@ export function Storage() {
         plan.map(async (s, i) => {
           if (!s.batchId || s.state === 'ready') return;
           try {
-            await waitBatchUsable(cfg.swarm.uploadUrl, s.batchId, USABLE_TIMEOUT_MS);
+            await waitBatchUsable(cfg.swarm.uploadUrl, s.batchId, USABLE_TIMEOUT_MS, { chain: pub });
             const ttl = await batchTtlSeconds(pub, s.batchId).catch(() => null);
             plan[i] = { state: 'ready', batchId: s.batchId, ttl };
           } catch {
