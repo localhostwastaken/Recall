@@ -1,0 +1,53 @@
+/* Sponsor logos: their own wordmarks, one file per theme, shown at one optical height. Tokens only. */
+.sp-who {
+  display: grid;
+  gap: var(--space-2);
+  justify-items: start;
+}
+
+.sp-logo {
+  display: flex;
+  align-items: center;
+  height: 40px;
+}
+
+.sp-logo img {
+  display: block;
+  height: 100%;
+  width: auto;
+  max-width: 100%;
+}
+
+/* Each mark's own proportions differ; these heights make them read at the same size. */
+.sp-logo-ef {
+  height: 40px;
+}
+
+.sp-logo-arkiv {
+  height: 26px;
+  margin: 7px 0;
+}
+
+.sp-logo-swarm {
+  height: 34px;
+  margin: 3px 0;
+}
+
+.sp-logo .sp-logo-on-dark {
+  display: none;
+}
+
+[data-theme='dark'] .sp-logo .sp-logo-on-light {
+  display: none;
+}
+
+[data-theme='dark'] .sp-logo .sp-logo-on-dark {
+  display: block;
+}
+
+.sp-prize {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+}
