@@ -15,6 +15,8 @@
 //   --days <n>         Lifetime of a bought batch (default 30).
 //   --depth 17|18      Depth of a bought batch (default 18, about 21 MB of stamp capacity).
 //   --dir <path>       Publish this folder instead of building apps/web first.
+//   --yes              Required with --net live when buying a batch: that spends real xBZZ
+//                      (the dry run without it prints the price and the payer, then stops).
 //   --no-wait          Do not wait for Bee to accept stamps of a fresh batch (public gateways
 //                      do not expose /batches, so waiting on them cannot succeed).
 //
@@ -31,7 +33,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { createPublicClient, createWalletClient, formatUnits, http, parseAbi, type Hex } from 'viem';
+import { createPublicClient, createWalletClient, erc20Abi, formatUnits, http, parseAbi, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { gnosis } from 'viem/chains';
 import { BEE_COMPOSE_FAUCET_KEY } from '../e2e/fixtures/keys';
@@ -39,6 +41,7 @@ import {
   LOCAL,
   POSTAGE_STAMP,
   Stamper,
+  XBZZ,
   buyBatch,
   costFor,
   liveConfig,
@@ -154,6 +157,7 @@ async function main() {
       days: { type: 'string', default: '30' },
       depth: { type: 'string', default: '18' },
       dir: { type: 'string' },
+      yes: { type: 'boolean', default: false },
       'no-wait': { type: 'boolean', default: false },
     },
     allowPositionals: false,
@@ -202,7 +206,10 @@ async function main() {
     say(`Using batch ${batchId} (depth ${batchDepth}). It must not have stamped any other upload yet.`);
   } else {
     const cost = await costFor(pub, depth, days);
-    say(`Buying a depth-${depth} batch for ${days} days: ${formatUnits(cost, 16)} xBZZ, paid by ${account.address}`);
+    const balance = await pub.readContract({ address: XBZZ, abi: erc20Abi, functionName: 'balanceOf', args: [account.address] });
+    say(`A depth-${depth} batch for ${days} days costs ${formatUnits(cost, 16)} xBZZ; ${account.address} holds ${formatUnits(balance, 16)}.`);
+    if (balance < cost) fail('the payer does not hold enough xBZZ for the batch');
+    if (net === 'live' && !values.yes) fail('this spends real xBZZ on Gnosis mainnet; run again with --yes to buy the batch');
     const wallet = createWalletClient({ account, chain: gnosis, transport });
     ({ batchId } = await buyBatch(wallet, { owner: account.address, depth, days }));
     say(`Batch ${batchId} created (owner ${account.address}).`);
