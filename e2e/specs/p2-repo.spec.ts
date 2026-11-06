@@ -235,6 +235,15 @@ test.describe('@p2 repo', () => {
       await expect(page.locator(`.approve-check-list [data-check="${k}"] .badge`)).toHaveAttribute('data-status', 'pass');
     }
     await expect(page.locator('#repo-title')).toContainText(`Repository ${OWNER}/demo @ ${git.good.commitSha.slice(0, 7)}`);
+    // Not claimed before this browser checked the uploaded code.
+    await expect(page.locator('#repo-title')).not.toContainText('the code matches');
+    // MetaMask connected (as through the header chip), so the page reads the xBZZ balance and
+    // buying is the primary action, priced at depth 18.
+    await page.evaluate(() =>
+      (window as unknown as { ethereum: { request(a: { method: string }): Promise<unknown> } }).ethereum.request({
+        method: 'eth_requestAccounts',
+      }),
+    );
     await expect(page.getByText(/big enough for the code \(depth 18\): about [\d.]+ xBZZ/)).toBeVisible({ timeout: 15_000 });
     await page.getByRole('button', { name: 'Buy storage and publish' }).click();
     await expect(page.getByRole('heading', { name: 'Which extension should own this storage?' })).toBeVisible();
@@ -242,6 +251,7 @@ test.describe('@p2 repo', () => {
 
     await expect(page.getByRole('heading', { name: 'Published', exact: true })).toBeVisible({ timeout: 360_000 });
     await expect(page.locator('.approve-repo')).toHaveAttribute('data-checked', 'true');
+    await expect(page.locator('#repo-title')).toContainText('the code matches the commit GitHub reported');
     const keys = page.locator('.approve-record .mono-value');
     await expect(keys).toHaveCount(2);
     const captureKey = (await keys.nth(0).getAttribute('title')) as Hex;

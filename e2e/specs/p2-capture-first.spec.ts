@@ -152,6 +152,15 @@ async function approvalTab(captureId: string, onSent?: (chainId: number, hash: H
   return page!;
 }
 
+/** As if MetaMask had been connected to this page (the header chip): the page can read the wallet's xBZZ. */
+async function connectWallet(page: Page): Promise<void> {
+  await page.evaluate(() =>
+    (window as unknown as { ethereum: { request(a: { method: string }): Promise<unknown> } }).ethereum.request({
+      method: 'eth_requestAccounts',
+    }),
+  );
+}
+
 /** A server that answers 500 to everything (an upload node that is down). */
 async function brokenServer(): Promise<{ server: Server; url: string }> {
   const server = createServer((_req, res) => {
@@ -245,7 +254,15 @@ test.describe('@p2 capture first', () => {
       await expect(page.locator(`.approve-check-list [data-check="${k}"] .badge`)).toHaveAttribute('data-status', 'pass');
     }
     await expect(page.getByText('Your extension has no storage left.', { exact: false })).toBeVisible();
+    // MetaMask not connected yet, so the xBZZ balance is unknown: free storage comes first, buying second.
+    await expect(page.getByRole('button', { name: 'Publish with free storage' })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText("Your xBZZ balance isn't known yet", { exact: false })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Buy storage and publish' })).toBeEnabled();
+    // Connected (this wallet holds xBZZ): buying is the primary action, with the price.
+    await connectWallet(page);
     await expect(page.getByText(/One storage batch for 7 days: about [\d.]+ xBZZ/)).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole('button', { name: 'Publish with free storage' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Use free storage instead' })).toBeVisible();
     await expect(page.getByText('Step 1 of 6')).toBeVisible();
     await page.getByRole('button', { name: 'Buy storage and publish' }).click();
 
