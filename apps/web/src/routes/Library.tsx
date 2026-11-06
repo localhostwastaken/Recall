@@ -327,7 +327,7 @@ export function Library({ q = '', type = 'all', sort = 'time' }: Partial<Library
         </ul>
       ) : null}
 
-      {lib.status === 'ready' && lib.truncated ? <p className="lib-note">Showing the first 1,000 captures.</p> : null}
+      {lib.status === 'ready' && lib.truncated ? <p className="lib-note">Showing 1,000 captures. Arkiv has more than this page reads.</p> : null}
 
       {lib.status === 'ready' && shownFailed.length > 0 ? (
         <div className="lib-unverified">

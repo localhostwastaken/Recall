@@ -51,20 +51,22 @@ function attachment(n: number) {
 
 /** A fake public client over `entities` (any order); records every page request. */
 function stub(entities: { $key: Hex }[]) {
-  const calls: { after: Hex | undefined; limit: number }[] = [];
+  const calls: { after: Hex | undefined; limit: number; order: unknown }[] = [];
   const sorted = [...entities].sort((a, b) => (BigInt(a.$key) < BigInt(b.$key) ? -1 : 1));
   const pub = {
     select: () => ({
       from: () => {
         let after: Hex | undefined;
         let limit = Infinity;
+        let order: unknown;
         const builder = {
           where(filter: unknown) {
             // The only filter listAll* sends is `$key > after`.
             after = /0x[0-9a-f]{64}/i.exec(JSON.stringify(filter, (_k, v) => (typeof v === 'bigint' ? v.toString() : v)))?.[0] as Hex;
             return builder;
           },
-          orderBy() {
+          orderBy(term: unknown) {
+            order = term;
             return builder;
           },
           limit(n: number) {
@@ -72,7 +74,7 @@ function stub(entities: { $key: Hex }[]) {
             return builder;
           },
           async fetch() {
-            calls.push({ after, limit });
+            calls.push({ after, limit, order });
             const rest = after ? sorted.filter((e) => BigInt(e.$key) > BigInt(after!)) : sorted;
             return { entities: rest.slice(0, limit) };
           },
@@ -107,6 +109,16 @@ describe('listAllCaptures (stubbed node)', () => {
       evidenceRef: k(401),
       canonicalUrl: 'https://site1.example/path',
     });
+  });
+
+  it('reads in ascending $key order on every page (SDK 1.0.1 sorts by one key only, and $createdAt is not queryable)', async () => {
+    const { pub, calls } = stub([1, 2, 3, 4, 5].map(capture));
+    await listAllCaptures(pub, { pageSize: 2 });
+    expect(calls).toHaveLength(3);
+    for (const c of calls) expect(c.order).toMatchObject({ name: '$key', direction: 'asc' });
+    const atts = stub([attachment(1), attachment(2), attachment(3)]);
+    await listAllAttachments(atts.pub, { pageSize: 2 });
+    for (const c of atts.calls) expect(c.order).toMatchObject({ name: '$key', direction: 'asc' });
   });
 
   it('stops at maxRows and says the list was truncated', async () => {

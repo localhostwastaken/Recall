@@ -167,6 +167,6 @@ describe('Library page', () => {
   it('says when the list was cut at 1,000 captures', () => {
     current = data({ truncated: true });
     render();
-    expect(text()).toContain('Showing the first 1,000 captures.');
+    expect(text()).toContain('Showing 1,000 captures. Arkiv has more than this page reads.');
   });
 });
