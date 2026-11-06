@@ -192,12 +192,25 @@ test.describe('@p2 extension api', () => {
       const opened = ext.context.waitForEvent('page');
       await popup.getByRole('button', { name: 'Buy storage' }).click();
       const storagePage = await opened;
-      // The link names this extension, so Buy storage finds its stamp key without Settings.
+      // The link names this extension. Settings name none yet (a fresh browser), so the page shows
+      // the stamp address it reports and buys nothing until the person picks it, once.
       await expect.poll(() => storagePage.url()).toBe(`${APP}/#/storage?ext=${ext.extensionId}`);
+      await expect(
+        storagePage.getByText(`This link uses extension ${ext.extensionId}, and your Settings name no extension yet.`),
+      ).toBeVisible();
+      await expect(storagePage.locator('.ext-choice .mono-value')).toHaveAttribute('title', stampAddress);
+      await expect(storagePage.getByRole('button', { name: /^Buy / })).toBeDisabled();
+      await expect(storagePage.getByText('Choose which extension to use first: see the notice above.')).toBeVisible();
+      await storagePage.getByRole('button', { name: 'Use this extension' }).click();
       await expect(storagePage.locator('.owner-row')).toContainText('Owner (extension):');
       await expect(storagePage.locator('.owner-row .mono-value')).toHaveAttribute('title', stampAddress);
-      // Used for that page only: nothing was written to the app's settings.
-      expect(await storagePage.evaluate(() => localStorage.getItem('recall.web.settings.v1'))).toBeNull();
+      const saved = await storagePage.evaluate(() => localStorage.getItem('recall.web.settings.v1'));
+      expect(JSON.parse(saved ?? '{}')).toMatchObject({ extensionId: ext.extensionId });
+      // From Settings now: the same link no longer asks.
+      await storagePage.reload();
+      await expect(storagePage.locator('.owner-row .mono-value')).toHaveAttribute('title', stampAddress);
+      await expect(storagePage.locator('.ext-choice')).toHaveCount(0);
+      await storagePage.evaluate(() => localStorage.removeItem('recall.web.settings.v1'));
       await storagePage.close();
 
       // Only an expired batch left: a distinct notice (the popup follows the pool live).

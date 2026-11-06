@@ -314,6 +314,61 @@ async function stubExtension(page: Parameters<typeof installMockWallet>[0], stam
   });
 }
 
+test('@p2 storage asks before using an extension that only the link names', async ({ page }) => {
+  const mine = privateKeyToAddress(generatePrivateKey());
+  const theirs = privateKeyToAddress(generatePrivateKey());
+  const MINE = 'a'.repeat(32);
+  const THEIRS = 'b'.repeat(32);
+  // Settings name extension a…a; another installed extension b…b answers with its own stamp key.
+  await page.addInitScript(
+    ({ mine, theirs, MINE }) => {
+      localStorage.setItem('recall.web.settings.v1', JSON.stringify({ extensionId: MINE, theme: 'system' }));
+      (window as unknown as { chrome: unknown }).chrome = {
+        runtime: {
+          lastError: undefined,
+          sendMessage(extId: string, msg: { type: string }, cb: (r: unknown) => void) {
+            setTimeout(() => cb(msg.type === 'recall.getStampAddress' ? { address: extId === MINE ? mine : theirs } : { error: 'no' }), 0);
+          },
+        },
+      };
+    },
+    { mine, theirs, MINE },
+  );
+  await wallet(page, 100);
+  const buy = page.getByRole('button', { name: /^Buy / });
+
+  // A link naming another extension: nothing can be bought until the person chooses.
+  await page.goto(`${APP}/#/storage?ext=${THEIRS}`);
+  await expect(page.getByText(`This link uses extension ${THEIRS}, which isn't the one in your Settings.`)).toBeVisible();
+  await expect(page.locator('.ext-choice .mono-value')).toHaveAttribute('title', theirs);
+  await expect(page.getByLabel('Owner address')).toHaveCount(0);
+  await expect(page.locator('.price')).toContainText('xBZZ');
+  await expect(buy).toBeDisabled();
+  await expect(page.getByText('Choose which extension to use first: see the notice above.')).toBeVisible();
+
+  // Keep my Settings: the owner is the Settings extension's key, and Settings are unchanged.
+  await page.getByRole('button', { name: 'Keep my Settings' }).click();
+  await expect(page.locator('.owner-row .mono-value')).toHaveAttribute('title', mine);
+  await expect(buy).toBeEnabled();
+  expect(JSON.parse((await page.evaluate(() => localStorage.getItem('recall.web.settings.v1')))!)).toMatchObject({ extensionId: MINE });
+
+  // Use this extension: it becomes the owner and is saved to Settings.
+  await page.goto(`${APP}/#/storage?ext=${THEIRS}`);
+  await page.reload(); // the init script resets Settings to a…a first
+  await expect(buy).toBeDisabled();
+  await page.getByRole('button', { name: 'Use this extension' }).click();
+  await expect(page.locator('.owner-row .mono-value')).toHaveAttribute('title', theirs);
+  await expect(buy).toBeEnabled();
+  expect(JSON.parse((await page.evaluate(() => localStorage.getItem('recall.web.settings.v1')))!)).toMatchObject({ extensionId: THEIRS });
+
+  // A link naming the Settings extension is used straight away.
+  await page.goto(`${APP}/#/storage?ext=${MINE}`);
+  await page.reload();
+  await expect(page.locator('.owner-row .mono-value')).toHaveAttribute('title', mine);
+  await expect(page.locator('.ext-choice')).toHaveCount(0);
+  await expect(buy).toBeEnabled();
+});
+
 test('@p2 storage finishes a part-bought plan and claims the extension hand-off only once it worked', async ({ page }) => {
   test.setTimeout(480_000);
   const stamp = privateKeyToAddress(generatePrivateKey());

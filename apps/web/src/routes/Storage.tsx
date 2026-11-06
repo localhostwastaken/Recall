@@ -5,7 +5,7 @@ import { addBatches, extensionIdFromLink, getStampAddress } from '../ext';
 import { ceilSig, formatBzz, formatBzzCeil, formatTtl, formatXdaiCeil } from '../format';
 import { GAS_PER_BATCH } from '../gas';
 import { getNetConfig } from '../net';
-import { getSettings, isSharedOrigin } from '../settings';
+import { defaultSettings, getSettings, isSharedOrigin, saveSettingsChecked } from '../settings';
 import { Field } from '../ui/Field';
 import { MonoValue, middle } from '../ui/MonoValue';
 import { Notice } from '../ui/Notice';
@@ -40,6 +40,21 @@ type Outcome =
 type Shown = Outcome & { seq: number };
 type Price = { kind: 'loading' } | { kind: 'error' } | { kind: 'ready'; perBatch: bigint; gasPrice: bigint };
 type ExtLink = { kind: 'checking' } | { kind: 'connected'; address: Address } | { kind: 'absent' };
+/**
+ * Which extension owns what this page buys. The stamp address it reports becomes the owner of
+ * the batches, so an extension named only by the link (`?ext=`) that is neither the one in
+ * Settings nor the build default is used only after the person says so (`ask`).
+ */
+type ExtChoice = { kind: 'settled'; extensionId?: string } | { kind: 'ask'; linkId: string; settingsId?: string };
+type LinkOwner = { kind: 'checking' } | { kind: 'ok'; address: Address } | { kind: 'error' };
+
+function initialExtChoice(): ExtChoice {
+  const settingsId = getSettings().extensionId || undefined;
+  const linkId = extensionIdFromLink();
+  if (!linkId) return { kind: 'settled', extensionId: settingsId };
+  if (linkId === settingsId || linkId === defaultSettings().extensionId) return { kind: 'settled', extensionId: linkId };
+  return { kind: 'ask', linkId, settingsId };
+}
 
 const SLOT_VIEW: Record<SlotState, { status: Status; label: string }> = {
   waiting: { status: 'unavailable', label: 'Waiting' },
@@ -94,13 +109,37 @@ export function Storage() {
   );
 
   // Owner: the extension's stamp address when the extension answers, else typed by hand. The
-  // extension is the one the link names (the popup opens `#/storage?ext=<id>`; used for this page
-  // only, never stored), else the one in Settings.
-  const [extensionId] = useState(() => extensionIdFromLink() ?? (getSettings().extensionId || undefined));
+  // extension is the one in Settings (or the build default); one that only the link names (the
+  // popup opens `#/storage?ext=<id>`) is used once the person confirms it.
+  const [extChoice, setExtChoice] = useState<ExtChoice>(initialExtChoice);
+  const extensionId = extChoice.kind === 'settled' ? extChoice.extensionId : undefined;
   const extOpts = extensionId ? { extensionId } : undefined;
   const [extLink, setExtLink] = useState<ExtLink>(() => (extensionId ? { kind: 'checking' } : { kind: 'absent' }));
+  // While asking: the stamp address the link's extension reports, shown before anything is bought.
+  const [linkOwner, setLinkOwner] = useState<LinkOwner>({ kind: 'checking' });
+  const askId = extChoice.kind === 'ask' ? extChoice.linkId : undefined;
   useEffect(() => {
-    if (!extensionId) return;
+    if (!askId) return;
+    let live = true;
+    getStampAddress({ extensionId: askId }).then(
+      (address) => live && setLinkOwner({ kind: 'ok', address }),
+      () => live && setLinkOwner({ kind: 'error' }),
+    );
+    return () => {
+      live = false;
+    };
+  }, [askId]);
+  const adoptLinkExtension = (linkId: string) => {
+    // Saved to Settings, except on a shared /bzz/ origin (R38), where it holds for this page only.
+    saveSettingsChecked({ extensionId: linkId });
+    setExtChoice({ kind: 'settled', extensionId: linkId });
+  };
+  useEffect(() => {
+    if (!extensionId) {
+      setExtLink({ kind: 'absent' });
+      return;
+    }
+    setExtLink({ kind: 'checking' });
     let live = true;
     getStampAddress({ extensionId }).then(
       (address) => live && setExtLink({ kind: 'connected', address }),
@@ -319,6 +358,8 @@ export function Storage() {
   }[phase];
   const blocker = partial
     ? 'Finish the purchase in progress first: use the button in the notice below.'
+    : extChoice.kind === 'ask'
+    ? 'Choose which extension to use first: see the notice above.'
     : !owner
     ? 'Enter the owner address to continue.'
     : !countValid
@@ -352,7 +393,51 @@ export function Storage() {
         }}
       >
         <section className="stack" aria-label="Owner">
-          {extLink.kind === 'connected' ? (
+          {extChoice.kind === 'ask' ? (
+            <div className="ext-choice">
+              <Notice
+                kind="warn"
+                title="Which extension should own this storage?"
+                actions={
+                  <>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      disabled={linkOwner.kind !== 'ok'}
+                      onClick={() => adoptLinkExtension(extChoice.linkId)}
+                    >
+                      Use this extension
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => setExtChoice({ kind: 'settled', extensionId: extChoice.settingsId })}
+                    >
+                      Keep my Settings
+                    </button>
+                  </>
+                }
+              >
+                <p>
+                  {extChoice.settingsId
+                    ? `This link uses extension ${extChoice.linkId}, which isn't the one in your Settings.`
+                    : `This link uses extension ${extChoice.linkId}, and your Settings name no extension yet.`}
+                </p>
+                <p>
+                  {linkOwner.kind === 'ok' ? (
+                    <>
+                      It reports the stamp address <MonoValue value={linkOwner.address} />. The batches you buy belong to that
+                      address, so use it only if it is your Recall extension.
+                    </>
+                  ) : linkOwner.kind === 'checking' ? (
+                    'Asking it for its stamp address…'
+                  ) : (
+                    'It did not answer, so it cannot be used.'
+                  )}
+                </p>
+              </Notice>
+            </div>
+          ) : extLink.kind === 'connected' ? (
             <p className="owner-row">
               Owner (extension): <MonoValue value={extLink.address} />
             </p>
