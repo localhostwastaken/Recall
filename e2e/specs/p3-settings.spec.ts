@@ -1060,7 +1060,7 @@ test.describe('@p3 settings extension', () => {
     await expect(popup.getByText('Witness online')).toBeVisible({ timeout: 20_000 });
   });
 
-  test('@p3 settings extension free upload mode uploads without consuming a batch and the record verifies through the R13 path', async () => {
+  test('@p3 settings extension free storage (chosen in the publish tab) uploads without consuming a batch and the record verifies through the R13 path', async () => {
     test.setTimeout(420_000);
     await ensureArkivGas();
     gatewayBatch ??= await buyNodeBatch();
@@ -1119,21 +1119,13 @@ test.describe('@p3 settings extension', () => {
       if ('error' in result && /witness busy|too many sessions|did not connect in time|timed out/i.test(result.error)) result = await run();
       if ('error' in result) throw new Error(`capture failed: ${result.error}`);
       const up = result.upload!;
-      expect(up.status, up.error).toBe('uploaded');
-      expect(up.batchId).toBe(ZERO_BATCH);
-      const ref = up.evidenceRef!;
-
-      // The pool is exactly as it was, and the gateway got one plain POST /bytes: no stamp, no batch.
+      // Capture first (R44): kept, nothing uploaded yet; the publish tab offers free storage.
+      expect(up.status, up.error).toBe('pending');
       expect(await getLocal('recall.pool')).toEqual(poolBefore);
-      const posts = gw.seen.filter((r) => r.method === 'POST');
-      expect(posts.map((r) => r.url)).toEqual(['/bytes']);
-      expect(posts[0]!.headers['swarm-postage-batch-id']).toBeUndefined();
-      expect(posts[0]!.headers['swarm-postage-stamp']).toBeUndefined();
-      // This gateway's reference is not the local Swarm root: the root check cannot be what binds it.
-      expect(gw.realRef(ref.slice(2))).toBeDefined();
-      expect(ref.slice(2)).not.toBe(await swarmRootOf(encodeEvidence(result.evidence)));
+      expect(gw.seen.filter((r) => r.method === 'POST')).toHaveLength(0);
 
-      // The approval tab: the page skips the Swarm reference check for the zero batch id (free
+      // The publish tab: the person picks the gateway's free storage (the settings allow it), the
+      // extension uploads, the page skips the Swarm reference check for the zero batch id (free
       // mode) and still checks A-C itself, then MetaMask (a mock with a real key) publishes.
       let approval: Page | undefined;
       await expect
@@ -1146,14 +1138,33 @@ test.describe('@p3 settings extension', () => {
       });
       await allowLocalArkiv(approval!);
       await approval!.reload();
-      await expect(approval!.getByRole('heading', { level: 1 })).toHaveText('Publish this capture');
-      // The default download gateway does not hold this gateway's reference: the page says it could
-      // not confirm the stored copy, as a warning (publishing stays possible).
-      await expect(approval!.getByRole('heading', { name: 'Stored copy not confirmed' })).toBeVisible();
+      await expect(approval!.getByRole('heading', { level: 1 })).toHaveText('Save this capture');
       for (const k of ['A', 'B', 'C']) {
         await expect(approval!.locator(`.approve-check-list [data-check="${k}"] .badge`)).toHaveAttribute('data-status', 'pass');
       }
-      await approval!.locator('main').getByRole('button', { name: 'Connect MetaMask' }).click();
+      await expect(approval!.getByRole('button', { name: 'Upload and publish' })).toBeVisible();
+      await approval!.getByRole('button', { name: 'Use free storage instead' }).click();
+      // The default download gateway does not hold this gateway's reference: the page says it could
+      // not confirm the stored copy, as a warning, and waits (publishing stays possible).
+      await expect(approval!.getByRole('heading', { name: 'Stored copy not confirmed' })).toBeVisible({ timeout: 60_000 });
+      const pending = await api<{ upload?: { status: string; evidenceRef?: Hex; batchId?: Hex } }>({
+        type: 'recall.getPending',
+        captureId: up.captureId,
+      });
+      expect(pending.upload?.status).toBe('uploaded');
+      expect(pending.upload?.batchId).toBe(ZERO_BATCH);
+      const ref = pending.upload!.evidenceRef!;
+
+      // The pool is exactly as it was, and the gateway got one plain POST /bytes: no stamp, no batch.
+      expect(await getLocal('recall.pool')).toEqual(poolBefore);
+      const posts = gw.seen.filter((r) => r.method === 'POST');
+      expect(posts.map((r) => r.url)).toEqual(['/bytes']);
+      expect(posts[0]!.headers['swarm-postage-batch-id']).toBeUndefined();
+      expect(posts[0]!.headers['swarm-postage-stamp']).toBeUndefined();
+      // This gateway's reference is not the local Swarm root: the root check cannot be what binds it.
+      expect(gw.realRef(ref.slice(2))).toBeDefined();
+      expect(ref.slice(2)).not.toBe(await swarmRootOf(encodeEvidence(result.evidence)));
+
       await approval!.getByRole('button', { name: 'Publish record' }).click();
       await expect(approval!.getByRole('heading', { name: 'Published', exact: true })).toBeVisible({ timeout: 60_000 });
       const key = (await approval!.locator('.approve-record .mono-value').first().getAttribute('title')) as Hex;
@@ -1215,14 +1226,35 @@ test.describe('@p3 settings extension', () => {
       if ('error' in result && /witness busy|too many sessions|did not connect in time|timed out/i.test(result.error)) result = await run();
       if ('error' in result) throw new Error(`capture failed: ${result.error}`);
       const up = result.upload!;
-      expect(up.status, up.error).toBe('uploaded');
-      expect(up.batchId).toBe(ZERO_BATCH);
-      const ref = up.evidenceRef!;
+      expect(up.status, up.error).toBe('pending');
 
       let approval: Page | undefined;
       await expect
         .poll(() => (approval = ext.context.pages().find((p) => p.url().includes(`#/approve/${up.captureId}`))), { timeout: 15_000 })
         .toBeTruthy();
+      // The free upload the publish tab asks for (recall.uploadPending), sent from the app's origin.
+      const send = <T,>(msg: object) =>
+        approval!.evaluate(
+          ([id, m]) =>
+            new Promise<unknown>((resolve) => {
+              const rt = (window as unknown as { chrome?: { runtime?: { sendMessage?: Function; lastError?: { message?: string } } } }).chrome
+                ?.runtime;
+              if (!rt?.sendMessage) return resolve({ lastError: 'chrome.runtime is not exposed to this page' });
+              rt.sendMessage(id, m, (res: unknown) => resolve(res ?? { lastError: rt.lastError?.message ?? 'no answer' }));
+            }),
+          [ext.extensionId, msg] as const,
+        ) as Promise<T>;
+      expect(await send({ type: 'recall.uploadPending', captureId: up.captureId, mode: 'free' })).toEqual({ status: 'uploading' });
+      let state: { status?: string; evidenceRef?: Hex; batchId?: Hex } = {};
+      await expect
+        .poll(
+          async () =>
+            (state = ((await send<{ upload?: typeof state }>({ type: 'recall.getPending', captureId: up.captureId })).upload ?? {})).status,
+          { timeout: 60_000 },
+        )
+        .toBe('uploaded');
+      expect(state.batchId).toBe(ZERO_BATCH);
+      const ref = state.evidenceRef!;
       const tab = approval!;
       await allowLocalArkiv(tab);
       // A wallet is present (a mock with a real key), so "Connect MetaMask" is usable when the page is ready.
@@ -1233,7 +1265,7 @@ test.describe('@p3 settings extension', () => {
       });
       const CORS = { 'access-control-allow-origin': '*', 'content-type': 'application/octet-stream' };
       const gatewayRoute = new RegExp(`/bytes/${ref.slice(2)}$`);
-      const publishButton = tab.getByRole('button', { name: /Connect MetaMask|Publish record/ }).first();
+      const publishButton = tab.locator('main').getByRole('button', { name: 'Publish record' });
 
       // 1. The gateway holds ANOTHER file under the reference: blocked, nothing could be published.
       await tab.route(gatewayRoute, (r) => r.fulfill({ status: 200, headers: CORS, body: Buffer.from('this is some other file') }));
@@ -1247,7 +1279,7 @@ test.describe('@p3 settings extension', () => {
       // 2. The gateway holds exactly these bytes: ready, and no warning.
       await tab.route(gatewayRoute, (r) => r.fulfill({ status: 200, headers: CORS, body: Buffer.from(encodeEvidence(result.evidence)) }));
       await tab.reload();
-      await expect(tab.getByRole('heading', { level: 1 })).toHaveText('Publish this capture');
+      await expect(tab.getByRole('heading', { level: 1 })).toHaveText('Save this capture');
       await expect(publishButton).toBeVisible();
       await expect(tab.getByRole('heading', { name: 'Stored copy not confirmed' })).toHaveCount(0);
       await tab.unroute(gatewayRoute);
@@ -1255,7 +1287,7 @@ test.describe('@p3 settings extension', () => {
       // 3. The gateway does not answer for it: a soft warning, and publishing is still possible.
       await tab.route(gatewayRoute, (r) => r.fulfill({ status: 404, headers: CORS, body: '' }));
       await tab.reload();
-      await expect(tab.getByRole('heading', { level: 1 })).toHaveText('Publish this capture');
+      await expect(tab.getByRole('heading', { level: 1 })).toHaveText('Save this capture');
       await expect(tab.getByRole('heading', { name: 'Stored copy not confirmed' })).toBeVisible();
       await expect(publishButton).toBeVisible();
       await expect(publishButton).toBeEnabled();
