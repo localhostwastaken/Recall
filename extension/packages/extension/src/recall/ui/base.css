@@ -468,7 +468,7 @@ progress {
 
 .tech-details > summary {
   cursor: pointer;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .tech-details > p {
