@@ -10,6 +10,7 @@ import {
   CaptureSchema,
   arkivPublic,
   arkivWallet,
+  isFreeBatch,
   listByUrl,
   swarmRootOf,
   writeCapture,
@@ -19,7 +20,7 @@ import { LoaderCircle } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type RefObject } from 'react';
 import { custom, type Account, type Address, type Hex } from 'viem';
 import { ExhibitCard } from '../components/ExhibitCard';
-import { downloadEvidence, isFreeModeBatch } from '../download';
+import { downloadEvidence } from '../download';
 import { ExtError, ext } from '../ext';
 import { formatDay, formatUtc } from '../format';
 import { getNetConfig } from '../net';
@@ -154,7 +155,7 @@ async function loadPending(captureId: string, extensionId: string | undefined, o
     // the one case where that does not hold: for files over 4 KB the gateway's reference differs
     // from the locally computed root (R13). Its evidence is bound by checks A to C above, and by
     // the record being built from the facts of this very evidence. Every other batch id keeps the root check.
-    if (!isFreeModeBatch(pending.batchId) && (await swarmRootOf(bytes)) !== pending.evidenceRef.slice(2).toLowerCase()) {
+    if (!isFreeBatch(pending.batchId) && (await swarmRootOf(bytes)) !== pending.evidenceRef.slice(2).toLowerCase()) {
       return { phase: 'refused', kind: pending.kind, reason: "The uploaded evidence reference doesn't match this capture's evidence.", report };
     }
     return { phase: 'ready', pending, bytes, report, facts };

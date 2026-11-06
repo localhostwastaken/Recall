@@ -1,5 +1,4 @@
-import { downloadBytes } from '@recall/net';
-import type { NetConfig } from '@recall/net';
+import { downloadBytes, isFreeBatch, type NetConfig } from '@recall/net';
 
 /** Hands bytes to the browser as a file download (nothing is uploaded anywhere). */
 export function saveBytes(bytes: Uint8Array, filename: string, type: string): void {
@@ -17,13 +16,6 @@ export function saveBytes(bytes: Uint8Array, filename: string, type: string): vo
 export const evidenceFileName = (urlHash: string, signedAt: bigint): string => `recall-${urlHash.slice(2, 10)}-${signedAt}.json`;
 
 /**
- * A free-mode capture: its evidence went to a gateway's own free storage, so the record carries
- * the all-zero batch id (no batch was used). This is the ONLY thing that switches the Swarm root
- * check off, see `evidenceDownloadOptions`.
- */
-export const isFreeModeBatch = (batchId: string): boolean => /^0x0{64}$/i.test(batchId);
-
-/**
  * How to download a record's evidence (R13). The default is to verify the Swarm root locally, so
  * a gateway cannot alter the bytes. For free-mode records only (all-zero batch id), the root is
  * not checked: for files over 4 KB the gateway's reference differs from the locally computed
@@ -31,7 +23,7 @@ export const isFreeModeBatch = (batchId: string): boolean => /^0x0{64}$/i.test(b
  * its facts (address hash, body hash, witness, signed time) against the record's indexed fields,
  * which every caller runs through `verifyRecordEvidence`.
  */
-export const evidenceDownloadOptions = (batchId: string): { verifyRoot: boolean } => ({ verifyRoot: !isFreeModeBatch(batchId) });
+export const evidenceDownloadOptions = (batchId: string): { verifyRoot: boolean } => ({ verifyRoot: !isFreeBatch(batchId) });
 
 /** Downloads the evidence a record points to from the configured download gateways. */
 export function downloadEvidence(

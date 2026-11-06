@@ -1,8 +1,9 @@
 import type { CheckResult, VerifiedFacts } from '@recall/evidence';
-import { CaptureSchema, arkivPublic, batchTtlSeconds, downloadBytes, isFreeBatch, type NetConfig } from '@recall/net';
+import { CaptureSchema, arkivPublic, batchTtlSeconds, isFreeBatch, type NetConfig } from '@recall/net';
 import { useCallback, useEffect, useState } from 'react';
 import { createPublicClient, http, type Address, type Hex } from 'viem';
 import { gnosis } from 'viem/chains';
+import { downloadEvidence } from '../download';
 import { formatDay } from '../format';
 import { getNetConfig } from '../net';
 import { trustedWitnesses } from '../witness';
@@ -246,7 +247,7 @@ export function useVerifiedCapture(entityKey: Hex, userFile?: Uint8Array): Verif
             if (alive) setStorage({ phase: 'done', ...s });
           });
         try {
-          const { bytes } = await downloadBytes(record.evidenceRef, cfg.swarm.downloadUrls);
+          const { bytes } = await downloadEvidence(cfg, record);
           if (alive) setLoad({ phase: 'record', record, evidence: { state: 'ok', bytes } });
         } catch (e) {
           if (alive) setLoad({ phase: 'record', record, evidence: { state: 'failed', ...downloadReason(e) } });
