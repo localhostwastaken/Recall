@@ -62,11 +62,14 @@ export function KeepAlive({
   target,
   subject = 'capture',
   onChanged,
+  trigger = { label: 'Keep alive…', icon: true },
 }: {
   target: KeepAliveTarget;
   subject?: 'capture' | 'confirmation';
   /** Called after each wallet step has settled, so the page can read check E again. */
   onChanged: () => void | Promise<void>;
+  /** The trigger button's wording and whether it shows the hourglass (a library card: "Keep alive", no icon). */
+  trigger?: { label: string; icon?: boolean };
 }) {
   const cfg = useMemo(getNetConfig, []);
   const freeStorage = isFree(target);
@@ -383,8 +386,8 @@ export function KeepAlive({
   return (
     <>
       <button ref={triggerRef} type="button" className="btn btn-secondary" onClick={openDialog}>
-        <Hourglass size={16} strokeWidth={1.75} aria-hidden="true" />
-        Keep alive…
+        {trigger.icon === false ? null : <Hourglass size={16} strokeWidth={1.75} aria-hidden="true" />}
+        {trigger.label}
       </button>
 
       <dialog

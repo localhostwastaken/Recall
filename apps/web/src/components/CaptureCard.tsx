@@ -1,14 +1,4 @@
-import {
-  Check,
-  CircleDashed,
-  Clock,
-  FileText,
-  GitBranch,
-  Layers,
-  LoaderCircle,
-  TriangleAlert,
-  type LucideIcon,
-} from 'lucide-react';
+import { Check, CircleDashed, LoaderCircle, TriangleAlert, type LucideIcon } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { formatShortDay } from '../format';
 import './captureCard.css';
@@ -55,11 +45,10 @@ export const SOON_DAYS = 7;
 
 export const lifeWidth = (daysLeft: number): number => Math.max(0, Math.min(100, (daysLeft / FULL_LIFE_DAYS) * 100));
 
-/** The tile letter: the site's first letter (no remote favicons: privacy and CSP). */
-export function favLetter(address: string): string {
-  const host = address.replace(/^[a-z]+:\/\//i, '').replace(/^www\./i, '');
-  const ch = host.match(/[\p{L}\p{N}]/u)?.[0];
-  return ch ? ch.toUpperCase() : '?';
+/** The plain facts after the status pill: "Page", "Repo · 3 versions" (versions only when more than one). */
+export function cardFacts(kind: 'page' | 'repo', versions: number): string {
+  const what = kind === 'repo' ? 'Repo' : 'Page';
+  return versions > 1 ? `${what} · ${versions} versions` : what;
 }
 
 export function StatusPill({ status, label }: { status: CardStatus; label?: string }) {
@@ -73,7 +62,8 @@ export function StatusPill({ status, label }: { status: CardStatus; label?: stri
 }
 
 /**
- * The one capture card (spec 4.4): title and address; status and facts; time left and one action.
+ * The one capture card (spec 4.4), kept calm: title (and a quiet rank) over the address; the status
+ * pill and plain facts; time left and one action.
  * The title link stretches over the whole card, so the card opens the capture page, while the
  * keep-alive slot stays outside the link (a button must not sit inside a link).
  */
@@ -93,13 +83,10 @@ export function CaptureCard({
 }: CaptureCardProps) {
   const life = daysLeft === null ? 'is-unknown' : daysLeft < SOON_DAYS ? 'is-soon' : 'is-ok';
   const days = daysLeft === null ? null : Math.max(0, Math.floor(daysLeft));
-  const KindIcon = kind === 'repo' ? GitBranch : FileText;
+  const validDate = date && !Number.isNaN(date.getTime()) ? date : undefined;
   return (
     <article className={`ccard${className ? ` ${className}` : ''}`}>
       <div className="ccard-head">
-        <span className="ccard-fav" aria-hidden="true">
-          {favLetter(address)}
-        </span>
         <div className="ccard-ttl">
           <h3 className="ccard-title">
             <a className="ccard-link" href={href}>
@@ -110,33 +97,24 @@ export function CaptureCard({
             {address}
           </p>
         </div>
-      </div>
-      <ul className="ccard-facts" aria-label="Facts">
-        <li>
-          <StatusPill status={status} label={statusLabel} />
-        </li>
         {rank !== undefined ? (
-          <li>
-            <span className="ccard-rank" aria-label={`Rank ${rank}`}>
-              #{rank}
-            </span>
-          </li>
+          <span className="ccard-rank" aria-label={`Rank ${rank}`}>
+            #{rank}
+          </span>
         ) : null}
-        <li>
-          <KindIcon size={14} strokeWidth={1.75} aria-hidden="true" />
-          {kind === 'repo' ? 'Repo' : 'Page'}
-        </li>
-        <li>
-          <Layers size={14} strokeWidth={1.75} aria-hidden="true" />
-          {versions} {versions === 1 ? 'version' : 'versions'}
-        </li>
-        {date && !Number.isNaN(date.getTime()) ? (
-          <li>
-            <Clock size={14} strokeWidth={1.75} aria-hidden="true" />
-            <time dateTime={date.toISOString()}>{formatShortDay(BigInt(Math.floor(date.getTime() / 1000)))}</time>
-          </li>
-        ) : null}
-      </ul>
+      </div>
+      <div className="ccard-facts">
+        <StatusPill status={status} label={statusLabel} />
+        <span className="ccard-meta">
+          {cardFacts(kind, versions)}
+          {validDate ? (
+            <>
+              {' · '}
+              <time dateTime={validDate.toISOString()}>{formatShortDay(BigInt(Math.floor(validDate.getTime() / 1000)))}</time>
+            </>
+          ) : null}
+        </span>
+      </div>
       <div className="ccard-foot">
         <div className={`ccard-life ${life}`}>
           <p className="ccard-life-label">
@@ -147,7 +125,7 @@ export function CaptureCard({
                 <b className="ccard-days" data-days={days}>
                   {days}
                 </b>{' '}
-                <b>{days === 1 ? 'day' : 'days'}</b> left
+                {days === 1 ? 'day' : 'days'} left
               </>
             )}
           </p>

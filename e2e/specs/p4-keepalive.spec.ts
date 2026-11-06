@@ -932,7 +932,7 @@ test('@p4 library keep-alive extends a card in place and its days go up', async 
   const daysBefore = Number(await days.getAttribute('data-days'));
 
   // The card's own Keep alive opens the dialog in place: the library stays behind it.
-  await card.getByRole('button', { name: 'Keep alive…' }).click();
+  await card.getByRole('button', { name: 'Keep alive', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Keep this capture available' });
   await expect(dialog).toBeVisible();
   await expect(page).toHaveURL(/#\/library/);
