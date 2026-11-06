@@ -132,6 +132,7 @@ export function LibraryCardItem({
         date={date}
         daysLeft={lib.days.get(entry.urlHash) ?? null}
         keepAlive={status === 'unverified' ? undefined : keepAlive(entry, verified, hintId, lib)}
+        className={verified ? undefined : 'lib-claim'}
       />
     </li>
   );

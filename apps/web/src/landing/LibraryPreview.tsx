@@ -38,9 +38,9 @@ export function LibraryPreview({ id = 'library-preview' }: { id?: string }) {
       <div className="lib-preview-head">
         <div>
           <h2 className="section-title" id={titleId}>
-            Library
+            The public library
           </h2>
-          <p>Everything anyone has captured, read live from Arkiv and checked in your browser. Ranked by how long it stays stored.</p>
+          <p>Every capture anyone has made, searchable. The ones people keep alive rise to the top.</p>
         </div>
         <a className="btn btn-secondary" href="#/library">
           Open the library

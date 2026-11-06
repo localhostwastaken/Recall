@@ -1,3 +1,4 @@
+import { canonicalPageUrl, urlHash as hashUrl } from '@recall/evidence';
 import type { ListedAttachment, ListedCapture } from '@recall/net';
 import type { Hex } from 'viem';
 import type { LibraryView } from '../router';
@@ -8,9 +9,15 @@ import type { LibraryView } from '../router';
  * it is only used to group, order and search, and to show host + path before the check.
  */
 export type PageEntry = {
+  /**
+   * The page's `urlHash`, the card's id. For a junk row (its address does not hash to its
+   * `urlHash`) it is the row's own record key, so the row never joins or hides a real page.
+   */
   urlHash: Hex;
-  /** host + path of the newest record's address (a claim until verified). */
+  /** host + path: the newest record's claim until verified, then the verified evidence's. */
   address: string;
+  /** The record's address does not hash to its `urlHash`: never checked, shown only as unverified. */
+  junk?: boolean;
   kind: 'page' | 'repo';
   /** owner/repo, once the newest capture verified as a GitHub branch. */
   repo?: string;
@@ -24,7 +31,7 @@ const MAX_ADDRESS = 200;
 
 /** host + path, without the scheme, `www.`, query or a trailing slash. */
 export function hostPath(canonicalUrl: string, fallback: string): string {
-  let out = fallback;
+  let out = typeof fallback === 'string' ? fallback : '';
   try {
     const u = new URL(canonicalUrl);
     if (u.protocol === 'https:' || u.protocol === 'http:') out = `${u.host.replace(/^www\./, '')}${u.pathname === '/' ? '' : u.pathname}`;
@@ -44,10 +51,34 @@ const newer = (a: ListedCapture, b: ListedCapture): boolean =>
  * time (a tie goes to the larger record key); a page is a repo when any of its captures is named
  * by a git attachment.
  */
+/** True when the record's address, canonicalised as a capture does it, hashes to its `urlHash`. */
+export function addressMatchesHash(r: Pick<ListedCapture, 'canonicalUrl' | 'urlHash'>): boolean {
+  try {
+    return hashUrl(canonicalPageUrl(r.canonicalUrl)).toLowerCase() === r.urlHash.toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
 export function groupByPage(rows: readonly ListedCapture[], attachments: readonly ListedAttachment[]): PageEntry[] {
   const gitParents = new Set(attachments.filter((a) => a.kind === 'git').map((a) => lower(a.parentCaptureKey)));
   const pages = new Map<string, { rows: ListedCapture[]; newest: ListedCapture; repo: boolean }>();
+  const junk: PageEntry[] = [];
   for (const r of rows) {
+    if (!addressMatchesHash(r)) {
+      // Anyone can write a record naming any address: one whose address and hash disagree is
+      // its own (unverified) card, so it can neither join a real page nor become its newest.
+      junk.push({
+        urlHash: lower(r.entityKey) as Hex,
+        address: hostPath(r.canonicalUrl, r.serverName),
+        junk: true,
+        kind: 'page',
+        versions: 1,
+        newest: r,
+        signedAt: r.signedAt,
+      });
+      continue;
+    }
     const id = lower(r.urlHash);
     const p = pages.get(id);
     const git = gitParents.has(lower(r.entityKey));
@@ -58,14 +89,17 @@ export function groupByPage(rows: readonly ListedCapture[], attachments: readonl
       p.repo ||= git;
     }
   }
-  return [...pages.values()].map((p) => ({
-    urlHash: lower(p.newest.urlHash) as Hex,
-    address: hostPath(p.newest.canonicalUrl, p.newest.serverName),
-    kind: p.repo ? 'repo' : 'page',
-    versions: p.rows.length,
-    newest: p.newest,
-    signedAt: p.newest.signedAt,
-  }));
+  const real = [...pages.values()].map(
+    (p): PageEntry => ({
+      urlHash: lower(p.newest.urlHash) as Hex,
+      address: hostPath(p.newest.canonicalUrl, p.newest.serverName),
+      kind: p.repo ? 'repo' : 'page',
+      versions: p.rows.length,
+      newest: p.newest,
+      signedAt: p.newest.signedAt,
+    }),
+  );
+  return [...real, ...junk];
 }
 
 /** Whole days until `expiresAtBlock`, at the chain's real block time; never below zero. */

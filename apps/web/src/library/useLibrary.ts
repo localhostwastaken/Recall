@@ -13,7 +13,7 @@ import { errorText } from '../errors';
 import { getNetConfig } from '../net';
 import type { Checked } from '../timeline/model';
 import { checkCaptureRow } from '../timeline/useTimeline';
-import { daysLeft, groupByPage, type PageEntry } from './model';
+import { daysLeft, groupByPage, hostPath, type PageEntry } from './model';
 import { createVerifyQueue } from './queue';
 import { pageTitle } from './title';
 
@@ -67,6 +67,13 @@ const EMPTY: LibraryState = {
   days: new Map(),
 };
 
+/**
+ * Every field of the record that was checked. A result is reused only for the exact same row: a
+ * reloaded row under the same key that says anything else is checked again.
+ */
+export const rowFingerprint = (r: ListedCapture): string =>
+  [r.entityKey, r.urlHash, r.canonicalUrl, r.serverName, r.bodySha256, r.evidenceRef, r.witness, String(r.signedAt), r.batchId].join('|');
+
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const t = setTimeout(() => reject(new Error('Arkiv did not answer in time.')), ms);
@@ -85,8 +92,10 @@ export function createLibraryStore(deps: LibraryDeps) {
   let generation = 0;
   let ac = new AbortController();
   const queue = createVerifyQueue(3);
-  /** urlHash -> the record key whose check was started. */
-  const started = new Map<Hex, Hex>();
+  /** urlHash -> the fingerprint of the row whose check was started. */
+  const started = new Map<Hex, string>();
+  /** urlHash -> what the verified evidence says (address, repo), shown instead of the row's claims. */
+  const proven = new Map<Hex, { address: string; repo?: string }>();
   const listeners = new Set<() => void>();
 
   const set = (patch: Partial<LibraryState>) => {
@@ -107,6 +116,7 @@ export function createLibraryStore(deps: LibraryDeps) {
       ac = new AbortController();
       queue.cancelAll();
       started.clear();
+      proven.clear();
       set({ ...EMPTY });
     }
     withTimeout(deps.load(), LOAD_MS)
@@ -116,20 +126,28 @@ export function createLibraryStore(deps: LibraryDeps) {
         const entries = groupByPage(captures, attachments);
         const days = new Map<Hex, number | null>();
         for (const e of entries) days.set(e.urlHash, timing ? daysLeft(e.newest.expiresAtBlock, timing.currentBlock, timing.blockSeconds) : null);
-        // A page whose newest record changed must be checked again; the others keep their result.
+        // A result carries over only to the exact row that was checked; anything else is checked again.
         const check = new Map<Hex, CheckState>();
         const titles = new Map<Hex, string>();
         for (const e of entries) {
-          if (started.get(e.urlHash) !== e.newest.entityKey) {
+          if (e.junk) {
+            check.set(e.urlHash, 'unverified');
+            continue;
+          }
+          if (started.get(e.urlHash) !== rowFingerprint(e.newest)) {
             started.delete(e.urlHash);
+            proven.delete(e.urlHash);
             continue;
           }
           const c = state.check.get(e.urlHash);
           const t = state.titles.get(e.urlHash);
           if (c) check.set(e.urlHash, c);
           if (t) titles.set(e.urlHash, t);
-          const repo = state.entries.find((x) => x.urlHash === e.urlHash)?.repo;
-          if (repo) e.repo = repo;
+          const p = proven.get(e.urlHash);
+          if (p) {
+            e.address = p.address;
+            if (p.repo) e.repo = p.repo;
+          }
         }
         set({ status: 'ready', error: undefined, entries, captureCount: captures.length, truncated, check, titles, days });
       })
@@ -142,8 +160,9 @@ export function createLibraryStore(deps: LibraryDeps) {
 
   const requestCheck = (urlHash: Hex) => {
     const entry = state.entries.find((e) => e.urlHash === urlHash);
-    if (!entry || started.get(urlHash) === entry.newest.entityKey) return;
-    const key = entry.newest.entityKey;
+    if (!entry || entry.junk) return;
+    const key = rowFingerprint(entry.newest);
+    if (started.get(urlHash) === key) return;
     started.set(urlHash, key);
     set({ check: update(state.check, urlHash, 'checking') });
     const signal = ac.signal;
@@ -155,16 +174,21 @@ export function createLibraryStore(deps: LibraryDeps) {
           set({ check: update(state.check, urlHash, 'unverified') });
           return;
         }
+        // From here on the card shows what the verified evidence says, never the row's claims.
+        const facts = result.facts;
+        const shown: { address: string; repo?: string } = { address: hostPath(facts.canonicalUrl, facts.serverName) };
         let title: string | null = null;
         if (entry.kind === 'repo') {
-          const b = repoOf(result.facts);
-          if (b) {
-            title = `${b.owner}/${b.repo}`;
-            state = { ...state, entries: state.entries.map((e) => (e.urlHash === urlHash ? { ...e, repo: title! } : e)) };
-          }
+          const b = repoOf(facts);
+          if (b) title = shown.repo = `${b.owner}/${b.repo}`;
         }
-        title ??= pageTitle(result.facts.body, result.facts.contentType);
-        set({ check: update(state.check, urlHash, 'verified'), titles: title ? update(state.titles, urlHash, title) : state.titles });
+        title ??= pageTitle(facts.body, facts.contentType);
+        proven.set(urlHash, shown);
+        set({
+          entries: state.entries.map((e) => (e.urlHash === urlHash ? { ...e, ...shown } : e)),
+          check: update(state.check, urlHash, 'verified'),
+          titles: title ? update(state.titles, urlHash, title) : state.titles,
+        });
       })
       .catch((e: unknown) => {
         if (started.get(urlHash) !== key) return;

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { canonicalPageUrl, urlHash as hashUrl } from '@recall/evidence';
 import type { ListedCapture } from '@recall/net';
 import type { VerifiedFacts } from '@recall/evidence';
 import type { Address, Hex } from 'viem';
@@ -8,6 +9,7 @@ import { createLibraryStore, type LibraryDeps } from '../src/library/useLibrary'
 
 const k = (n: number): Hex => `0x${n.toString(16).padStart(64, '0')}` as Hex;
 const A = '0x1111111111111111111111111111111111111111' as Address;
+const uh = (n: number): Hex => hashUrl(canonicalPageUrl(`https://site${n}.example/p`));
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 const cap = (n: number): ListedCapture => ({
@@ -15,7 +17,7 @@ const cap = (n: number): ListedCapture => ({
   owner: A,
   creator: A,
   expiresAtBlock: 43_200n * 10n,
-  urlHash: k(100 + n),
+  urlHash: uh(n),
   bodySha256: k(200),
   serverName: `site${n}.example`,
   witness: A,
@@ -26,9 +28,14 @@ const cap = (n: number): ListedCapture => ({
   canonicalUrl: `https://site${n}.example/p`,
 });
 
-const verified = (title: string): Checked => ({
+const verified = (title: string, canonicalUrl = 'https://proven.example/page'): Checked => ({
   state: 'verified',
-  facts: { body: new TextEncoder().encode(`<title>${title}</title>`), contentType: 'text/html' } as unknown as VerifiedFacts,
+  facts: {
+    body: new TextEncoder().encode(`<title>${title}</title>`),
+    contentType: 'text/html',
+    canonicalUrl,
+    serverName: new URL(canonicalUrl).host,
+  } as unknown as VerifiedFacts,
 });
 
 function deps(over: Partial<LibraryDeps> = {}): LibraryDeps {
@@ -50,7 +57,7 @@ describe('library store', () => {
     expect(s.status).toBe('ready');
     expect(s.entries).toHaveLength(5);
     expect(s.captureCount).toBe(5);
-    expect(s.days.get(k(101))).toBe(10);
+    expect(s.days.get(uh(1))).toBe(10);
     expect(s.check.size).toBe(0); // nothing is "verified" before a check ran
     off();
   });
@@ -84,10 +91,10 @@ describe('library store', () => {
     const store = createLibraryStore(deps({ check }));
     store.subscribe(() => undefined);
     await flush();
-    for (const n of [1, 2, 3, 4, 5, 1, 2]) store.requestCheck(k(100 + n));
+    for (const n of [1, 2, 3, 4, 5, 1, 2]) store.requestCheck(uh(n));
     await flush();
     expect(peak).toBe(3);
-    expect(store.getSnapshot().check.get(k(105))).toBe('checking');
+    expect(store.getSnapshot().check.get(uh(5))).toBe('checking');
     while (release.length) {
       release.shift()!();
       await flush();
@@ -95,32 +102,90 @@ describe('library store', () => {
     }
     expect(check).toHaveBeenCalledTimes(5);
     expect(peak).toBe(3);
-    expect(store.getSnapshot().check.get(k(101))).toBe('verified');
-    expect(store.getSnapshot().titles.get(k(101))).toBe('Title site1.example');
+    expect(store.getSnapshot().check.get(uh(1))).toBe('verified');
+    expect(store.getSnapshot().titles.get(uh(1))).toBe('Title site1.example');
   });
 
   it('a failed check is unverified, never verified', async () => {
     const store = createLibraryStore(deps({ check: async () => ({ state: 'unverified', reason: 'x', status: 'fail' }) }));
     store.subscribe(() => undefined);
     await flush();
-    store.requestCheck(k(101));
+    store.requestCheck(uh(1));
     await flush();
     await flush();
-    expect(store.getSnapshot().check.get(k(101))).toBe('unverified');
+    expect(store.getSnapshot().check.get(uh(1))).toBe('unverified');
     const crash = createLibraryStore(deps({ check: async () => Promise.reject(new Error('boom')) }));
     crash.subscribe(() => undefined);
     await flush();
-    crash.requestCheck(k(101));
+    crash.requestCheck(uh(1));
     await flush();
     await flush();
-    expect(crash.getSnapshot().check.get(k(101))).toBe('unverified');
+    expect(crash.getSnapshot().check.get(uh(1))).toBe('unverified');
+  });
+
+  it('shows the address from the verified evidence once verified, never the row', async () => {
+    const store = createLibraryStore(deps({ check: async () => verified('T', 'https://site1.example/p') }));
+    store.subscribe(() => undefined);
+    await flush();
+    expect(store.getSnapshot().entries.find((e) => e.urlHash === uh(1))!.address).toBe('site1.example/p');
+    const proven = createLibraryStore(deps({ check: async () => verified('T', 'https://proven.example/x') }));
+    proven.subscribe(() => undefined);
+    await flush();
+    proven.requestCheck(uh(1));
+    await flush();
+    await flush();
+    expect(proven.getSnapshot().entries.find((e) => e.urlHash === uh(1))!.address).toBe('proven.example/x');
+  });
+
+  it('marks junk rows (address not matching urlHash) unverified without checking them', async () => {
+    const check = vi.fn(async () => verified('T'));
+    const junk = { ...cap(9), urlHash: uh(1) , canonicalUrl: 'https://evil.example/' };
+    const store = createLibraryStore(deps({ check, load: async () => ({ captures: [cap(1), junk], attachments: [], truncated: false, timing: null }) }));
+    store.subscribe(() => undefined);
+    await flush();
+    const s = store.getSnapshot();
+    expect(s.entries).toHaveLength(2);
+    expect(s.check.get(k(9))).toBe('unverified');
+    store.requestCheck(k(9));
+    await flush();
+    expect(check).not.toHaveBeenCalled();
+  });
+
+  it('a reloaded row with a changed field under the same key loses its verified result', async () => {
+    let rows = [cap(1)];
+    const store = createLibraryStore(deps({ load: async () => ({ captures: rows, attachments: [], truncated: false, timing: null }) }));
+    const now = vi.spyOn(Date, 'now');
+    now.mockReturnValue(1_000_000);
+    let off = store.subscribe(() => undefined);
+    await flush();
+    store.requestCheck(uh(1));
+    await flush();
+    await flush();
+    expect(store.getSnapshot().check.get(uh(1))).toBe('verified');
+
+    // Same row on a later read: the result is kept.
+    off();
+    now.mockReturnValue(2_000_000);
+    off = store.subscribe(() => undefined);
+    await flush();
+    expect(store.getSnapshot().check.get(uh(1))).toBe('verified');
+
+    // Same key, other evidence: checked again, not verified until then.
+    off();
+    rows = [{ ...cap(1), evidenceRef: k(999) }];
+    now.mockReturnValue(3_000_000);
+    store.subscribe(() => undefined);
+    await flush();
+    expect(store.getSnapshot().check.get(uh(1))).toBeUndefined();
+    expect(store.getSnapshot().titles.get(uh(1))).toBeUndefined();
+    now.mockRestore();
   });
 
   it('refreshDays re-reads the newest record and updates its days', async () => {
     const store = createLibraryStore(deps());
     store.subscribe(() => undefined);
     await flush();
-    await store.refreshDays(k(101));
-    expect(store.getSnapshot().days.get(k(101))).toBe(40);
+    await store.refreshDays(uh(1));
+    expect(store.getSnapshot().days.get(uh(1))).toBe(40);
   });
 });

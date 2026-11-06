@@ -1,3 +1,4 @@
+import { canonicalPageUrl, urlHash as hashUrl } from '@recall/evidence';
 import type { ListedAttachment, ListedCapture } from '@recall/net';
 import type { Address, Hex } from 'viem';
 import { describe, expect, it } from 'vitest';
@@ -6,13 +7,16 @@ import { daysLeft, filterSort, groupByPage, type PageEntry } from '../src/librar
 const k = (n: number): Hex => `0x${n.toString(16).padStart(64, '0')}` as Hex;
 const A = '0x1111111111111111111111111111111111111111' as Address;
 
+const uh = (url: string): Hex => hashUrl(canonicalPageUrl(url));
+
 function cap(n: number, over: Partial<ListedCapture> = {}): ListedCapture {
+  const canonicalUrl = over.canonicalUrl ?? 'https://gov.example/notice';
   return {
     entityKey: k(n),
     owner: A,
     creator: A,
     expiresAtBlock: 1000n,
-    urlHash: k(100),
+    urlHash: over.urlHash ?? uh(canonicalUrl),
     bodySha256: k(200),
     serverName: 'gov.example',
     witness: A,
@@ -60,8 +64,10 @@ describe('groupByPage', () => {
   });
 
   it('groups urlHash case-insensitively and keeps pages apart', () => {
-    const entries = groupByPage([cap(1), cap(2, { urlHash: k(100).toUpperCase().replace('0X', '0x') as Hex }), cap(3, { urlHash: k(101) })], []);
+    const upper = uh('https://gov.example/notice').toUpperCase().replace('0X', '0x') as Hex;
+    const entries = groupByPage([cap(1), cap(2, { urlHash: upper }), cap(3, { canonicalUrl: 'https://other.example/' })], []);
     expect(entries).toHaveLength(2);
+    expect(entries.find((e) => e.address === 'gov.example/notice')!.versions).toBe(2);
   });
 
   it('marks a page as a repo when any of its captures has a git attachment', () => {
@@ -72,10 +78,28 @@ describe('groupByPage', () => {
   });
 
   it('shows host and path for hostile or broken addresses without throwing', () => {
-    const [e] = groupByPage([cap(1, { canonicalUrl: 'not a url', serverName: 'x.example' })], []);
+    const [e] = groupByPage([cap(1, { canonicalUrl: 'not a url', urlHash: k(5), serverName: 'x.example' })], []);
     expect(e!.address).toBe('x.example');
-    const [long] = groupByPage([cap(2, { urlHash: k(5), canonicalUrl: `https://a.example/${'p'.repeat(5000)}` })], []);
+    expect(e!.junk).toBe(true);
+    const [long] = groupByPage([cap(2, { canonicalUrl: `https://a.example/${'p'.repeat(5000)}` })], []);
+    expect(long!.junk).toBeUndefined();
     expect(long!.address.length).toBeLessThanOrEqual(200);
+  });
+});
+
+describe('groupByPage: records whose address does not hash to their urlHash', () => {
+  it('are their own unverified card: they never join, outnumber or replace a real page', () => {
+    const real = cap(1, { signedAt: 5n });
+    // Claims the real page's urlHash but names another address, and claims to be newer.
+    const spoof = cap(2, { urlHash: real.urlHash, canonicalUrl: 'https://evil.example/fake', signedAt: 99n });
+    const entries = groupByPage([real, spoof], []);
+    expect(entries).toHaveLength(2);
+    const page = entries.find((e) => !e.junk)!;
+    expect(page.versions).toBe(1);
+    expect(page.newest.entityKey).toBe(k(1));
+    const junk = entries.find((e) => e.junk)!;
+    expect(junk.urlHash).toBe(k(2)); // its own id: the record key, never the page's
+    expect(junk.address).toBe('evil.example/fake');
   });
 });
 
@@ -89,7 +113,7 @@ describe('daysLeft', () => {
 
 describe('filterSort', () => {
   const page = (n: number, over: Partial<PageEntry> = {}): PageEntry => {
-    const [e] = groupByPage([cap(n, { urlHash: k(n), signedAt: BigInt(n), canonicalUrl: `https://site${n}.example/p` })], []);
+    const [e] = groupByPage([cap(n, { signedAt: BigInt(n), canonicalUrl: `https://site${n}.example/p` })], []);
     return { ...e!, ...over };
   };
   const a = page(1, { address: 'gov.example/notice' });

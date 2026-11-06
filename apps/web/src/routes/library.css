@@ -318,3 +318,9 @@
     width: 100%;
   }
 }
+
+/* Not verified yet: the address is only a claim from the index, so it is not shown as a title. */
+.lib-claim .ccard-title {
+  color: var(--text-muted);
+  font-weight: 600;
+}
