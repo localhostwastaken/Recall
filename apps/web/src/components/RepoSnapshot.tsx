@@ -1,4 +1,4 @@
-import { Copy, Download } from 'lucide-react';
+import { ChevronDown, Copy, Download } from 'lucide-react';
 import { useMemo } from 'react';
 import type { RepoSnapshotItem, RepoSnapshots, SnapshotState } from '../attachments/useRepoSnapshot';
 import { codeFileName, GIT_CONTENT_TYPE, type GitHubBranch } from '../attachments/git';
@@ -175,7 +175,10 @@ function GitCheck({ branch }: { branch: GitHubBranch }) {
   };
   return (
     <details className="repo-git-check">
-      <summary>Check it with your own git</summary>
+      <summary>
+        Check it with your own git
+        <ChevronDown size={16} strokeWidth={2} aria-hidden="true" />
+      </summary>
       <p>Download the code, then run this in the folder where it was saved:</p>
       <div className="repo-git-cmd">
         <code className="mono">{command}</code>

@@ -44,7 +44,10 @@ export function VerdictLine({ verdict }: { verdict: Verdict }) {
 export function WhyWitness() {
   return (
     <details className="why-witness">
-      <summary>Why trust one witness?</summary>
+      <summary>
+        Why trust one witness?
+        <ChevronDown size={16} strokeWidth={2} aria-hidden="true" />
+      </summary>
       <p>Recall uses one witness. If it was compromised or worked with the site, it could sign false bytes.</p>
     </details>
   );
