@@ -1,6 +1,6 @@
 import './landing.css';
 import type { CheckResult, VerifiedFacts } from '@recall/evidence';
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, CircleDashed, LoaderCircle } from 'lucide-react';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Hex } from 'viem';
 import { CaptureCard, type CardStatus } from '../components/CaptureCard';
@@ -257,12 +257,10 @@ export function SeeItWork({
         checks it right here. Nothing is taken on trust, not even from us.
       </p>
       <div className="try-grid">
+        {/* Left: the capture, its verdict and the one action; right: the checks. The verdict has a
+            reserved slot, so the two columns weigh the same before and after the run. */}
         <div className="try-left">
           <CaptureCard {...card} status={status.status} statusLabel={'label' in status ? status.label : undefined} />
-          <div className="try-action">{action}</div>
-        </div>
-        <div className="try-right">
-          <CheckList rows={rows} shown={shown} />
           {done && !failed ? <VerdictLine verdict={check.verdict} /> : null}
           {done && failed ? (
             <div className="try-error" role="alert">
@@ -274,6 +272,20 @@ export function SeeItWork({
               </button>
             </div>
           ) : null}
+          {!done ? (
+            <p className="try-slot">
+              {started ? (
+                <LoaderCircle size={20} strokeWidth={1.75} aria-hidden="true" className="spin" />
+              ) : (
+                <CircleDashed size={20} strokeWidth={1.75} aria-hidden="true" />
+              )}
+              <span>{started ? 'Fetching the evidence from Swarm and checking it…' : 'The verdict appears here once the checks have run.'}</span>
+            </p>
+          ) : null}
+          <div className="try-action">{action}</div>
+        </div>
+        <div className="try-right">
+          <CheckList rows={rows} shown={shown} />
         </div>
       </div>
       {children ? (

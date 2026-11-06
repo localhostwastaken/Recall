@@ -129,12 +129,16 @@ export function Hero({
           <div className="hero-stage">
             <Duo className="hero-duo" />
           </div>
-          <CaptureCard
-            {...exampleCardProps(check)}
-            className="hero-card"
-            status={status.status}
-            statusLabel={status.label}
-          />
+          {/* The card's slot: a dashed outline holds its place while the story plays, so the panel
+              never looks empty before the card springs in. */}
+          <div className="hero-slot">
+            <CaptureCard
+              {...exampleCardProps(check)}
+              className="hero-card"
+              status={status.status}
+              statusLabel={status.label}
+            />
+          </div>
         </div>
       </div>
     </section>

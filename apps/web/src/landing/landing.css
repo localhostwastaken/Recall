@@ -8,15 +8,6 @@
   padding-bottom: 0;
 }
 
-.landing {
-  /* Sponsor marks: simple initial tiles in each sponsor's colour (their logos are not redrawn). */
-  --sponsor-ef: #6b7aba;
-  --sponsor-arkiv: #181ea9;
-  --sponsor-swarm: #f47a20;
-  --sponsor-ink: #ffffff;
-  --sponsor-swarm-ink: #000000;
-}
-
 /* Buttons on the landing page: pill, 44 px, never wrapping their label. */
 .land-btn {
   min-height: 44px;
@@ -78,14 +69,17 @@
   line-height: 1.1;
   font-weight: 800;
   letter-spacing: -0.025em;
+  text-wrap: balance;
 }
 
+/* About 70 characters a line, and no one-word last line. */
 .lsec-intro {
-  max-width: 38em;
-  margin: 0 0 var(--space-6);
+  max-width: 36em;
+  margin: 0 0 var(--space-7);
   font-size: 16px;
   line-height: 1.6;
   color: var(--text-muted);
+  text-wrap: pretty;
 }
 
 /* 1. Hero. */
@@ -122,6 +116,7 @@
 
 .hero-lead {
   max-width: 32em;
+  text-wrap: pretty;
   margin: 0 0 var(--space-6);
   font-size: 16px;
   line-height: 1.6;
@@ -202,6 +197,26 @@
   justify-content: center;
 }
 
+/* The card's place in the panel: the story shows a dashed outline (--slot-o) until the card lands
+   exactly on top of it (same box, same corners); otherwise the outline is never drawn. */
+.hero-slot {
+  position: relative;
+  min-width: 0;
+}
+
+.hero-slot::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 1.5px dashed var(--border-strong);
+  border-radius: var(--radius-2, 14px);
+  opacity: var(--slot-o, 0);
+}
+
+.hero-slot > .ccard {
+  position: relative;
+}
+
 /* The receipt is white paper in both themes, so its "passed" check uses the light theme's pass
    green (the dark theme's --pass is a pale mint made for text on dark, too faint under a white tick). */
 .hero.is-verified .hero-duo {
@@ -215,7 +230,7 @@
 .hero-duo {
   display: block;
   width: 100%;
-  max-width: 260px;
+  max-width: 280px;
   height: auto;
   overflow: visible;
 }
@@ -225,7 +240,7 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: var(--space-5);
-  align-items: start;
+  align-items: stretch;
 }
 
 .try-left {
@@ -239,8 +254,10 @@
   height: auto;
 }
 
+/* The action sits at the bottom, level with the last check row. */
 .try-action {
   display: flex;
+  margin-top: auto;
 }
 
 .try-right {
@@ -250,8 +267,26 @@
   min-width: 0;
 }
 
-.try-right .verdict {
+.try-left .verdict {
   max-width: none;
+}
+
+/* Where the verdict lands: dashed until the checks have run (never a colour before a result). */
+.try-slot {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  margin: 0;
+  padding: var(--space-4);
+  border: 1.5px dashed var(--border-strong);
+  border-radius: var(--radius-2, 14px);
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.try-slot > svg {
+  flex: none;
 }
 
 .try-checks {
@@ -411,7 +446,11 @@
 }
 
 .landing .lib-preview-head {
-  margin-bottom: var(--space-6);
+  margin-bottom: var(--space-7);
+}
+
+.landing .lib-preview .lib-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
 }
 
 .landing .lib-preview .section-title {
@@ -421,13 +460,16 @@
   line-height: 1.1;
   font-weight: 800;
   letter-spacing: -0.025em;
+  text-wrap: balance;
 }
 
 .landing .lib-preview-head p {
-  max-width: 38em;
+  max-width: 36em;
   margin: 0;
   font-size: 16px;
   line-height: 1.6;
+  color: var(--text-muted);
+  text-wrap: pretty;
 }
 
 .landing .lib-preview-head .btn {
@@ -454,67 +496,19 @@
 .sp-card {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--space-4);
   min-width: 0;
-  padding: var(--space-4);
+  padding: var(--space-5);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-2, 14px);
 }
 
-.sp-who {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.sp-mark {
-  flex: none;
-  display: grid;
-  place-items: center;
-  width: 40px;
-  height: 40px;
-  border-radius: var(--radius-1);
-  font-family: var(--font-display);
-  font-weight: 800;
-  font-size: 18px;
-  color: var(--sponsor-ink);
-}
-
-.sp-mark-ef {
-  background: var(--sponsor-ef);
-}
-
-.sp-mark-arkiv {
-  background: var(--sponsor-arkiv);
-}
-
-.sp-mark-swarm {
-  background: var(--sponsor-swarm);
-  color: var(--sponsor-swarm-ink);
-}
-
-.sp-name {
-  margin: 0;
-  font-family: var(--font-sans);
-  font-size: 16px;
-  line-height: 22px;
-  font-weight: 700;
-  letter-spacing: 0;
-}
-
-.sp-prize {
-  margin: 0;
-  font-size: 12px;
-  line-height: 16px;
-  color: var(--text-muted);
-}
-
 .sp-line {
   margin: 0;
-  font-size: 14px;
-  line-height: 1.55;
-  color: var(--text-muted);
+  font-size: 15px;
+  line-height: 24px;
+  text-wrap: pretty;
 }
 
 .sp-rows {
@@ -641,6 +635,50 @@
   .inst-grid {
     grid-template-columns: minmax(0, 1fr);
   }
+
+  /* Stacked, the list follows the card at once: the verdict appears when it exists. */
+  .try-slot {
+    display: none;
+  }
+}
+
+/* Tablet: the hero panel is wide, so the duo and the card sit side by side under the rail. */
+@media (min-width: 561px) and (max-width: 900px) {
+  .hero-panel {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: center;
+  }
+
+  .hero-rail {
+    grid-column: 1 / -1;
+  }
+
+  /* One sponsor per row: the logo and sentence on the left, the rows on the right. */
+  .sp-card {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
+    grid-template-areas: 'who rows' 'line rows' 'link rows';
+    grid-template-rows: auto auto 1fr;
+    column-gap: var(--space-6);
+  }
+
+  .sp-who {
+    grid-area: who;
+  }
+
+  .sp-line {
+    grid-area: line;
+  }
+
+  .sp-rows {
+    grid-area: rows;
+  }
+
+  .sp-link {
+    grid-area: link;
+    align-self: end;
+  }
 }
 
 /* Phone. */
@@ -671,9 +709,13 @@
     padding: var(--space-4);
   }
 
-  .hero-rail {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    row-gap: var(--space-3);
+  .lsec-intro,
+  .landing .lib-preview-head {
+    margin-bottom: var(--space-6);
+  }
+
+  .sp-card {
+    padding: var(--space-4);
   }
 
   .try-action .land-btn,
