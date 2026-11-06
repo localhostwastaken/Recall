@@ -1,7 +1,8 @@
 import { http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { describe, expect, it } from 'vitest';
-import { KEEPALIVE_WALLET_KEY, OTHER_WALLET_KEY } from '../../../e2e/fixtures/keys';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { ensureArkivGas } from '../../../e2e/fixtures/fund';
+import { NET_TEST_KEY_A, NET_TEST_KEY_B } from '../../../e2e/fixtures/keys';
 import {
   LOCAL,
   MAX_LIFETIME_BLOCKS,
@@ -55,9 +56,15 @@ describe('planExtension', () => {
 });
 
 describe('extendEntities on the local Arkiv chain', () => {
-  const account = privateKeyToAccount(KEEPALIVE_WALLET_KEY);
+  const account = privateKeyToAccount(NET_TEST_KEY_A);
   const pub = arkivPublic(LOCAL);
   const w = arkivWallet(LOCAL, http(LOCAL.arkiv.rpcUrl), account);
+
+  // Accounts #10 and #11 are not prefunded: gas comes from the dev key, with a fresh nonce each time.
+  beforeAll(async () => {
+    await ensureArkivGas(account.address);
+    await ensureArkivGas(privateKeyToAccount(NET_TEST_KEY_B).address);
+  });
 
   async function made(): Promise<`0x${string}`> {
     const { entityKey } = await writeWitnessProfile(w, { witness: account.address, url: `https://keepalive.test/${Math.random()}` });
@@ -86,7 +93,7 @@ describe('extendEntities on the local Arkiv chain', () => {
   it('a second wallet can extend (permissionless) and a repeat adds again, not "7 days from now"', async () => {
     const a = await made();
     const a0 = await expiry(a);
-    const other = arkivWallet(LOCAL, http(LOCAL.arkiv.rpcUrl), privateKeyToAccount(OTHER_WALLET_KEY));
+    const other = arkivWallet(LOCAL, http(LOCAL.arkiv.rpcUrl), privateKeyToAccount(NET_TEST_KEY_B));
     await extendEntities(other, pub, [a], 7);
     await extendEntities(w, pub, [a], 7);
     expect(await expiry(a)).toBe(a0 + 2n * blocksForDays(7));

@@ -1,4 +1,5 @@
 import {
+  BatchChangedError,
   XBZZ,
   arkivPublic,
   arkivWallet,
@@ -11,10 +12,12 @@ import {
   topUp,
   topUpCost,
   type ArkivExpiry,
+  type BatchChange,
   type NetConfig,
 } from '@recall/net';
 import { createPublicClient, custom, erc20Abi, http, type Account, type Hex, type PublicClient } from 'viem';
 import { classifyBatch, type BatchVerdict } from './batch';
+import { settle, type Settled } from './settle';
 import {
   connectWallet,
   chainFor,
@@ -67,7 +70,9 @@ export type SwarmQuote =
   | {
       kind: 'ok';
       depth: number;
-      /** xBZZ (16 decimals) the top-up costs, rounded up by the caller for display. */
+      /** xBZZ (16 decimals) per chunk of the top-up; `total` is this times 2^depth. */
+      perChunk: bigint;
+      /** xBZZ (16 decimals) the top-up costs, rounded up by the caller for display. It is also the most a payment may cost. */
       total: bigint;
       /** The Gnosis fee for step 1, in xDAI wei. */
       fee: bigint;
@@ -77,7 +82,9 @@ export type SwarmQuote =
     }
   /** The record's batch id names no batch on Gnosis, or one of a size Recall never creates: step 1 is off. */
   | { kind: 'missing' }
-  | { kind: 'unsupported'; depth: number };
+  | Extract<BatchVerdict, { kind: 'unsupported' }>
+  /** Gnosis could not be read (rate limit, no network): storage can't be priced now, but the record can still be extended. */
+  | { kind: 'unreadable' };
 
 export type Quote = {
   /** null for a capture on free storage. */
@@ -102,24 +109,30 @@ export async function readQuote(cfg: NetConfig, target: KeepAliveTarget, days: n
   const arkivReads = readArkivExpiry(arkivPublic(cfg), target.entityKeys);
   let swarm: SwarmQuote | null = null;
   if (!isFree(target)) {
-    const gnosis = gnosisClient(cfg);
-    const verdict = await readBatchVerdict(gnosis, target.batchId!);
-    if (verdict.kind !== 'ok') {
-      swarm = verdict;
-    } else {
-      const [cost, ttl, gasPrice] = await Promise.all([
-        topUpCost(gnosis, target.batchId!, days),
-        batchTtlSeconds(gnosis, target.batchId!),
-        gnosis.getGasPrice(),
-      ]);
-      swarm = {
-        kind: 'ok',
-        depth: verdict.depth,
-        total: cost.total,
-        fee: gasPrice * GAS_STEP_1,
-        endsAt: ttl === null ? null : secondsFromNow(Number(ttl) + days * 86_400),
-        expired: ttl === null,
-      };
+    // A Gnosis failure must not take the Arkiv step down with it: it only switches the storage step off.
+    try {
+      const gnosis = gnosisClient(cfg);
+      const verdict = await readBatchVerdict(gnosis, target.batchId!);
+      if (verdict.kind !== 'ok') {
+        swarm = verdict;
+      } else {
+        const [cost, ttl, gasPrice] = await Promise.all([
+          topUpCost(gnosis, target.batchId!, days),
+          batchTtlSeconds(gnosis, target.batchId!),
+          gnosis.getGasPrice(),
+        ]);
+        swarm = {
+          kind: 'ok',
+          depth: verdict.depth,
+          perChunk: cost.perChunk,
+          total: cost.total,
+          fee: gasPrice * GAS_STEP_1,
+          endsAt: ttl === null ? null : secondsFromNow(Number(ttl) + days * 86_400),
+          expired: ttl === null,
+        };
+      }
+    } catch {
+      swarm = { kind: 'unreadable' };
     }
   }
   const expiries = await arkivReads;
@@ -167,58 +180,173 @@ export function keptUntil(ends: Ends, free: boolean): Date | null {
 
 export type StepOneResult = { kind: 'done' } | { kind: 'short'; need: bigint } | { kind: 'no-batch'; unsupported: boolean };
 
+/** What step 1 was shown and agreed to: the payment may not exceed it. */
+export type TopUpPlan = { batchId: Hex; days: number; depth: number; maxTotal: bigint };
+
 /**
- * Step 1, on Gnosis: connect, switch network, check the xBZZ balance, then approve (only when the
- * allowance is short) and top the batch up. `onApproved` tells the caller the approval is mined,
- * so a later rejection can say so. Throws a wallet rejection or any failure as it is.
+ * Step 1, on Gnosis: connect, switch network, check the batch and the xBZZ balance, then approve
+ * (only when the allowance is short) and top the batch up. The payment is tied to the preview
+ * (`plan`): `topUp` reads the batch again before the approval and after it, and throws
+ * `BatchChangedError` if the batch, its depth or the price is no longer what was shown. `onApproved`
+ * and `onSent` report progress (see `topUp`). A wallet rejection or any failure is thrown as it is.
  */
 export async function stepTopUp(
   cfg: NetConfig,
-  batchId: Hex,
-  days: number,
-  onApproved: () => void,
+  plan: TopUpPlan,
+  hooks: { onApproved: () => void; onSent: (hash: Hex) => void },
 ): Promise<StepOneResult> {
   const { address } = await connectWallet();
   await ensureChain(100);
   const gnosis = gnosisClient(cfg);
   // Read again right before paying: a record's batch id is only a claim.
-  const verdict = await readBatchVerdict(gnosis, batchId);
+  const verdict = await readBatchVerdict(gnosis, plan.batchId);
   if (verdict.kind !== 'ok') return { kind: 'no-batch', unsupported: verdict.kind === 'unsupported' };
-  const { total } = await topUpCost(gnosis, batchId, days);
   const have = await gnosis.readContract({ address: XBZZ, abi: erc20Abi, functionName: 'balanceOf', args: [address] });
-  if (have < total) return { kind: 'short', need: total };
-  await topUp(walletFor(address, 100), batchId, days, { onApproved: onApproved });
+  if (have < plan.maxTotal) return { kind: 'short', need: plan.maxTotal };
+  await topUp(walletFor(address, 100), plan.batchId, plan.days, {
+    expectDepth: plan.depth,
+    maxTotal: plan.maxTotal,
+    onApproved: hooks.onApproved,
+    onSent: hooks.onSent,
+  });
   return { kind: 'done' };
 }
 
 /**
  * Step 2, on Arkiv: connect, switch network, then extend every record by `days` on top of its own
  * expiry, in one transaction. `sent` is false when every record was already at the chain maximum.
+ * `onSent` gets the transaction hash as soon as the wallet has sent it, before the receipt is
+ * awaited, so a failed wait can be settled by a retry (see `settleExtend`).
  */
-export async function stepExtend(cfg: NetConfig, entityKeys: Hex[], days: number): Promise<{ sent: boolean }> {
+export async function stepExtend(
+  cfg: NetConfig,
+  entityKeys: Hex[],
+  days: number,
+  hooks: { onSent: (hash: Hex) => void },
+): Promise<{ sent: boolean }> {
   const { address } = await connectWallet();
   await ensureChain(arkivChainId(cfg));
   const provider = getProvider();
   if (!provider) throw new WalletError('no-wallet', 'MetaMask not found. Install it, then reload this page.');
-  const w = arkivWallet(cfg, custom(provider), { address, type: 'json-rpc' } as unknown as Account);
+  const watched = custom({
+    async request(args: { method: string; params?: unknown }) {
+      const res = await provider.request(args);
+      if (args.method === 'eth_sendTransaction' && typeof res === 'string') hooks.onSent(res as Hex);
+      return res;
+    },
+  });
+  const w = arkivWallet(cfg, watched, { address, type: 'json-rpc' } as unknown as Account);
   const { txHash } = await extendEntities(w, arkivPublic(cfg), entityKeys, days);
   return { sent: txHash !== null };
+}
+
+// ---- Readings taken before a step, so a retry can tell whether the first try landed -------------
+
+export type SwarmBaseline = { normalisedBalance: bigint; endsAt: Date | null };
+
+/** The batch's balance and end date now, before step 1 is sent. Throws if the batch cannot be read. */
+export async function readSwarmBaseline(cfg: NetConfig, batchId: Hex): Promise<SwarmBaseline> {
+  const gnosis = gnosisClient(cfg);
+  const [batch, ttl] = await Promise.all([readBatch(gnosis, batchId), batchTtlSeconds(gnosis, batchId).catch(() => null)]);
+  if (!batch) throw new BatchChangedError(batchId, 'gone', 'no such batch');
+  return { normalisedBalance: batch.normalisedBalance, endsAt: ttl === null ? null : secondsFromNow(Number(ttl)) };
+}
+
+export type ArkivBaseline = { before: ArkivExpiry[]; endsAt: Date | null };
+
+/** The records' expiry blocks now, before step 2 is sent. Throws if they cannot be read. */
+export async function readArkivBaseline(cfg: NetConfig, entityKeys: Hex[]): Promise<ArkivBaseline> {
+  const before = await readArkivExpiry(arkivPublic(cfg), entityKeys);
+  return { before, endsAt: endsOf(before[0]!) };
+}
+
+// ---- Did the first try land? ---------------------------------------------------------------------
+
+type ReceiptReader = {
+  getTransactionReceipt(a: { hash: Hex }): Promise<{ status: 'success' | 'reverted' }>;
+  waitForTransactionReceipt(a: { hash: Hex; timeout: number }): Promise<{ status: 'success' | 'reverted' }>;
+};
+
+const receiptIo = (pub: ReceiptReader) => ({
+  receipt: async (hash: Hex) => {
+    try {
+      return (await pub.getTransactionReceipt({ hash })).status;
+    } catch (e) {
+      if ((e as { name?: string }).name === 'TransactionReceiptNotFoundError') return 'absent' as const;
+      throw e;
+    }
+  },
+  wait: async (hash: Hex, ms: number) => {
+    try {
+      return (await pub.waitForTransactionReceipt({ hash, timeout: ms })).status;
+    } catch (e) {
+      if ((e as { name?: string }).name === 'WaitForTransactionReceiptTimeoutError') return 'timeout' as const;
+      throw e;
+    }
+  },
+});
+
+/**
+ * Whether an earlier step-1 try went through: its receipt on Gnosis if there is a hash, else (or
+ * on top of it) whether the batch's balance is above the reading taken before the step. Anyone's
+ * top-up raises it, which is harmless: the storage was extended either way.
+ */
+export function settleTopUp(cfg: NetConfig, batchId: Hex, a: { hash?: Hex; baseNormalised: bigint }): Promise<Settled> {
+  const gnosis = gnosisClient(cfg);
+  return settle({
+    hash: a.hash,
+    ...receiptIo(gnosis as unknown as ReceiptReader),
+    moved: async () => {
+      const batch = await readBatch(gnosis, batchId);
+      if (!batch) throw new Error('the batch is gone');
+      return batch.normalisedBalance > a.baseNormalised;
+    },
+  });
+}
+
+/** Whether an earlier step-2 try went through: its receipt on Arkiv, or any record's expiry above the reading before the step. */
+export function settleExtend(cfg: NetConfig, a: { hash?: Hex; before: ArkivExpiry[] }): Promise<Settled> {
+  const pub = arkivPublic(cfg);
+  return settle({
+    hash: a.hash,
+    ...receiptIo(pub as unknown as ReceiptReader),
+    moved: async () => {
+      const now = await readArkivExpiry(pub, a.before.map((b) => b.entityKey));
+      return now.some((n, i) => n.expiresAtBlock > a.before[i]!.expiresAtBlock);
+    },
+  });
 }
 
 export type Problem =
   | { kind: 'no-wallet' }
   | { kind: 'no-batch'; unsupported: boolean }
   | { kind: 'short'; need: bigint }
+  /** The batch, its depth or its price is no longer what the preview showed; nothing was sent. */
+  | { kind: 'changed'; reason: BatchChange }
+  /** An earlier try was sent and the chain could not say whether it landed, so it was not sent again. */
+  | { kind: 'unsettled' }
   | { kind: 'cancelled'; approved: boolean }
-  | { kind: 'failed'; message: string; technical: string; approved: boolean };
+  /** `sent`: the transaction left the wallet, so it may have gone through despite the error. */
+  | { kind: 'failed'; message: string; technical: string; approved: boolean; sent: boolean };
 
 const firstLine = (s: string) => s.split('\n')[0]!.trim();
 
-/** Sorts a thrown error into what the dialog says about it. `approved`: step 1's approval was already mined. */
-export function problemOf(err: unknown, approved: boolean): Problem {
+/**
+ * Sorts a thrown error into what the dialog says about it. `approved`: step 1's approval was
+ * already mined. `sent`: the paid transaction of the step was sent (so a failure is not proof it
+ * did not happen).
+ */
+export function problemOf(err: unknown, flags: { approved: boolean; sent: boolean }): Problem {
   if (err instanceof WalletError && err.kind === 'no-wallet') return { kind: 'no-wallet' };
-  if (isUserRejection(err)) return { kind: 'cancelled', approved };
+  if (err instanceof BatchChangedError) return { kind: 'changed', reason: err.reason };
+  if (isUserRejection(err)) return { kind: 'cancelled', approved: flags.approved };
   const e = err as { shortMessage?: string; message?: string };
   const technical = err instanceof Error ? err.message : String(err);
-  return { kind: 'failed', message: firstLine(e.shortMessage ?? e.message ?? 'Something went wrong'), technical, approved };
+  return {
+    kind: 'failed',
+    message: firstLine(e.shortMessage ?? e.message ?? 'Something went wrong'),
+    technical,
+    approved: flags.approved,
+    sent: flags.sent,
+  };
 }

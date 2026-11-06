@@ -6,9 +6,12 @@ import { formatDay, formatUtc } from '../format';
 import { getNetConfig } from '../net';
 import { MonoValue } from '../ui/MonoValue';
 import { Notice } from '../ui/Notice';
+import { buildTimeline } from '../timeline/model';
+import { useTimeline } from '../timeline/useTimeline';
 import { VerdictLine, TechnicalDetails } from '../verify/CheckPanel';
 import { useVerifiedCapture, verifyRecordEvidence } from '../verify/useVerifiedCapture';
 import { isVerifiedReport, verdictOf, type VerifiedReport } from '../verify/verify';
+import type { VerifiedFacts } from '@recall/evidence';
 
 type Row = {
   captureKey: Hex;
@@ -91,6 +94,23 @@ export function ConfirmationRecord({ entityKey, fallback }: { entityKey: Hex; fa
   return <ConfirmationView entityKey={entityKey} row={load.row} />;
 }
 
+const lower = (h: string) => h.toLowerCase();
+/** The same witness signing the same bytes of the same address at the same second. */
+const sameObservation = (a: VerifiedFacts, b: VerifiedFacts): boolean =>
+  lower(a.urlHash) === lower(b.urlHash) &&
+  lower(a.witness) === lower(b.witness) &&
+  a.signedAt === b.signedAt &&
+  lower(a.bodySha256) === lower(b.bodySha256);
+
+/** Where the timeline's own rules put this confirmation. */
+type Placement =
+  | { kind: 'checking' }
+  | { kind: 'placed' }
+  | { kind: 'rejected'; reason: string }
+  | { kind: 'not-checked' }
+  | { kind: 'absent' }
+  | { kind: 'unreadable' };
+
 function ConfirmationView({ entityKey, row }: { entityKey: Hex; row: Row }) {
   const cfg = useMemo(getNetConfig, []);
   const parent = useVerifiedCapture(row.captureKey);
@@ -119,25 +139,68 @@ function ConfirmationView({ entityKey, row }: { entityKey: Hex; row: Row }) {
     void readOwn();
   }, [readOwn]);
 
-  // "Still unchanged" needs both records to have passed A to C, to be about the same address and
-  // the same bytes, and the confirmation to come after the capture (the timeline's rules).
+  // "Still unchanged" is the timeline's claim, so it is the timeline's rules that decide it: the
+  // address's records are listed and checked, and this confirmation counts only if the timeline
+  // puts it under the capture it names (same bytes, signed AFTER that capture, and before any newer
+  // version). Equal times, other bytes and a dated-after-a-newer-version record are all refused there.
+  const t = useTimeline(row.urlHash);
+  const tl = useMemo(
+    () => buildTimeline(t.rows, t.checked, t.notStarted),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [t.rows, t.version, t.notStarted],
+  );
   const parentFacts = parent.facts;
   const ownFacts = own?.facts ?? null;
-  const confirms =
-    isVerifiedReport(own) &&
-    isVerifiedReport(parent.report) &&
-    !!parent.record &&
-    !!ownFacts &&
-    !!parentFacts &&
-    ownFacts.urlHash.toLowerCase() === parentFacts.urlHash.toLowerCase() &&
-    ownFacts.bodySha256.toLowerCase() === parentFacts.bodySha256.toLowerCase() &&
-    ownFacts.signedAt >= parentFacts.signedAt;
+  const placement = useMemo((): Placement => {
+    if (t.phase === 'loading') return { kind: 'checking' };
+    if (t.phase === 'error') return { kind: 'unreadable' };
+    const mine = lower(entityKey);
+    const underParent = tl.versions.some(
+      (v) =>
+        (lower(v.entityKey) === lower(row.captureKey) || (!!parentFacts && sameObservation(v.facts, parentFacts))) &&
+        v.confirmations.some((c) => lower(c.entityKey) === mine || (!!ownFacts && sameObservation(c.facts, ownFacts))),
+    );
+    if (underParent) return { kind: 'placed' };
+    const refused = tl.unverified.find((u) => lower(u.entityKey) === mine);
+    if (refused) return { kind: 'rejected', reason: refused.reason };
+    if (tl.pending.some((p) => lower(p.entityKey) === mine)) return { kind: 'checking' };
+    if (tl.unchecked.some((p) => lower(p.entityKey) === mine)) return { kind: 'not-checked' };
+    return { kind: 'absent' };
+  }, [t.phase, tl, entityKey, row.captureKey, parentFacts, ownFacts]);
 
-  const settled = own !== null && (parent.phase !== 'loading' && parent.report !== null);
+  const confirms =
+    isVerifiedReport(own) && isVerifiedReport(parent.report) && !!parent.record && placement.kind === 'placed';
+
   const verdict = verdictOf(own);
   const refresh = useCallback(async () => {
     await Promise.all([parent.refreshStorage(), readOwn()]);
   }, [parent.refreshStorage, readOwn]);
+
+  // Why there is no keep-alive, once that is known (and "checking" while it is not).
+  const parentDone = parent.phase !== 'loading' && (parent.phase !== 'ready' || parent.report !== null);
+  const waiting = own === null || !parentDone || placement.kind === 'checking';
+  const why = ((): ReactNode => {
+    if (confirms) return null;
+    if (waiting) return 'Checking this confirmation and the capture it names…';
+    if (parent.phase === 'missing') {
+      return "The capture it confirms isn't on Arkiv (it may have expired or never existed), so there is nothing here to keep alive. If you have its evidence file, drop it on the home page.";
+    }
+    if (parent.phase === 'not-capture') return "The record it names isn't a Recall capture, so there is nothing here to keep alive.";
+    if (parent.phase === 'error') {
+      return (
+        <>
+          Couldn&apos;t read the capture it confirms from Arkiv.{' '}
+          <button type="button" className="link-btn" onClick={parent.retry}>
+            Try again
+          </button>
+        </>
+      );
+    }
+    if (placement.kind === 'rejected') return `Not counted as a confirmation: ${placement.reason}.`;
+    if (placement.kind === 'not-checked') return "This address has many records and this one hasn't been checked yet. Open its timeline to check more.";
+    if (placement.kind === 'unreadable') return "Couldn't list the records of this address, so this confirmation could not be placed. Try again in a moment.";
+    return 'Keep-alive is offered only for a confirmation that passed checks A to C and that the timeline counts under a capture that passed them too.';
+  })();
 
   return (
     <>
@@ -162,7 +225,11 @@ function ConfirmationView({ entityKey, row }: { entityKey: Hex; row: Row }) {
         </p>
         <p>
           The capture it confirms:{' '}
-          {parent.storage.phase === 'pending' ? 'checking…' : parent.storage.check.detail}{' '}
+          {parent.phase === 'missing' || parent.phase === 'not-capture'
+            ? 'not found'
+            : parent.storage.phase === 'pending'
+              ? 'checking…'
+              : parent.storage.check.detail}{' '}
           {parent.record ? <MonoValue value={parent.record.batchId} /> : null}
         </p>
       </section>
@@ -175,12 +242,11 @@ function ConfirmationView({ entityKey, row }: { entityKey: Hex; row: Row }) {
           />
         ) : null}
       </div>
-      {settled && !confirms ? (
-        <p className="ka-hint">
-          Keep-alive is offered only for a confirmation that passed checks A to C and belongs to a capture that passed them too.
+      {why ? (
+        <p className="ka-hint" role="status">
+          {why}
         </p>
       ) : null}
     </>
   );
 }
-

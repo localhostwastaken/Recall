@@ -28,3 +28,14 @@ export const KEEPALIVE_WALLET_ADDRESS = '0x14dC79964da2C08b23698B3D3cc7Ca32193d9
 export const OTHER_WALLET_KEY =
   '0xdbda1821b80551c9d65939329250298aa3472ba22feea921c0cf5d620ea67b97' as const; // account #8
 export const OTHER_WALLET_ADDRESS = '0x23618e81E3f5cdF7f54C3d65f7FBc0aBf5B21E8f' as const;
+
+// Wallets of the @recall/net unit tests that use the devnet (postage and Arkiv extensions):
+// Hardhat accounts #10 and #11 of the public "test test ... junk" mnemonic. Public and
+// devnet-only. They are not prefunded; the tests fund them in setup (fixtures/fund.ts). They are
+// separate from #7 and #8 (the keep-alive e2e spec), so unit and e2e runs never share a nonce.
+export const NET_TEST_KEY_A =
+  '0xf214f2b2cd398c806f84e317254e0f0b801d0643303237d97a22a48e01628897' as const; // account #10
+export const NET_TEST_ADDRESS_A = '0xBcd4042DE499D14e55001CcbB24a551F3b954096' as const;
+export const NET_TEST_KEY_B =
+  '0x701b615bbdfb9de65240bc28bd21bbc0d996645a3dd57e7b12bc2bdf6f192c82' as const; // account #11
+export const NET_TEST_ADDRESS_B = '0x71bE63f3384f5fb98995898A86B02Fb2426c5788' as const;

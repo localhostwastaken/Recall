@@ -138,34 +138,92 @@ export async function topUpCost(
   return { perChunk, depth: batch.depth, total: perChunk * 2n ** BigInt(batch.depth) };
 }
 
+/** Why a top-up was stopped before it could cost more than the person was shown. */
+export type BatchChange = 'gone' | 'depth' | 'price';
+
+/**
+ * The batch or its price is not what the person agreed to pay for: the batch is gone, its depth
+ * is not the one that was priced, or the top-up would cost more than the quoted maximum (or more
+ * than the xBZZ approved for it). Thrown before the top-up is sent; a caller re-quotes and asks again.
+ */
+export class BatchChangedError extends Error {
+  constructor(
+    readonly batchId: Hex,
+    readonly reason: BatchChange,
+    detail: string,
+  ) {
+    super(`batch ${batchId} changed: ${detail}`);
+    this.name = 'BatchChangedError';
+  }
+}
+
 /**
  * Permissionless: anyone may extend any batch. Approves the xBZZ first only when the wallet's
  * allowance for the postage contract is short, so a second top-up is one wallet prompt.
+ *
+ * The payment is tied to what the person was shown: `expectDepth` and `maxTotal` (xBZZ, 16
+ * decimals) come from the preview. The batch is read before the approval, and again after the
+ * approval is mined (a wallet prompt can sit for minutes), and the top-up is only sent when the
+ * batch still exists at that depth and `perChunk * 2^depth` is within `maxTotal` and within the
+ * wallet's allowance; otherwise it throws `BatchChangedError` and nothing more is spent. Without
+ * them, the first reading is the limit. An existing allowance never raises the cap.
+ *
  * `onApproved` fires once the approval is mined (before the top-up prompt), so a caller can tell
- * a rejection of the approval from a rejection of the top-up.
+ * a rejection of the approval from a rejection of the top-up. `onSent` fires as soon as the
+ * top-up transaction exists, before its receipt is awaited: if that wait fails, the hash is how
+ * a retry finds out whether it landed.
  */
 export async function topUp(
   wallet: WalletClient,
   batchId: Hex,
   days: number,
-  opts: { onApproved?: (approveHash: Hex) => void } = {},
+  opts: {
+    expectDepth?: number;
+    maxTotal?: bigint;
+    onApproved?: (approveHash: Hex) => void;
+    onSent?: (topUpHash: Hex) => void;
+  } = {},
 ): Promise<Hex> {
   const { account, chain } = requireAccount(wallet);
   const pub = publicFrom(wallet);
-  const { perChunk, total } = await topUpCost(pub, batchId, days);
-  const allowance = await pub.readContract({
-    address: XBZZ, abi: erc20Abi, functionName: 'allowance', args: [account.address, POSTAGE_STAMP],
-  });
-  if (allowance < total) {
+
+  let depthLimit = opts.expectDepth;
+  let totalLimit = opts.maxTotal;
+  /** Reads the batch and the price now; throws BatchChangedError when it is no longer what was agreed. */
+  const verify = async (): Promise<{ perChunk: bigint; total: bigint }> => {
+    const batch = await readBatch(pub, batchId);
+    if (!batch) throw new BatchChangedError(batchId, 'gone', 'no such batch');
+    depthLimit ??= batch.depth;
+    if (batch.depth !== depthLimit) {
+      throw new BatchChangedError(batchId, 'depth', `depth is ${batch.depth}, was ${depthLimit}`);
+    }
+    const perChunk = await perChunkFor(pub, days);
+    const total = perChunk * 2n ** BigInt(batch.depth);
+    totalLimit ??= total;
+    if (total > totalLimit) throw new BatchChangedError(batchId, 'price', `${total} is more than the agreed ${totalLimit}`);
+    return { perChunk, total };
+  };
+
+  let { perChunk, total } = await verify();
+  const allowance = () =>
+    pub.readContract({ address: XBZZ, abi: erc20Abi, functionName: 'allowance', args: [account.address, POSTAGE_STAMP] });
+  if ((await allowance()) < total) {
     const approveHash = await wallet.writeContract({
       account, chain, address: XBZZ, abi: erc20Abi, functionName: 'approve', args: [POSTAGE_STAMP, total],
     });
     await pub.waitForTransactionReceipt({ hash: approveHash });
     opts.onApproved?.(approveHash);
+    // Time has passed (a wallet prompt, a block or two): look again before the money moves.
+    ({ perChunk, total } = await verify());
+    const approved = await allowance();
+    if (approved < total) {
+      throw new BatchChangedError(batchId, 'price', `${total} is more than the ${approved} approved`);
+    }
   }
   const hash = await wallet.writeContract({
     account, chain, address: POSTAGE_STAMP, abi: postageAbi, functionName: 'topUp', args: [batchId, perChunk],
   });
+  opts.onSent?.(hash);
   const receipt = await pub.waitForTransactionReceipt({ hash });
   if (receipt.status !== 'success') throw new Error('topUp reverted');
   return hash;

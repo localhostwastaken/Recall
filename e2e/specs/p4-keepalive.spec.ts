@@ -6,6 +6,7 @@ import {
   erc20Abi,
   formatUnits,
   http,
+  parseAbi,
   sha256,
   toFunctionSelector,
   type Hex,
@@ -14,6 +15,7 @@ import { generatePrivateKey, mnemonicToAccount, privateKeyToAccount } from 'viem
 import { gnosis } from 'viem/chains';
 import { canonicalUrl, encodeEvidence } from '../../packages/evidence/src/index';
 import {
+  BUCKET_DEPTH,
   FREE_BATCH_ID,
   LOCAL,
   POSTAGE_STAMP,
@@ -34,7 +36,7 @@ import {
 } from '../fixtures/keys';
 import { allowLocalArkiv } from '../fixtures/localCors';
 import { installMockWallet } from '../fixtures/mockWallet';
-import { NOTICE_HOST, Rig, record, signEvidence, type Published } from '../fixtures/verifyRig';
+import { NOTICE_HOST, Rig, record, requestBytes, signEvidence, type Published } from '../fixtures/verifyRig';
 
 // Keep-alive and offline verification in the web app (apps/web on :5173), against the REAL local
 // devnet (Arkiv :8545, Bee :1633/:1643, Gnosis fork :9545, notice fixture :443). Fixtures are built
@@ -144,6 +146,66 @@ async function setAllowance(key: Hex, amount: bigint): Promise<void> {
   await gnosisPub.waitForTransactionReceipt({
     hash: await wallet.writeContract({ address: XBZZ, abi: erc20Abi, functionName: 'approve', args: [POSTAGE_STAMP, amount] }),
   });
+}
+
+/**
+ * Wraps `window.ethereum.request` in the page so a test can make the wallet's chain reads misbehave:
+ * the price rise after the n-th transaction was sent (a slow MetaMask prompt), or every receipt read
+ * fail once a transaction has been sent (the wait that "never came back"). The mock wallet itself is
+ * untouched. Set the knobs with `setTweaks`.
+ */
+async function tweakProvider(page: Page): Promise<void> {
+  await page.evaluate(
+    ({ stamp, lastPrice }) => {
+      const w = window as unknown as { ethereum: any; __tweaks: any };
+      const p = w.ethereum;
+      if (p.__tweaked) return;
+      p.__tweaked = true;
+      w.__tweaks = { sends: 0, priceMul: 1, priceAfterSends: 0, failReceipts: false };
+      const orig = p.request.bind(p);
+      p.request = async (a: any) => {
+        const t = w.__tweaks;
+        if (a.method === 'eth_getTransactionReceipt' && t.failReceipts && t.sends > 0) {
+          throw Object.assign(new Error('simulated RPC failure while waiting for the receipt'), { code: -32602 });
+        }
+        const r = await orig(a);
+        if (a.method === 'eth_sendTransaction') t.sends++;
+        if (a.method === 'eth_call' && t.priceMul > 1 && t.sends >= t.priceAfterSends) {
+          const c = (a.params || [])[0] || {};
+          if (String(c.to).toLowerCase() === stamp && String(c.data ?? c.input ?? '').startsWith(lastPrice)) {
+            return '0x' + (BigInt(r) * BigInt(t.priceMul)).toString(16).padStart(64, '0');
+          }
+        }
+        return r;
+      };
+    },
+    { stamp: POSTAGE_STAMP.toLowerCase(), lastPrice: toFunctionSelector('lastPrice()') },
+  );
+}
+const setTweaks = (page: Page, t: { sends?: number; priceMul?: number; priceAfterSends?: number; failReceipts?: boolean }) =>
+  page.evaluate((x) => Object.assign((window as unknown as { __tweaks: object }).__tweaks, x), t);
+
+/** Buys a MUTABLE batch (Recall's own buyBatch never does): its owner could change its size later. */
+async function buyMutableBatch(): Promise<Hex> {
+  const account = privateKeyToAccount(KEEPALIVE_WALLET_KEY);
+  const wallet = createWalletClient({ account, chain: gnosisChain, transport: http(LOCAL.gnosis.rpcUrl) });
+  const abi = parseAbi([
+    'function createBatch(address _owner, uint256 _initialBalancePerChunk, uint8 _depth, uint8 _bucketDepth, bytes32 _nonce, bool _immutable) returns (bytes32)',
+    'function lastPrice() view returns (uint64)',
+    'event BatchCreated(bytes32 indexed batchId, uint256 totalAmount, uint256 normalisedBalance, address owner, uint8 depth, uint8 bucketDepth, bool immutableFlag)',
+  ]);
+  const price = await gnosisPub.readContract({ address: POSTAGE_STAMP, abi, functionName: 'lastPrice' });
+  const perChunk = BigInt(price) * 17_280n * 2n + 1n;
+  await gnosisPub.waitForTransactionReceipt({
+    hash: await wallet.writeContract({ address: XBZZ, abi: erc20Abi, functionName: 'approve', args: [POSTAGE_STAMP, perChunk * 2n ** 17n] }),
+  });
+  const receipt = await gnosisPub.waitForTransactionReceipt({
+    hash: await wallet.writeContract({
+      address: POSTAGE_STAMP, abi, functionName: 'createBatch',
+      args: [account.address, perChunk, 17, BUCKET_DEPTH, generatePrivateKey(), false],
+    }),
+  });
+  return receipt.logs.find((l) => l.address.toLowerCase() === POSTAGE_STAMP.toLowerCase())!.topics[1] as Hex;
 }
 
 test('@p4 keepalive increases the batch TTL and the Arkiv expiry', async ({ page }) => {
@@ -320,8 +382,13 @@ test('@p4 keepalive a rejection at step 2 keeps the storage extension and Retry 
   expect((await swarmSeconds(c.batchId)) - ttlBefore).toBeGreaterThan(7 * DAY - 3600);
   expect(await arkivBlock(c.entityKey)).toBe(blockBefore); // the record was not extended
 
-  // Check E on the page reflects the chains: storage extended, record not (read, not assumed).
+  // Closing and reopening the dialog keeps the confirmed step 1 and the partial state: step 2 can run alone.
   await expect(dialog.getByRole('button', { name: 'Retry step 2' })).toBeVisible();
+  await dialog.getByRole('button', { name: 'Close' }).click();
+  await expect(dialog).toBeHidden();
+  await page.getByRole('button', { name: 'Keep alive…' }).click();
+  await expect(partial).toBeVisible();
+  await expect(dialog.locator('.steps-list li.step-done')).toHaveCount(1);
   await dialog.getByRole('button', { name: 'Retry step 2' }).click();
   await expect(dialog.getByText(/^Kept alive until \d+ \w+ \d{4}\.$/)).toBeVisible({ timeout: 60_000 });
   expect((await arkivBlock(c.entityKey)) - blockBefore).toBe(blocksForDays(7));
@@ -379,6 +446,8 @@ test('@p4 keepalive a confirmation tops up its parent batch and extends both rec
   await page.goto(`${APP}/#/c/${confirmationKey}`);
   await expect(page.getByRole('heading', { level: 1, name: /Confirmation/ })).toBeVisible();
   await expect(page.getByRole('link', { name: /capture it confirms/i })).toHaveAttribute('href', `#/c/${parent.entityKey}`);
+  // The timeline's own rules count it under the capture it names.
+  await expect(page.getByText(/^Still unchanged on /)).toBeVisible({ timeout: 60_000 });
   await page.getByRole('button', { name: 'Keep alive…' }).click();
   const dialog = page.getByRole('dialog', { name: 'Keep this confirmation available' });
   await expect(start(dialog)).toBeEnabled({ timeout: 30_000 });
@@ -413,7 +482,10 @@ test('@p4 keepalive a capture on free gateway storage gets step 2 only', async (
   const gnosisN = await gnosisNonce(KEEPALIVE_WALLET_ADDRESS);
   await expect(dialog.getByRole('button', { name: 'Start: step 1 of 1' })).toBeEnabled({ timeout: 30_000 });
   await dialog.getByRole('button', { name: 'Start: step 1 of 1' }).click();
-  await expect(dialog.getByText(/^Kept alive until \d+ \w+ \d{4}\.$/)).toBeVisible({ timeout: 60_000 });
+  // Only the record was extended, and the page says only that.
+  await expect(dialog.getByText(/^Record kept until \d+ \w+ \d{4}\.$/)).toBeVisible({ timeout: 60_000 });
+  await expect(dialog.getByText(/Kept alive until/)).toHaveCount(0);
+  await expect(dialog).not.toContainText('only the storage');
   expect((await arkivBlock(free.entityKey)) - blockBefore).toBe(blocksForDays(7));
   expect(await gnosisNonce(KEEPALIVE_WALLET_ADDRESS)).toBe(gnosisN); // nothing on Gnosis
 });
@@ -439,9 +511,254 @@ test('@p4 keepalive a record that names a batch that does not exist offers step 
   const gnosisN = await gnosisNonce(KEEPALIVE_WALLET_ADDRESS);
   await expect(dialog.getByRole('button', { name: 'Start: step 1 of 1' })).toBeEnabled();
   await dialog.getByRole('button', { name: 'Start: step 1 of 1' }).click();
-  await expect(dialog.getByText(/^Kept alive until \d+ \w+ \d{4}\.$/)).toBeVisible({ timeout: 60_000 });
+  await expect(dialog.getByText(/^Record kept until \d+ \w+ \d{4}\.$/)).toBeVisible({ timeout: 60_000 });
   expect((await arkivBlock(crafted.entityKey)) - blockBefore).toBe(blocksForDays(7));
   expect(await gnosisNonce(KEEPALIVE_WALLET_ADDRESS)).toBe(gnosisN); // nothing was sent on Gnosis
+});
+
+test('@p4 keepalive a mutable batch is refused: step 2 only', async ({ page }) => {
+  test.setTimeout(180_000);
+  // Its owner could raise its depth (and so the price) between the preview and the payment.
+  const mutable = await rig.publish({ entity: { batchId: await buyMutableBatch() } });
+  await withWallet(page);
+  await page.goto(`${APP}/#/c/${mutable.entityKey}`);
+  await expect(verdict(page)).toHaveAttribute('data-verdict', 'pass');
+  await page.getByRole('button', { name: 'Keep alive…' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Keep this capture available' });
+  await expect(dialog.getByText("This capture's storage batch isn't one Recall created. Storage can't be extended.")).toBeVisible({ timeout: 30_000 });
+  await expect(dialog.locator('.steps-list li')).toHaveCount(1);
+  await expect(dialog).not.toContainText('Top up storage');
+  await expect(dialog.getByText(/^Storage batch:/)).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: 'Start: step 1 of 1' })).toBeEnabled();
+});
+
+test('@p4 keepalive a price above the preview sends nothing, even with an allowance already in place', async ({ page }) => {
+  test.setTimeout(240_000);
+  const c = await rig.publish();
+  await withWallet(page);
+  await setAllowance(KEEPALIVE_WALLET_KEY, bzz(1)); // plenty: no approval step stands in the way
+  const dialog = await openDialog(page, c.entityKey);
+  await tweakProvider(page);
+  await setTweaks(page, { priceMul: 3 }); // the wallet's reads see a tripled price from the start
+  const [n0, b0, t0] = [await gnosisNonce(KEEPALIVE_WALLET_ADDRESS), await xbzzOf(KEEPALIVE_WALLET_ADDRESS), await swarmSeconds(c.batchId)];
+
+  await start(dialog).click();
+  await expect(dialog.getByText('The storage price changed.')).toBeVisible({ timeout: 60_000 });
+  await expect(dialog).toContainText('nothing was sent for the top-up');
+  expect(await gnosisNonce(KEEPALIVE_WALLET_ADDRESS)).toBe(n0);
+  expect(await xbzzOf(KEEPALIVE_WALLET_ADDRESS)).toBe(b0);
+  expect(await swarmSeconds(c.batchId)).toBeLessThanOrEqual(t0);
+
+  // The dialog priced it again; with the price back to what was shown, it goes through.
+  await setTweaks(page, { priceMul: 1 });
+  await expect(start(dialog)).toBeEnabled({ timeout: 30_000 });
+  await start(dialog).click();
+  await expect(dialog.getByRole('button', { name: 'Continue: step 2 of 2' })).toBeVisible({ timeout: 90_000 });
+  expect((await swarmSeconds(c.batchId)) - t0).toBeGreaterThan(7 * DAY - 3600);
+  expect(await gnosisNonce(KEEPALIVE_WALLET_ADDRESS)).toBe(n0 + 1);
+});
+
+test('@p4 keepalive a price rise while the approval is mined is caught before the top-up', async ({ page }) => {
+  test.setTimeout(240_000);
+  const c = await rig.publish();
+  await withWallet(page);
+  await setAllowance(KEEPALIVE_WALLET_KEY, 0n); // so the first prompt is the approval
+  const dialog = await openDialog(page, c.entityKey);
+  await tweakProvider(page);
+  await setTweaks(page, { priceMul: 3, priceAfterSends: 1, sends: 0 }); // the price moves after the approval was sent
+  const [n0, b0, t0] = [await gnosisNonce(KEEPALIVE_WALLET_ADDRESS), await xbzzOf(KEEPALIVE_WALLET_ADDRESS), await swarmSeconds(c.batchId)];
+
+  await start(dialog).click();
+  await expect(dialog.getByText('The storage price changed.')).toBeVisible({ timeout: 90_000 });
+  expect(await gnosisNonce(KEEPALIVE_WALLET_ADDRESS)).toBe(n0 + 1); // the approval, and nothing else
+  expect(await xbzzOf(KEEPALIVE_WALLET_ADDRESS)).toBe(b0); // an approval moves no xBZZ
+  expect(await swarmSeconds(c.batchId)).toBeLessThanOrEqual(t0);
+});
+
+test('@p4 keepalive a top-up whose receipt wait failed is not paid twice on retry', async ({ page }) => {
+  test.setTimeout(300_000);
+  const c = await rig.publish();
+  await withWallet(page);
+  await setAllowance(KEEPALIVE_WALLET_KEY, bzz(1)); // the top-up is the only transaction
+  const dialog = await openDialog(page, c.entityKey);
+  await tweakProvider(page);
+  await setTweaks(page, { failReceipts: true, sends: 0 });
+  const [n0, t0] = [await gnosisNonce(KEEPALIVE_WALLET_ADDRESS), await swarmSeconds(c.batchId)];
+
+  await start(dialog).click();
+  // It was sent but the wait for it failed: not "failed", and not "nothing was charged".
+  await expect(dialog.getByText('Step 1 may have gone through.')).toBeVisible({ timeout: 90_000 });
+  await expect(dialog).toContainText('It was sent, so it may still go through');
+  await expect(dialog).not.toContainText('Nothing more was charged');
+  await setTweaks(page, { failReceipts: false });
+  await expect.poll(() => gnosisNonce(KEEPALIVE_WALLET_ADDRESS), { timeout: 30_000 }).toBe(n0 + 1);
+
+  // Try again asks the chain first, finds the top-up mined, and goes on to step 2 without paying again.
+  await dialog.getByRole('button', { name: 'Try again' }).click();
+  await expect(dialog.getByRole('button', { name: 'Continue: step 2 of 2' })).toBeVisible({ timeout: 90_000 });
+  expect(await gnosisNonce(KEEPALIVE_WALLET_ADDRESS)).toBe(n0 + 1);
+  const gained = (await swarmSeconds(c.batchId)) - t0;
+  expect(gained).toBeGreaterThan(7 * DAY - 3600);
+  expect(gained).toBeLessThan(7 * DAY + 600); // once, not twice
+  await expect(dialog).toContainText('Storage extended to ');
+});
+
+test('@p4 keepalive an extension whose receipt wait failed is not sent twice on retry', async ({ page }) => {
+  test.setTimeout(300_000);
+  const c = await rig.publish();
+  await withWallet(page);
+  const dialog = await openDialog(page, c.entityKey);
+  const blockBefore = await arkivBlock(c.entityKey);
+  await start(dialog).click();
+  await expect(dialog.getByRole('button', { name: 'Continue: step 2 of 2' })).toBeVisible({ timeout: 90_000 });
+
+  await tweakProvider(page);
+  await setTweaks(page, { failReceipts: true, sends: 0 });
+  const n0 = await arkivNonce(KEEPALIVE_WALLET_ADDRESS);
+  await dialog.getByRole('button', { name: 'Continue: step 2 of 2' }).click();
+  await expect(dialog.getByText(/The record may have been extended too\.$/)).toBeVisible({ timeout: 90_000 });
+  await setTweaks(page, { failReceipts: false });
+  await expect.poll(() => arkivNonce(KEEPALIVE_WALLET_ADDRESS), { timeout: 30_000 }).toBe(n0 + 1);
+
+  await dialog.getByRole('button', { name: 'Retry step 2' }).click();
+  await expect(dialog.getByText(/^Kept alive until \d+ \w+ \d{4}\.$/)).toBeVisible({ timeout: 60_000 });
+  expect(await arkivNonce(KEEPALIVE_WALLET_ADDRESS)).toBe(n0 + 1); // one extension, not two
+  expect((await arkivBlock(c.entityKey)) - blockBefore).toBe(blocksForDays(7));
+});
+
+test('@p4 keepalive a failed Gnosis price read does not block step 2', async ({ page }) => {
+  test.setTimeout(180_000);
+  const c = await rig.publish();
+  await withWallet(page);
+  await page.goto(`${APP}/#/c/${c.entityKey}`);
+  await expect(verdict(page)).toHaveAttribute('data-verdict', 'pass');
+  // From here the page's own reads of Gnosis are rate-limited (the wallet's are not).
+  await page.route(/localhost:9545/, (route) =>
+    route.fulfill({ status: 429, contentType: 'text/plain', headers: { 'access-control-allow-origin': '*' }, body: 'Too Many Requests' }),
+  );
+  const blockBefore = await arkivBlock(c.entityKey);
+  const gnosisN = await gnosisNonce(KEEPALIVE_WALLET_ADDRESS);
+  await page.getByRole('button', { name: 'Keep alive…' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Keep this capture available' });
+  await expect(dialog).toContainText("Couldn't read the storage price from Gnosis, so storage can't be extended right now. You can still extend the record.", { timeout: 30_000 });
+  await expect(dialog.locator('.steps-list li')).toHaveCount(1);
+  await expect(dialog.getByRole('button', { name: 'Start: step 1 of 1' })).toBeEnabled();
+  await dialog.getByRole('button', { name: 'Start: step 1 of 1' }).click();
+  await expect(dialog.getByText(/^Record kept until \d+ \w+ \d{4}\.$/)).toBeVisible({ timeout: 60_000 });
+  expect((await arkivBlock(c.entityKey)) - blockBefore).toBe(blocksForDays(7));
+  expect(await gnosisNonce(KEEPALIVE_WALLET_ADDRESS)).toBe(gnosisN);
+});
+
+test('@p4 keepalive warns when the re-read shows no later storage date', async ({ page }) => {
+  test.setTimeout(240_000);
+  const c = await rig.publish();
+  await withWallet(page);
+  // A stale node: the page's reads of the batch balance keep the first answer they got.
+  const selector = toFunctionSelector('remainingBalance(bytes32)').slice(2);
+  let first: string | undefined;
+  await page.route(/localhost:9545/, async (route) => {
+    const body = route.request().postData() ?? '';
+    if (!body.includes(selector) || body.trimStart().startsWith('[')) return route.continue();
+    const id = (JSON.parse(body) as { id: number }).id;
+    if (first === undefined) {
+      const res = await route.fetch();
+      first = ((await res.json()) as { result: string }).result;
+      return route.fulfill({ response: res, json: { jsonrpc: '2.0', id, result: first }, headers: { ...res.headers(), 'access-control-allow-origin': '*' } });
+    }
+    return route.fulfill({ status: 200, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' }, json: { jsonrpc: '2.0', id, result: first } });
+  });
+  const dialog = await openDialog(page, c.entityKey);
+  const t0 = await swarmSeconds(c.batchId);
+  await start(dialog).click();
+  await expect(dialog.getByText("The top-up went through, but the storage end date hasn't moved yet.")).toBeVisible({ timeout: 90_000 });
+  expect((await swarmSeconds(c.batchId)) - t0).toBeGreaterThan(7 * DAY - 3600); // it really did
+  // Not a green "extended to": the warning is the page's honest reading, and step 2 is still on offer.
+  await expect(dialog.getByRole('button', { name: 'Continue: step 2 of 2' })).toBeVisible();
+});
+
+test('@p4 keepalive a confirmation that the timeline refuses gets neither "Still unchanged" nor Keep alive', async ({ page }) => {
+  test.setTimeout(420_000);
+  const parent = await rig.publish();
+  const target = new URL(parent.url).pathname + new URL(parent.url).search;
+  const url = canonicalUrl(`https://${NOTICE_HOST}${target}`);
+  const writer = arkivWallet(LOCAL, http(LOCAL.arkiv.rpcUrl), privateKeyToAccount(KEEPALIVE_WALLET_KEY));
+  /** A page the fixture does not serve: the witness "saw" exactly these bytes at this address. */
+  const html = (text: string) => {
+    const body = new TextEncoder().encode(`<!doctype html><title>${text}</title><p>${text}</p>`);
+    const head = new TextEncoder().encode(`HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: ${body.length}\r\nConnection: close\r\n\r\n`);
+    return { sent: requestBytes(target), recv: new Uint8Array([...head, ...body]), body };
+  };
+  const confirm = async (rec: { sent: Uint8Array; recv: Uint8Array }, signedAt: bigint, bodySha: Hex) => {
+    const signed = await signEvidence(rec, { capturedUrl: url, override: { signedAt, connTime: signedAt - 2n } });
+    const { entityKey } = await writeConfirmation(writer, {
+      captureKey: parent.entityKey,
+      urlHash: parent.urlHash,
+      bodySha256: bodySha,
+      witness: signed.signer,
+      signedAt,
+      evidence: encodeEvidence(signed.evidence),
+    });
+    for (let i = 0; i < 40; i++) {
+      try {
+        await arkiv.getEntity(entityKey);
+        break;
+      } catch {
+        await new Promise((r) => setTimeout(r, 250));
+      }
+    }
+    return entityKey;
+  };
+  const sameBytes = await record(target);
+
+  // 1. Signed at the SAME second as the capture: the timeline needs it to be later.
+  const equal = await confirm(sameBytes, parent.signedAt, sha256(parent.body));
+  // 2. Different bytes than the capture it names.
+  const otherRec = html('something else entirely');
+  const different = await confirm(otherRec, parent.signedAt + 5n, sha256(otherRec.body));
+  // 3. Same bytes, but dated AFTER a newer version of the page.
+  const newerRec = html('a newer version');
+  const newerSigned = await signEvidence(newerRec, { capturedUrl: url, override: { signedAt: parent.signedAt + 10n, connTime: parent.signedAt + 8n } });
+  await rig.write({
+    urlHash: parent.urlHash,
+    bodySha256: sha256(newerRec.body),
+    serverName: NOTICE_HOST,
+    witness: newerSigned.signer,
+    signedAt: newerSigned.signedAt,
+    httpStatus: 200,
+    batchId: rig.batchId,
+    evidenceRef: await rig.upload(encodeEvidence(newerSigned.evidence)),
+    canonicalUrl: url,
+  });
+  const late = await confirm(sameBytes, parent.signedAt + 20n, sha256(parent.body));
+
+  await withWallet(page);
+  for (const [key, reason] of [
+    [equal, 'Dated before the capture it confirms'],
+    [different, "Doesn't match the capture it confirms"],
+    [late, 'Dated after a newer version'],
+  ] as const) {
+    await page.goto(`${APP}/#/c/${key}`);
+    await expect(page.getByRole('heading', { level: 1, name: /Confirmation/ })).toBeVisible();
+    await expect(page.getByText(`Not counted as a confirmation: ${reason}.`)).toBeVisible({ timeout: 90_000 });
+    await expect(page.getByText(/Still unchanged on/)).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Keep alive…' })).toHaveCount(0);
+  }
+
+  // A confirmation whose capture is not on Arkiv gets a hint, not "checking…" for ever.
+  const lostAt = parent.signedAt + 40n;
+  const lostSigned = await signEvidence(sameBytes, { capturedUrl: url, override: { signedAt: lostAt, connTime: lostAt - 2n } });
+  const lost = await writeConfirmation(writer, {
+    captureKey: `0x${randomBytes(32).toString('hex')}`,
+    urlHash: parent.urlHash,
+    bodySha256: sha256(parent.body),
+    witness: lostSigned.signer,
+    signedAt: lostAt,
+    evidence: encodeEvidence(lostSigned.evidence),
+  });
+  await page.goto(`${APP}/#/c/${lost.entityKey}`);
+  await expect(page.getByText(/isn't on Arkiv \(it may have expired or never existed\)/)).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(/Checking this confirmation/)).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Keep alive…' })).toHaveCount(0);
 });
 
 test('@p4 keepalive is not offered for a capture that did not pass A to C', async ({ page }) => {

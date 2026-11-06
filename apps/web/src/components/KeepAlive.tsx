@@ -1,20 +1,29 @@
 import { Hourglass } from 'lucide-react';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { formatBzzCeil, formatDay, formatXdaiCeil } from '../format';
+import type { BatchChange } from '@recall/net';
+import type { Hex } from 'viem';
 import {
   arkivChainId,
   isFree,
   keptUntil,
   problemOf,
+  readArkivBaseline,
   readEnds,
   readQuote,
+  readSwarmBaseline,
+  settleExtend,
+  settleTopUp,
   stepExtend,
   stepTopUp,
+  type ArkivBaseline,
   type Ends,
   type KeepAliveTarget,
   type Problem,
   type Quote,
+  type SwarmBaseline,
 } from '../keepalive/flow';
+import { datePassed } from '../keepalive/settle';
 import { getNetConfig } from '../net';
 import { MonoValue } from '../ui/MonoValue';
 import { Notice } from '../ui/Notice';
@@ -27,11 +36,17 @@ import './keepalive.css';
 type Which = 'swarm' | 'arkiv';
 type View =
   | { kind: 'form' }
-  | { kind: 'busy'; which: Which }
+  /** `checking`: finding out whether an earlier try already went through, before anything is sent. */
+  | { kind: 'busy'; which: Which; checking?: boolean }
   /** Step 1 is done and confirmed by a re-read; the person starts step 2 themselves. */
   | { kind: 'between' }
   | { kind: 'problem'; which: Which; problem: Problem }
-  | { kind: 'done'; ends: Ends; nothingSent: boolean };
+  /** `moved`: the re-read end date is later than the reading before the step (null: could not tell). */
+  | { kind: 'done'; ends: Ends; nothingSent: boolean; moved: boolean | null };
+
+/** What a step has sent, kept for the life of the component so a retry can first ask the chain about it. */
+type Sent1 = SwarmBaseline & { hash?: Hex };
+type Sent2 = ArkivBaseline & { hash?: Hex };
 
 type QuoteState = { state: 'loading' } | { state: 'error' } | { state: 'ready'; quote: Quote };
 
@@ -60,12 +75,18 @@ export function KeepAlive({
   const triggerRef = useRef<HTMLButtonElement>(null);
   const openRef = useRef(false);
   const runToken = useRef(0);
+  // Not reset by closing or reopening the dialog: a step in flight keeps running, and what it sent
+  // is remembered until the chain has said whether it landed.
+  const sent1 = useRef<Sent1 | null>(null);
+  const sent2 = useRef<Sent2 | null>(null);
 
   const [open, setOpen] = useState(false);
   const [days, setDays] = useState<7 | 30>(7);
   const [view, setView] = useState<View>({ kind: 'form' });
   /** Set once step 1 is confirmed by a re-read; `ends` is the batch's re-read end date. */
-  const [stepOne, setStepOne] = useState<{ ends: Date | null } | null>(null);
+  const [stepOne, setStepOne] = useState<{ ends: Date | null; moved: boolean | null } | null>(null);
+  /** Set when the price or the batch changed after the preview: nothing was sent for the top-up. */
+  const [changed, setChanged] = useState<BatchChange | null>(null);
   const [leaving, setLeaving] = useState(false);
   const [quote, setQuote] = useState<QuoteState>({ state: 'loading' });
   const [quoteTry, setQuoteTry] = useState(0);
@@ -76,7 +97,7 @@ export function KeepAlive({
   // Step 1 is off for free storage, and for a batch id that names no usable batch on Gnosis (a
   // record's batch id is only a claim, so the batch is read before anything is priced or paid).
   const swarmQuote = quote.state === 'ready' ? quote.quote.swarm : null;
-  const noBatch = swarmQuote !== null && (swarmQuote.kind === 'missing' || swarmQuote.kind === 'unsupported');
+  const noBatch = swarmQuote !== null && swarmQuote.kind !== 'ok';
   const free = freeStorage || noBatch;
   const active: KeepAliveTarget = free ? { ...target, batchId: null } : target;
 
@@ -105,32 +126,92 @@ export function KeepAlive({
   }, [open, days, quoteTry, target.batchId, keys, stepOne]);
 
   const openDialog = () => {
-    runToken.current++;
-    setView({ kind: 'form' });
-    setStepOne(null);
+    // Reopening keeps a step in flight, a confirmed step 1 and a problem as they are, so step 2 can
+    // run alone. Only a finished keep-alive starts over.
+    if (view.kind === 'done') {
+      setView({ kind: 'form' });
+      setStepOne(null);
+      sent1.current = null;
+      sent2.current = null;
+    }
     setLeaving(false);
     setOpen(true);
   };
 
+  // Closing never stops a step already sent to the wallet; it only hides the dialog.
   const close = () => {
-    // Steps already confirmed in the wallet stay done; a run still in flight just stops reporting here.
-    runToken.current++;
     setLeaving(false);
     setOpen(false);
   };
 
+  const finishStepOne = async (live: () => boolean) => {
+    const baseEnds = sent1.current?.endsAt ?? null;
+    // Only what the chain says now counts, never what the top-up meant to do.
+    const ends = await readEnds(cfg, active);
+    void onChanged();
+    sent1.current = null;
+    if (!live()) return;
+    setStepOne({ ends: ends.swarm, moved: datePassed(baseEnds, ends.swarm) });
+    setView({ kind: 'between' });
+  };
+
+  const finishStepTwo = async (live: () => boolean, nothingSent: boolean) => {
+    const baseEnds = sent2.current?.endsAt ?? null;
+    const ends = await readEnds(cfg, active);
+    void onChanged();
+    sent2.current = null;
+    if (!live()) return;
+    setNoticeSeq((n) => n + 1);
+    setView({ kind: 'done', ends, nothingSent, moved: nothingSent ? true : datePassed(baseEnds, ends.arkiv) });
+  };
+
+  const unsettled = (which: Which, live: () => boolean) => {
+    if (!live()) return;
+    setNoticeSeq((n) => n + 1);
+    setView({ kind: 'problem', which, problem: { kind: 'unsettled' } });
+  };
+
   const run = async (which: Which) => {
     const token = ++runToken.current;
-    const live = () => runToken.current === token && openRef.current;
-    let approved = false;
-    setView({ kind: 'busy', which });
+    const live = () => runToken.current === token;
+    const flags = { approved: false, sent: false };
     setLeaving(false);
+    setChanged(null);
+    setView({ kind: 'busy', which });
     try {
       if (which === 'swarm') {
-        const r = await stepTopUp(cfg, target.batchId!, days, () => {
-          approved = true;
-        });
+        const plan = swarmQuote?.kind === 'ok' ? swarmQuote : null;
+        const batchId = target.batchId;
+        if (!plan || !batchId) {
+          setView({ kind: 'form' });
+          return;
+        }
+        // An earlier try that was sent but never reported back may have gone through: ask the chain
+        // before paying again.
+        if (sent1.current) {
+          setView({ kind: 'busy', which, checking: true });
+          const said = await settleTopUp(cfg, batchId, { hash: sent1.current.hash, baseNormalised: sent1.current.normalisedBalance });
+          if (said === 'unknown') return unsettled(which, live);
+          if (said === 'landed') return await finishStepOne(live);
+          sent1.current = null; // it did not land: this is a fresh payment
+          setView({ kind: 'busy', which });
+        }
+        sent1.current = await readSwarmBaseline(cfg, batchId);
+        const r = await stepTopUp(
+          cfg,
+          { batchId, days, depth: plan.depth, maxTotal: plan.total },
+          {
+            onApproved: () => {
+              flags.approved = true;
+            },
+            onSent: (hash) => {
+              flags.sent = true;
+              if (sent1.current) sent1.current.hash = hash;
+            },
+          },
+        );
         if (r.kind !== 'done') {
+          sent1.current = null;
           if (live()) {
             setNoticeSeq((n) => n + 1);
             setView({
@@ -141,25 +222,40 @@ export function KeepAlive({
           }
           return;
         }
-        // Only what the chain says now counts, never what the top-up meant to do.
-        const ends = await readEnds(cfg, active);
-        void onChanged();
-        if (!live()) return;
-        setStepOne({ ends: ends.swarm });
-        setView({ kind: 'between' });
+        await finishStepOne(live);
       } else {
-        const r = await stepExtend(cfg, active.entityKeys, days);
-        const ends = await readEnds(cfg, active);
-        void onChanged();
-        if (!live()) return;
-        setNoticeSeq((n) => n + 1);
-        setView({ kind: 'done', ends, nothingSent: !r.sent });
+        if (sent2.current) {
+          setView({ kind: 'busy', which, checking: true });
+          const said = await settleExtend(cfg, { hash: sent2.current.hash, before: sent2.current.before });
+          if (said === 'unknown') return unsettled(which, live);
+          if (said === 'landed') return await finishStepTwo(live, false);
+          sent2.current = null;
+          setView({ kind: 'busy', which });
+        }
+        sent2.current = await readArkivBaseline(cfg, active.entityKeys);
+        const r = await stepExtend(cfg, active.entityKeys, days, {
+          onSent: (hash) => {
+            flags.sent = true;
+            if (sent2.current) sent2.current.hash = hash;
+          },
+        });
+        await finishStepTwo(live, !r.sent);
       }
     } catch (err) {
-      const problem = problemOf(err, approved);
-      // A failure that is not a refusal may have changed something; read it again.
+      const problem = problemOf(err, flags);
+      // Only an unexplained failure may have left a sent step behind; a refusal or a stop before the
+      // send means nothing is outstanding.
+      if (problem.kind !== 'failed') (which === 'swarm' ? sent1 : sent2).current = null;
       if (problem.kind === 'failed') void onChanged();
       if (!live()) return;
+      if (problem.kind === 'changed') {
+        // Not what the preview showed: nothing was sent for the top-up. Price it again and ask again.
+        setChanged(problem.reason);
+        setQuote({ state: 'loading' });
+        setQuoteTry((n) => n + 1);
+        setView({ kind: 'form' });
+        return;
+      }
       setNoticeSeq((n) => n + 1);
       setView({ kind: 'problem', which, problem });
     }
@@ -208,7 +304,7 @@ export function KeepAlive({
       case 'form':
         return { label: `Start: step ${stepNo(thisStep)} of ${total}`, disabled: !canStart, onClick: () => void run(thisStep) };
       case 'busy':
-        return { label: 'Confirm in MetaMask…', disabled: true, busy: true, onClick: () => undefined };
+        return { label: view.checking ? 'Checking…' : 'Confirm in MetaMask…', disabled: true, busy: true, onClick: () => undefined };
       case 'between':
         return { label: `Continue: step 2 of ${total}`, disabled: false, onClick: () => void run('arkiv') };
       case 'done':
@@ -220,7 +316,9 @@ export function KeepAlive({
 
   const statusText =
     view.kind === 'busy'
-      ? view.which === 'swarm'
+      ? view.checking
+        ? 'Checking whether the earlier try went through, before anything is sent again.'
+        : view.which === 'swarm'
         ? 'Confirm in MetaMask: connect, switch to Gnosis, approve xBZZ if asked, then top up.'
         : `Confirm in MetaMask: connect, switch to ${arkivName}, then extend.`
       : '';
@@ -244,7 +342,6 @@ export function KeepAlive({
           }
         }}
         onClose={() => {
-          runToken.current++;
           setOpen(false);
           triggerRef.current?.focus();
         }}
@@ -264,8 +361,10 @@ export function KeepAlive({
                 {freeStorage
                   ? "This capture used the gateway's free storage, which can't be extended."
                   : swarmQuote?.kind === 'unsupported'
-                    ? "This capture's storage batch isn't one Recall created (unexpected size). Storage can't be extended."
-                    : "This capture's storage batch wasn't found on Gnosis. Storage can't be extended."}
+                    ? "This capture's storage batch isn't one Recall created. Storage can't be extended."
+                    : swarmQuote?.kind === 'unreadable'
+                      ? "Couldn't read the storage price from Gnosis, so storage can't be extended right now. You can still extend the record."
+                      : "This capture's storage batch wasn't found on Gnosis. Storage can't be extended."}
               </p>
             ) : null}
 
@@ -293,6 +392,14 @@ export function KeepAlive({
                   </span>
                 ) : (
                   <>
+                    {quote.quote.swarm?.kind === 'unreadable' ? (
+                      <span className="ka-quote-line">
+                        Couldn&apos;t read the storage price.{' '}
+                        <button type="button" className="link-btn" onClick={() => setQuoteTry((n) => n + 1)}>
+                          Try again
+                        </button>
+                      </span>
+                    ) : null}
                     {quote.quote.swarm?.kind === 'ok' ? (
                       <span className="ka-quote-line">
                         Storage batch: <MonoValue value={target.batchId!} /> · depth {quote.quote.swarm.depth}
@@ -318,6 +425,12 @@ export function KeepAlive({
               </div>
             ) : null}
 
+            {changed !== null && view.kind === 'form' ? (
+              <Notice kind="warn" title={CHANGED_TITLE[changed]} focus>
+                It changed after you saw the price, so nothing was sent for the top-up. The new price is shown above.
+              </Notice>
+            ) : null}
+
             {expired ? (
               <Notice kind="warn" title="The storage has already expired">
                 The Swarm storage for this {subjectWord} has run out, so it can&apos;t be topped up. Download the evidence file to keep a copy.
@@ -337,12 +450,20 @@ export function KeepAlive({
             {view.kind === 'between' && stepOne ? (
               <Notice
                 key={`between-${noticeSeq}`}
-                kind="info"
-                title={stepOne.ends ? `Storage extended to ${formatDay(stepOne.ends)}.` : 'Storage topped up.'}
+                kind={stepOne.moved === false ? 'warn' : 'info'}
+                title={
+                  stepOne.moved === false
+                    ? "The top-up went through, but the storage end date hasn't moved yet."
+                    : stepOne.ends
+                      ? `Storage extended to ${formatDay(stepOne.ends)}.`
+                      : 'Storage topped up.'
+                }
               >
-                {stepOne.ends
-                  ? `Step 2 of ${total} extends the record on ${arkivName}.`
-                  : `The new end date could not be read just now; check Storage on the capture page. Step 2 of ${total} extends the record on ${arkivName}.`}
+                {stepOne.moved === false
+                  ? `The network confirmed it, but a re-read shows no later date yet. Check Storage on the capture page in a moment. Step 2 of ${total} extends the record on ${arkivName}.`
+                  : stepOne.ends
+                    ? `Step 2 of ${total} extends the record on ${arkivName}.`
+                    : `The new end date could not be read just now; check Storage on the capture page. Step 2 of ${total} extends the record on ${arkivName}.`}
               </Notice>
             ) : null}
 
@@ -358,7 +479,13 @@ export function KeepAlive({
             ) : null}
 
             {view.kind === 'done' ? (
-              <DoneNotice key={`done-${noticeSeq}`} ends={view.ends} free={free} nothingSent={view.nothingSent} />
+              <DoneNotice
+                key={`done-${noticeSeq}`}
+                ends={view.ends}
+                free={free}
+                nothingSent={view.nothingSent}
+                moved={view.moved === false || stepOne?.moved === false ? false : view.moved}
+              />
             ) : null}
 
             {leaving ? (
@@ -405,19 +532,59 @@ export function KeepAlive({
   );
 }
 
-function DoneNotice({ ends, free, nothingSent }: { ends: Ends; free: boolean; nothingSent: boolean }) {
+const CHANGED_TITLE: Record<BatchChange, string> = {
+  price: 'The storage price changed.',
+  depth: "The storage batch's size changed.",
+  gone: "The storage batch isn't there any more.",
+};
+
+function DoneNotice({
+  ends,
+  free,
+  nothingSent,
+  moved,
+}: {
+  ends: Ends;
+  free: boolean;
+  nothingSent: boolean;
+  /** false: a re-read showed no later end date than before the step; null: could not tell. */
+  moved: boolean | null;
+}) {
   const until = keptUntil(ends, free);
   if (!until) {
-    // Both wallet steps went through, but the chains could not be read: nothing is claimed in green.
+    // The steps went through, but the chains could not be read: nothing is claimed in green.
     return (
-      <Notice kind="warn" title="Both steps are done, but the new end dates could not be read." focus>
+      <Notice
+        kind="warn"
+        title={free ? 'The record was extended, but its new end date could not be read.' : 'Both steps are done, but the new end dates could not be read.'}
+        focus
+      >
         Storage on the capture page shows them once they can be read.
+      </Notice>
+    );
+  }
+  if (moved === false) {
+    // The network said it landed, but a fresh read is not later than the one before: say so, not "kept alive".
+    return (
+      <Notice
+        kind="warn"
+        title={free ? "The record was extended, but its end date hasn't moved yet." : "Both steps went through, but an end date hasn't moved yet."}
+        focus
+      >
+        The network confirmed it, but a re-read shows no later date yet. Check Storage on the capture page in a moment.
+      </Notice>
+    );
+  }
+  if (free) {
+    return (
+      <Notice kind="success" title={`Record kept until ${formatDay(ends.arkiv!)}.`} focus>
+        {nothingSent ? 'It was already at the longest the network allows, so nothing was sent.' : null}
       </Notice>
     );
   }
   return (
     <Notice kind="success" title={`Kept alive until ${formatDay(until)}.`} focus>
-      {free ? '' : `Swarm storage until ${formatDay(ends.swarm!)} · `}Arkiv record until {formatDay(ends.arkiv!)}.
+      Swarm storage until {formatDay(ends.swarm!)} · Arkiv record until {formatDay(ends.arkiv!)}.
       {nothingSent ? ' The record was already at the longest the network allows, so only the storage was extended.' : ''}
     </Notice>
   );
@@ -446,7 +613,7 @@ function ProblemNotice({
         kind="error"
         title={
           problem.unsupported
-            ? "This capture's storage batch isn't one Recall created (unexpected size). Storage can't be extended."
+            ? "This capture's storage batch isn't one Recall created. Storage can't be extended."
             : "This capture's storage batch wasn't found on Gnosis. Storage can't be extended."
         }
         focus
@@ -467,30 +634,45 @@ function ProblemNotice({
       />
     );
   }
+  if (problem.kind === 'changed') return null; // shown on the form, see `run`
   const partial = which === 'arkiv' && storageEnds !== undefined;
+  // Sent, but the network never said whether it went through: it may have, so it is not called a failure.
+  const maybe = problem.kind === 'unsettled' || (problem.kind === 'failed' && problem.sent);
   const approvedNote =
-    which === 'swarm' && problem.approved ? ' The xBZZ approval was already confirmed and stays; it moves no funds.' : '';
+    which === 'swarm' && problem.kind !== 'unsettled' && problem.approved
+      ? ' The xBZZ approval was already confirmed and stays; it moves no funds.'
+      : '';
   const title = partial
-    ? storageEnds
-      ? `Storage extended to ${formatDay(storageEnds)}. The record wasn't extended yet.`
-      : "Storage extended. The record wasn't extended yet."
-    : problem.kind === 'cancelled'
-      ? `Step ${stepNo} cancelled in MetaMask. Nothing more was charged.`
-      : `Step ${stepNo} failed.`;
+    ? maybe
+      ? storageEnds
+        ? `Storage extended to ${formatDay(storageEnds)}. The record may have been extended too.`
+        : 'Storage extended. The record may have been extended too.'
+      : storageEnds
+        ? `Storage extended to ${formatDay(storageEnds)}. The record wasn't extended yet.`
+        : "Storage extended. The record wasn't extended yet."
+    : maybe
+      ? `Step ${stepNo} may have gone through.`
+      : problem.kind === 'cancelled'
+        ? `Step ${stepNo} cancelled in MetaMask. Nothing more was charged.`
+        : `Step ${stepNo} failed.`;
   const body =
-    problem.kind === 'cancelled'
-      ? partial
-        ? `Step 2 cancelled in MetaMask. Nothing more was charged.`
-        : approvedNote.trim() || undefined
-      : `${problem.message.replace(/\.$/, '')}.${approvedNote}`;
+    problem.kind === 'unsettled'
+      ? "The network hasn't confirmed it yet, so it was not sent again. Check again in a moment."
+      : problem.kind === 'cancelled'
+        ? partial
+          ? 'Step 2 cancelled in MetaMask. Nothing more was charged.'
+          : approvedNote.trim() || undefined
+        : problem.sent
+          ? `${problem.message.replace(/\.$/, '')}. It was sent, so it may still go through. ${partial ? 'Retry step 2' : 'Try again'} checks first and will not send it twice.`
+          : `${problem.message.replace(/\.$/, '')}.${approvedNote}`;
   return (
     <Notice
-      kind={partial ? 'warn' : 'error'}
+      kind={partial || maybe ? 'warn' : 'error'}
       title={title}
       focus
       actions={
         <button type="button" className="btn btn-secondary" onClick={onRetry}>
-          {partial ? 'Retry step 2' : 'Try again'}
+          {problem.kind === 'unsettled' ? 'Check again' : partial ? 'Retry step 2' : 'Try again'}
         </button>
       }
     >

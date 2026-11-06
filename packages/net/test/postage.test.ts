@@ -3,9 +3,12 @@ import type { AddressInfo } from 'node:net';
 import {
   createPublicClient,
   createWalletClient,
+  custom,
   encodeAbiParameters,
   erc20Abi,
   http,
+  hexToBigInt,
+  numberToHex,
   parseAbi,
   parseUnits,
   toFunctionSelector,
@@ -18,8 +21,8 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { gnosis } from 'viem/chains';
 import { afterEach, describe, expect, it } from 'vitest';
 import { fundWallet } from '../../../e2e/fixtures/fund';
-import { OTHER_WALLET_KEY } from '../../../e2e/fixtures/keys';
-import { BatchNotFoundError, LOCAL, POSTAGE_STAMP, XBZZ, batchTtlSeconds, buyBatch, isContractRevert, readBatch, topUp, topUpCost } from '../src/index';
+import { NET_TEST_KEY_A } from '../../../e2e/fixtures/keys';
+import { BatchChangedError, BatchNotFoundError, LOCAL, POSTAGE_STAMP, XBZZ, batchTtlSeconds, buyBatch, isContractRevert, readBatch, topUp, topUpCost } from '../src/index';
 
 // batchTtlSeconds against a throwaway JSON-RPC server (no devnet needed): only a contract
 // revert may mean "expired"; a rate limit, a timeout or a node fault must be an error, so a
@@ -195,7 +198,7 @@ describe('batchTtlSeconds on the local Gnosis fork', () => {
 });
 
 describe('topUp on the local Gnosis fork', () => {
-  const account = privateKeyToAccount(OTHER_WALLET_KEY);
+  const account = privateKeyToAccount(NET_TEST_KEY_A);
   const chain = { ...gnosis, rpcUrls: { default: { http: [LOCAL.gnosis.rpcUrl] } } };
   const pub = createPublicClient({ chain, transport: http(LOCAL.gnosis.rpcUrl) }) as PublicClient;
   const wallet = createWalletClient({ account, chain, transport: http(LOCAL.gnosis.rpcUrl) });
@@ -251,5 +254,173 @@ describe('readBatch and topUpCost for a batch id that names nothing', () => {
     // This server only knows the three calls batchTtlSeconds makes, so `batches` gets a JSON-RPC error.
     const odd = await clientFor({ remaining: ok(1n) });
     await expect(readBatch(odd, unknown)).rejects.toThrow();
+  });
+});
+
+// ---- The payment is tied to the preview ---------------------------------------------------------
+// A wallet prompt can sit for minutes, a record names its batch freely, and an allowance that is
+// already in place would pay whatever the top-up asks. These run against the real fork, with a
+// transport in front of it that changes what the contract returns between the preview and the
+// payment (the shared devnet's real price is never touched).
+
+describe('topUp is tied to the preview', () => {
+  const account = privateKeyToAccount(NET_TEST_KEY_A);
+  const chain = { ...gnosis, rpcUrls: { default: { http: [LOCAL.gnosis.rpcUrl] } } };
+  const real = createPublicClient({ chain, transport: http(LOCAL.gnosis.rpcUrl) }) as PublicClient;
+  const nonce = () => real.getTransactionCount({ address: account.address });
+  const xbzz = () => real.readContract({ address: XBZZ, abi: erc20Abi, functionName: 'balanceOf', args: [account.address] });
+  const sel = { lastPrice: toFunctionSelector('lastPrice()'), batches: toFunctionSelector('batches(bytes32)') };
+
+  /** What the stub changes about the contract's answers, and what it did to the wallet's calls. */
+  const lie = { priceMul: 1n, depth: undefined as number | undefined, gone: false, failReceipt: false, sentRaw: 0 };
+
+  async function forward(method: string, params: unknown): Promise<unknown> {
+    const res = await fetch(LOCAL.gnosis.rpcUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+    });
+    const json = (await res.json()) as { result?: unknown; error?: { code: number; message: string } };
+    if (json.error) throw Object.assign(new Error(json.error.message), { code: json.error.code });
+    return json.result;
+  }
+
+  const wallet = createWalletClient({
+    account,
+    chain,
+    transport: custom({
+      async request({ method, params }) {
+        const p = params as { to?: string; data?: Hex }[] | undefined;
+        if (method === 'eth_call' && p?.[0]?.to?.toLowerCase() === POSTAGE_STAMP.toLowerCase()) {
+          const data = p[0]!.data ?? '0x';
+          const answer = (await forward(method, params)) as Hex;
+          if (data.startsWith(sel.lastPrice)) return numberToHex(hexToBigInt(answer) * lie.priceMul, { size: 32 });
+          if (data.startsWith(sel.batches)) {
+            const words = answer.slice(2).match(/.{64}/g)!;
+            if (lie.gone) words[0] = '0'.repeat(64);
+            if (lie.depth !== undefined) words[1] = lie.depth.toString(16).padStart(64, '0');
+            return `0x${words.join('')}`;
+          }
+        }
+        if (method === 'eth_getTransactionReceipt' && lie.failReceipt && lie.sentRaw > 0) {
+          // Every receipt read fails from now on (viem swallows the first, then gives up on the next block).
+          throw Object.assign(new Error('simulated RPC failure while waiting for the receipt'), { code: -32602 });
+        }
+        const answer = await forward(method, params);
+        if (method === 'eth_sendRawTransaction') lie.sentRaw++;
+        return answer;
+      },
+    }),
+  });
+
+  let batchId: Hex;
+  let perDay: { depth: number; total: bigint };
+
+  const approve = async (amount: bigint) =>
+    real.waitForTransactionReceipt({
+      hash: await createWalletClient({ account, chain, transport: http(LOCAL.gnosis.rpcUrl) }).writeContract({
+        address: XBZZ, abi: erc20Abi, functionName: 'approve', args: [POSTAGE_STAMP, amount],
+      }),
+    });
+  const reset = () => Object.assign(lie, { priceMul: 1n, depth: undefined, gone: false, failReceipt: false, sentRaw: 0 });
+
+  it('setup: a fresh batch and a preview price', async () => {
+    await fundWallet(account.address, parseUnits('1', 16));
+    const plain = createWalletClient({ account, chain, transport: http(LOCAL.gnosis.rpcUrl) });
+    ({ batchId } = await buyBatch(plain, { owner: privateKeyToAccount(generatePrivateKey()).address, depth: 17, days: 1 }));
+    const cost = await topUpCost(real, batchId, 1);
+    perDay = { depth: cost.depth, total: cost.total };
+    expect(perDay.depth).toBe(17);
+  });
+
+  it('pays when nothing changed, with the quoted total as the limit', async () => {
+    reset();
+    await approve(0n);
+    const t0 = (await batchTtlSeconds(real, batchId))!;
+    await topUp(wallet, batchId, 1, { expectDepth: 17, maxTotal: perDay.total });
+    expect((await batchTtlSeconds(real, batchId))! - t0).toBeGreaterThan(86_000n);
+  });
+
+  it('an existing allowance does not lift the cap: a price above the preview sends nothing', async () => {
+    reset();
+    await approve(parseUnits('0.5', 16)); // plenty, so no approval step to stop at
+    lie.priceMul = 2n;
+    const [n0, b0, t0] = [await nonce(), await xbzz(), (await batchTtlSeconds(real, batchId))!];
+    await expect(topUp(wallet, batchId, 1, { expectDepth: 17, maxTotal: perDay.total })).rejects.toMatchObject({
+      name: 'BatchChangedError',
+      reason: 'price',
+    });
+    expect(await nonce()).toBe(n0);
+    expect(await xbzz()).toBe(b0);
+    expect((await batchTtlSeconds(real, batchId))!).toBeLessThanOrEqual(t0); // it only runs down
+  });
+
+  it('the price rising while the approval is mined is caught before the top-up (only the approval was sent)', async () => {
+    reset();
+    await approve(0n);
+    const [n0, b0, t0] = [await nonce(), await xbzz(), (await batchTtlSeconds(real, batchId))!];
+    const err = await topUp(wallet, batchId, 1, {
+      expectDepth: 17,
+      maxTotal: perDay.total,
+      onApproved: () => {
+        lie.priceMul = 3n; // the gap: the price moves after the approval
+      },
+    }).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(BatchChangedError);
+    expect((err as BatchChangedError).reason).toBe('price');
+    expect(await nonce()).toBe(n0 + 1); // the approval, nothing else
+    expect(await xbzz()).toBe(b0); // an approval moves no xBZZ
+    expect((await batchTtlSeconds(real, batchId))!).toBeLessThanOrEqual(t0);
+  });
+
+  it('a depth that is not the priced one is refused, before and after the approval', async () => {
+    reset();
+    await approve(0n);
+    lie.depth = 18;
+    const n0 = await nonce();
+    await expect(topUp(wallet, batchId, 1, { expectDepth: 17, maxTotal: perDay.total })).rejects.toMatchObject({ reason: 'depth' });
+    expect(await nonce()).toBe(n0); // refused before any approval
+
+    reset();
+    const n1 = await nonce();
+    await expect(
+      topUp(wallet, batchId, 1, { expectDepth: 17, maxTotal: perDay.total, onApproved: () => (lie.depth = 24) }),
+    ).rejects.toMatchObject({ reason: 'depth' });
+    expect(await nonce()).toBe(n1 + 1);
+  });
+
+  it('a batch that disappears after the approval is refused', async () => {
+    reset();
+    await approve(0n);
+    const n0 = await nonce();
+    await expect(
+      topUp(wallet, batchId, 1, { expectDepth: 17, maxTotal: perDay.total, onApproved: () => (lie.gone = true) }),
+    ).rejects.toMatchObject({ reason: 'gone' });
+    expect(await nonce()).toBe(n0 + 1);
+  });
+
+  it('without a preview, the first reading is the limit', async () => {
+    reset();
+    await approve(0n);
+    await expect(topUp(wallet, batchId, 1, { onApproved: () => (lie.priceMul = 2n) })).rejects.toMatchObject({ reason: 'price' });
+  });
+
+  it('hands out the hash as soon as the top-up is sent, so a failed receipt wait can be settled later', async () => {
+    reset();
+    await approve(parseUnits('0.5', 16));
+    const t0 = (await batchTtlSeconds(real, batchId))!;
+    const n0 = await nonce();
+    const sent: Hex[] = [];
+    lie.failReceipt = true;
+    await expect(
+      topUp(wallet, batchId, 1, { expectDepth: 17, maxTotal: perDay.total, onSent: (h) => sent.push(h) }),
+    ).rejects.toThrow(/simulated RPC failure/);
+    lie.failReceipt = false;
+    // It failed, yet the top-up was sent and mined: that is exactly why a retry must check first.
+    expect(sent).toHaveLength(1);
+    // (The block may not be out yet when the wait gives up: the hash is how to find out.)
+    expect((await real.waitForTransactionReceipt({ hash: sent[0]! })).status).toBe('success');
+    expect(await nonce()).toBe(n0 + 1);
+    expect((await batchTtlSeconds(real, batchId))! - t0).toBeGreaterThan(86_000n);
   });
 });

@@ -3,6 +3,7 @@ import type { BatchInfo } from '@recall/net';
 import type { Address, Hex } from 'viem';
 import { describe, expect, it } from 'vitest';
 import { classifyBatch } from '../src/keepalive/batch';
+import { datePassed, settle, type SettleIo } from '../src/keepalive/settle';
 import { isVerifiedReport, type VerifiedReport } from '../src/verify/verify';
 
 // The two gates in front of a keep-alive: only a capture whose checks all passed is offered one,
@@ -60,7 +61,78 @@ describe('classifyBatch', () => {
   });
 
   it('any other size is refused, so a crafted record cannot aim the payment at a huge batch', () => {
-    expect(classifyBatch(batch(16))).toEqual({ kind: 'unsupported', depth: 16 });
-    expect(classifyBatch(batch(24))).toEqual({ kind: 'unsupported', depth: 24 });
+    expect(classifyBatch(batch(16))).toEqual({ kind: 'unsupported', depth: 16, why: 'depth' });
+    expect(classifyBatch(batch(24))).toEqual({ kind: 'unsupported', depth: 24, why: 'depth' });
+  });
+
+  it('a mutable batch is refused: its owner could double its size between the preview and the payment', () => {
+    expect(classifyBatch({ ...batch(17), immutable: false })).toEqual({ kind: 'unsupported', depth: 17, why: 'mutable' });
+  });
+
+  it('a bucket depth other than 16 is refused (buyBatch always makes 16)', () => {
+    expect(classifyBatch({ ...batch(17), bucketDepth: 20 })).toEqual({ kind: 'unsupported', depth: 17, why: 'bucket' });
+  });
+});
+
+describe('settle: did an earlier, unreported try go through?', () => {
+  const hash = `0x${'ab'.repeat(32)}` as Hex;
+  const io = (over: Partial<SettleIo> = {}): SettleIo & { calls: string[] } => {
+    const calls: string[] = [];
+    return {
+      calls,
+      hash,
+      waitMs: 1,
+      receipt: async () => (calls.push('receipt'), 'absent'),
+      wait: async () => (calls.push('wait'), 'timeout'),
+      moved: async () => (calls.push('moved'), false),
+      ...over,
+    };
+  };
+
+  it('a mined receipt decides at once: success landed, reverted not landed', async () => {
+    const a = io({ receipt: async () => 'success' });
+    expect(await settle(a)).toBe('landed');
+    expect(a.calls).toEqual([]); // nothing else was asked
+    expect(await settle(io({ receipt: async () => 'reverted' }))).toBe('not-landed');
+  });
+
+  it('a hash the node cannot show is waited for, and a late receipt decides', async () => {
+    expect(await settle(io({ wait: async () => 'success' }))).toBe('landed');
+    expect(await settle(io({ wait: async () => 'reverted' }))).toBe('not-landed');
+  });
+
+  it('a sent step that cannot be seen and has not moved the chain is UNKNOWN, never "not sent"', async () => {
+    expect(await settle(io())).toBe('unknown');
+    // An unreadable node is the same: the answer is not "no".
+    expect(
+      await settle(io({ receipt: async () => Promise.reject(new Error('429')), wait: async () => Promise.reject(new Error('429')) })),
+    ).toBe('unknown');
+  });
+
+  it('the chain showing the effect settles it as landed even when the hash is not visible', async () => {
+    expect(await settle(io({ moved: async () => true }))).toBe('landed');
+  });
+
+  it('without a hash the chain decides: moved is landed, not moved is not landed, unreadable is unknown', async () => {
+    expect(await settle(io({ hash: undefined, moved: async () => true }))).toBe('landed');
+    expect(await settle(io({ hash: undefined, moved: async () => false }))).toBe('not-landed');
+    expect(await settle(io({ hash: undefined, moved: async () => Promise.reject(new Error('down')) }))).toBe('unknown');
+  });
+
+  it('never calls the receipt reads when there is no hash', async () => {
+    const a = io({ hash: undefined });
+    await settle(a);
+    expect(a.calls).toEqual(['moved']);
+  });
+});
+
+describe('datePassed', () => {
+  const at = (ms: number) => new Date(1_000_000_000_000 + ms);
+  it('is true only for a date later by more than an hour, and null when either is unknown', () => {
+    expect(datePassed(at(0), at(2 * 3_600_000))).toBe(true);
+    expect(datePassed(at(0), at(1_000))).toBe(false);
+    expect(datePassed(at(5_000), at(0))).toBe(false);
+    expect(datePassed(null, at(0))).toBeNull();
+    expect(datePassed(at(0), null)).toBeNull();
   });
 });
