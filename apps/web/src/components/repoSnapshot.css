@@ -1,0 +1,71 @@
+/* Repository snapshot card (R46): the exhibit card, with a green rule only once verified. */
+.repo-snapshot {
+  margin-top: var(--space-5);
+  border-top-color: var(--border-strong);
+}
+.repo-snapshot[data-phase='ok'] { border-top-color: var(--pass); }
+.repo-snapshot[data-phase='mismatch'] { border-top-color: var(--fail); }
+
+.repo-snapshot-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-2);
+}
+.repo-snapshot-head .exhibit-title { margin: 0; }
+
+.repo-snapshot-copy {
+  margin: 0 0 var(--space-4);
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+  color: var(--text-muted);
+}
+
+.repo-snapshot-status {
+  min-height: var(--lh-sm);
+  margin-top: var(--space-4);
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+}
+.repo-snapshot-status p { margin: 0; }
+
+.repo-snapshot-progress {
+  display: grid;
+  gap: var(--space-2);
+}
+.repo-snapshot-progress progress {
+  width: 100%;
+  height: 8px;
+  accent-color: var(--accent);
+}
+
+.repo-snapshot-ok { color: var(--pass); }
+.repo-snapshot-bad { color: var(--fail); }
+
+.repo-snapshot .page-actions { margin-top: var(--space-4); }
+
+.repo-snapshot-note { margin-top: var(--space-4); max-width: var(--measure); }
+
+/* Approve: the repository line under "What this proves". */
+.approve-repo {
+  display: grid;
+  gap: var(--space-2);
+  max-width: var(--measure);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius-1);
+  background: var(--surface);
+}
+.approve-repo p { margin: 0; }
+.approve-repo[data-checked='true'] { border-left-color: var(--pass); }
+
+/* Capture page header of a GitHub branch capture: the API address under the title. */
+.capture-subtitle {
+  margin: calc(-1 * var(--space-3)) 0 var(--space-4);
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+  overflow-wrap: anywhere;
+}

@@ -1,9 +1,12 @@
 import { Copy, Download, History } from 'lucide-react';
 import { useState } from 'react';
 import type { Hex } from 'viem';
+import { repoOf } from '../attachments/git';
+import { useRepoSnapshot } from '../attachments/useRepoSnapshot';
 import { ExhibitCard } from '../components/ExhibitCard';
 import { KeepAlive } from '../components/KeepAlive';
 import { Preview } from '../components/Preview';
+import { RepoSnapshot } from '../components/RepoSnapshot';
 import { evidenceFileName, saveBytes } from '../download';
 import { Notice } from '../ui/Notice';
 import { useToast } from '../ui/Toast';
@@ -32,6 +35,11 @@ export function Capture({ entityKey }: { entityKey: Hex }) {
   const [fileError, setFileError] = useState<string | undefined>();
   const v = useVerifiedCapture(entityKey, file?.bytes);
   const verdict = verdictOf(v.report, file?.bytes);
+  // R46: a capture of GitHub's branch API names a commit; its code snapshot is checked only
+  // against facts whose checks passed and that agree with their record.
+  const verified = v.facts && isVerifiedReport(v.report) && !v.report.mismatch?.length ? v.facts : null;
+  const snapshots = useRepoSnapshot(v.record?.entityKey ?? null, verified);
+  const branch = repoOf(v.facts);
 
   const onFile = async (f: File) => {
     try {
@@ -113,7 +121,16 @@ export function Capture({ entityKey }: { entityKey: Hex }) {
 
   return (
     <>
-      <h1 tabIndex={-1}>{captureTitle(v.facts, v.report?.C.status)}</h1>
+      {branch && v.report?.C.status === 'pass' ? (
+        <>
+          <h1 tabIndex={-1}>
+            GitHub branch {branch.owner}/{branch.repo}@{branch.branch}
+          </h1>
+          <p className="muted mono capture-subtitle">{v.facts?.canonicalUrl}</p>
+        </>
+      ) : (
+        <h1 tabIndex={-1}>{captureTitle(v.facts, v.report?.C.status)}</h1>
+      )}
       {v.phase === 'loading' ? (
         <p className="muted" role="status">
           Loading the record from Arkiv…
@@ -129,6 +146,7 @@ export function Capture({ entityKey }: { entityKey: Hex }) {
       {v.facts ? (
         <ExhibitCard facts={v.facts} evidenceRef={v.record?.evidenceRef} unverified={v.report?.C.status !== 'pass'} />
       ) : null}
+      <RepoSnapshot snapshots={snapshots} />
       <CheckPanel
         report={v.report}
         storage={v.storage}
