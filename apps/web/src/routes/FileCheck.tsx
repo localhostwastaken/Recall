@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { ExhibitCard } from '../components/ExhibitCard';
+import { Preview } from '../components/Preview';
 import { Notice } from '../ui/Notice';
 import { captureTitle } from '../verify/captureTitle';
 import { CheckPanel, VerdictLine, WhyWitness } from '../verify/CheckPanel';
@@ -57,6 +58,7 @@ export function FileCheck() {
           setFileError(undefined);
         }}
       />
+      {facts ? <Preview facts={facts} /> : null}
     </>
   );
 }

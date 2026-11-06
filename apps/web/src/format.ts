@@ -75,3 +75,11 @@ export function formatBytes(bytes: number): string {
   if (bytes < KB * KB) return `${(bytes / KB).toFixed(1)} KB`;
   return `${(bytes / (KB * KB)).toFixed(1)} MB`;
 }
+
+/** "4 Nov" (UTC), or "4 Nov 2025" when the year is not the current one. */
+export function formatShortDay(seconds: bigint, now: Date = new Date()): string {
+  const d = safeDate(seconds);
+  if (!d) return INVALID_TIME;
+  const year = d.getUTCFullYear() === now.getUTCFullYear() ? '' : ` ${d.getUTCFullYear()}`;
+  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}${year}`;
+}

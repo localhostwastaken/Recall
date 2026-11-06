@@ -7,6 +7,7 @@ import { FileCheck } from './routes/FileCheck';
 import { Home } from './routes/Home';
 import { Settings } from './routes/Settings';
 import { Storage } from './routes/Storage';
+import { Timeline } from './routes/Timeline';
 import { applyTheme, getSettings, saveSettings, type Theme } from './settings';
 import { ToastProvider } from './ui/Toast';
 
@@ -21,24 +22,13 @@ function NotFound({ path }: { path: string }) {
   );
 }
 
-/** Placeholder until the timeline route lands; it still gives a real, linkable address. */
-function TimelinePlaceholder({ urlHash }: { urlHash: string }) {
-  return (
-    <>
-      <h1 tabIndex={-1}>Captures of this page</h1>
-      <p className="lede muted">
-        The timeline for <span className="mono">{urlHash}</span> is not available in this build yet.
-      </p>
-    </>
-  );
-}
-
 function Page({ route }: { route: Route }) {
   switch (route.name) {
     case 'home':
       return <Home />;
     case 'url':
-      return <TimelinePlaceholder urlHash={route.urlHash} />;
+      // Keyed by the address, so moving between two timelines never carries state over.
+      return <Timeline key={route.urlHash} urlHash={route.urlHash} />;
     case 'capture':
       // Keyed by the record, so moving between two captures never carries state over.
       return <Capture key={route.key} entityKey={route.key} />;

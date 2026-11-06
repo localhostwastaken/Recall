@@ -1,7 +1,9 @@
-import { Copy, Download } from 'lucide-react';
+import { Copy, Download, History } from 'lucide-react';
 import { useState } from 'react';
 import type { Hex } from 'viem';
 import { ExhibitCard } from '../components/ExhibitCard';
+import { Preview } from '../components/Preview';
+import { evidenceFileName, saveBytes } from '../download';
 import { Notice } from '../ui/Notice';
 import { useToast } from '../ui/Toast';
 import { captureTitle } from '../verify/captureTitle';
@@ -12,20 +14,12 @@ import { verdictOf } from '../verify/verify';
 
 /** `recall-<urlHash8>-<signedAt>.json`, from the verified facts when there are any. */
 function evidenceFilename(v: VerifiedCapture): string {
-  if (v.facts) return `recall-${v.facts.urlHash.slice(2, 10)}-${v.facts.signedAt}.json`;
+  if (v.facts) return evidenceFileName(v.facts.urlHash, v.facts.signedAt);
   return `recall-${(v.record?.evidenceRef ?? '').slice(2, 10)}.json`;
 }
 
 function downloadEvidence(v: VerifiedCapture): void {
-  if (!v.evidenceBytes) return;
-  const url = URL.createObjectURL(new Blob([v.evidenceBytes as BlobPart], { type: 'application/json' }));
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = evidenceFilename(v);
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  if (v.evidenceBytes) saveBytes(v.evidenceBytes, evidenceFilename(v), 'application/json');
 }
 
 /** The detail page of one capture record: facts, verdict, checks A to E, actions. */
@@ -138,11 +132,28 @@ export function Capture({ entityKey }: { entityKey: Hex }) {
           setFileError(undefined);
         }}
       />
+      {v.facts ? (
+        <Preview
+          facts={v.facts}
+          fallback={
+            <button type="button" className="btn btn-secondary" disabled={!v.evidenceBytes} onClick={() => downloadEvidence(v)}>
+              <Download size={16} strokeWidth={1.75} aria-hidden="true" />
+              Download evidence file
+            </button>
+          }
+        />
+      ) : null}
       <div className="page-actions">
         <button type="button" className="btn btn-secondary" disabled={!v.evidenceBytes} onClick={() => downloadEvidence(v)}>
           <Download size={16} strokeWidth={1.75} aria-hidden="true" />
           Download evidence file
         </button>
+        {v.facts ? (
+          <a className="btn btn-secondary" href={`#/u/${v.facts.urlHash}`}>
+            <History size={16} strokeWidth={1.75} aria-hidden="true" />
+            View timeline
+          </a>
+        ) : null}
         <button type="button" className="btn btn-secondary" onClick={copyLink}>
           <Copy size={16} strokeWidth={1.75} aria-hidden="true" />
           Copy link

@@ -40,6 +40,11 @@ test.beforeAll(async () => {
 test.beforeEach(async ({ page }) => {
   await allowLocalArkiv(page);
 });
+// A page still reading from the node when a test ends (the timeline it was sent to) would make the
+// route handler throw.
+test.afterEach(async ({ page }) => {
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+});
 
 const check = (page: Page, id: 'A' | 'B' | 'C' | 'D' | 'E'): Locator => page.locator(`[data-check="${id}"]`);
 const status = (page: Page, id: 'A' | 'B' | 'C' | 'D' | 'E'): Locator =>

@@ -105,13 +105,21 @@ function storageCheck(info: StorageInfo): CheckResult {
     };
   }
   if (swarmSeconds < SOON_SECONDS) return { status: 'warn', detail: expiresIn(swarmSeconds) };
-  if (info.arkivSecondsLeft === null) {
+  // A missing or nonsensical figure (null, NaN, infinite) is "unavailable", never a pass.
+  const left = info.arkivSecondsLeft;
+  if (left === null || !Number.isFinite(left)) {
     return {
       status: 'unavailable',
       detail: 'Storage status not fully checked: the Arkiv record expiry could not be read (offline or RPC unreachable).',
     };
   }
-  if (info.arkivSecondsLeft < SOON_SECONDS) return { status: 'warn', detail: expiresIn(info.arkivSecondsLeft) };
+  if (left <= 0) {
+    return {
+      status: 'warn',
+      detail: 'The Arkiv record has expired and may disappear from listings. Download the evidence file to keep a copy.',
+    };
+  }
+  if (left < SOON_SECONDS) return { status: 'warn', detail: expiresIn(left) };
   return {
     status: 'pass',
     detail: `Evidence paid on Swarm until ${info.swarmExpiresAt ? formatDay(info.swarmExpiresAt) : 'an unknown date'} · record on Arkiv until ${info.arkivExpiresAt ? formatDay(info.arkivExpiresAt) : `block ${info.arkivExpiresAtBlock}`}.`,
@@ -141,7 +149,7 @@ async function readStorage(cfg: NetConfig, record: CaptureRecord): Promise<{ che
     arkivExpiresAtBlock: record.expiresAtBlock,
     arkivSecondsLeft,
     swarmExpiresAt: ttl.value !== null && ttl.value > 0n ? new Date(now + Number(ttl.value) * 1000) : null,
-    arkivExpiresAt: arkivSecondsLeft !== null ? new Date(now + arkivSecondsLeft * 1000) : null,
+    arkivExpiresAt: arkivSecondsLeft !== null && Number.isFinite(arkivSecondsLeft) ? new Date(now + arkivSecondsLeft * 1000) : null,
   };
   return { check: storageCheck(info), info };
 }
