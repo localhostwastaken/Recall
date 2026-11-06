@@ -77,10 +77,14 @@ if someone tops the batch up: anyone can, with **Keep alive** on the capture's p
 The built web app is a Swarm website, published on 2026-11-06 with
 `pnpm publish:swarm --net live --feed --days 14 --max-xbzz 1.5 --yes`. It is a copy of the GitHub
 Pages app for **browsing and verifying**, and it is a second place the verifier survives. Capturing
-and publishing use the GitHub Pages app: the extension only accepts messages from its listed origins
-(the Pages app, `*.bzz.link`, localhost), and the download gateway is not one of them.
+and publishing use the GitHub Pages app: the release extension accepts messages from the Pages app
+only.
 
-- **Working link:** <https://download.gateway.ethswarm.org/bzz/e002e9ab0bee50f874a8ee461fe053aca71c7e3be502b941d8933008e357f9e0/>
+- **How to open it:** through any Bee node at `/bzz/e002e9ab0bee50f874a8ee461fe053aca71c7e3be502b941d8933008e357f9e0/`.
+  `bash scripts/swarm-reader.sh` starts a read-only one (ultra-light: no wallet, no funds, API on
+  127.0.0.1) and prints `http://127.0.0.1:1733/bzz/e002e9ab0bee50f874a8ee461fe053aca71c7e3be502b941d8933008e357f9e0/`. bzz.link will serve it
+  once the Swarm team allowlists the hash (requested). The public download gateway serves the files,
+  but as downloads (see below).
 - **Site manifest** (the mantaray manifest of the build; 276 chunks uploaded): `7d1e73275798f6e0e69a08804bda4b582182e51456c41182637e8240cfad45a8`. It
   changes with every build.
 - **Feed manifest** (the address to share): `e002e9ab0bee50f874a8ee461fe053aca71c7e3be502b941d8933008e357f9e0`. A feed is a pointer its owner can move, and
@@ -101,8 +105,11 @@ and publishing use the GitHub Pages app: the extension only accepts messages fro
   `https://download.gateway.ethswarm.org` and writes the feed only after the read-back matched.
 - **bzz.link does not serve it yet.** <https://bzz.link/bzz/e002e9ab0bee50f874a8ee461fe053aca71c7e3be502b941d8933008e357f9e0/> and the CID form
   <https://bah5qcgza4abotkyl5zipq5fi5zdb7yctvstry7r34ublsqoysmyary2x7hqa.bzz.link/> redirect to
-  `/forbidden` until the Swarm team allowlists the hash; we have asked. The download gateway link
-  above works meanwhile. See the last item of [What got in our way](#what-got-in-our-way-with-swarm).
+  `/forbidden` until the Swarm team allowlists the hash; we have asked.
+- **download.gateway.ethswarm.org serves the files, but as downloads.** It answers `/bzz/...` with
+  `Content-Disposition: attachment`, so a browser saves `index.html` instead of showing the app
+  (curl and scripts get the right bytes). Meanwhile, open it through a Bee node of your own, as
+  above. See the last two items of [What got in our way](#what-got-in-our-way-with-swarm).
 
 ## The files that upload to Swarm and read from it
 
@@ -182,3 +189,11 @@ view downloading the evidence from a different gateway and checking its root.
   (the publish script now classifies a forbidden redirect as "held by gateway moderation") and asked
   the Swarm team to allowlist the feed manifest. **Would help:** a line in the hosting docs, and a
   way to see a hash's moderation status before publishing.
+- **The download gateway serves websites as downloads.** `download.gateway.ethswarm.org` answers
+  every `/bzz/` file with `Content-Disposition: attachment`, so a browser saves the site's
+  `index.html` instead of showing it, while curl and our read-back see the right bytes (200). Our
+  read-back passed, so we first called that link "working"; it works for scripts, not for people.
+  With bzz.link and api.gateway waiting for the allowlist, the app opens only through a Bee node of
+  your own: `scripts/swarm-reader.sh` starts an ultra-light, read-only one. **Would help:** a public
+  gateway that renders allowlisted and pending sites alike, or a note on which gateway is meant for
+  browsing.

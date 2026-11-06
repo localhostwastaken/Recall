@@ -9,9 +9,12 @@ person who captured it: you trust the witness key you pin, and by default that i
 > - **Install the extension and capture a page yourself:** download `recall-extension.zip` from the
 >   [v0.1.0-mumbai release](https://github.com/localhostwastaken/Recall/releases/tag/v0.1.0-mumbai), unzip it and "Load unpacked" in `chrome://extensions`
 >   (steps under [Run it](#run-it)).
-> - **The app on Swarm (browse and verify):**
->   <https://download.gateway.ethswarm.org/bzz/e002e9ab0bee50f874a8ee461fe053aca71c7e3be502b941d8933008e357f9e0/>
->   (one address that survives republishing; details under [The web app](#the-web-app)).
+> - **The app on Swarm (browse and verify):** feed manifest
+>   `e002e9ab0bee50f874a8ee461fe053aca71c7e3be502b941d8933008e357f9e0` (one address that survives
+>   republishing). Open it through any Bee node at `/bzz/<feed manifest>/`, for example a read-only one
+>   started by `bash scripts/swarm-reader.sh` at `http://127.0.0.1:1733/bzz/<feed manifest>/`.
+>   bzz.link will serve it once the Swarm team allowlists the hash (requested). Details under
+>   [The web app](#the-web-app).
 > - **Run the Arkiv query:** `pnpm install && pnpm arkiv:query` (see [Writer wallets](#writer-wallets)),
 >   or the keyless `curl` there.
 > - **Arkiv prize docs:** [arkiv/](arkiv/): [schema](arkiv/schema.md), [how we use Arkiv](arkiv/how-you-use-arkiv.md),
@@ -49,7 +52,9 @@ Live: the app at <https://localhostwastaken.github.io/Recall/app/>, the demo not
 
 The app is also live on Swarm, so the verifier survives if GitHub Pages goes away:
 
-- **Working link:** <https://download.gateway.ethswarm.org/bzz/e002e9ab0bee50f874a8ee461fe053aca71c7e3be502b941d8933008e357f9e0/>
+- **Open it through any Bee node** at `/bzz/e002e9ab0bee50f874a8ee461fe053aca71c7e3be502b941d8933008e357f9e0/`.
+  `bash scripts/swarm-reader.sh` starts a read-only one (ultra-light: no wallet, no funds) and prints
+  `http://127.0.0.1:1733/bzz/e002e9ab0bee50f874a8ee461fe053aca71c7e3be502b941d8933008e357f9e0/`.
 - **Feed manifest (the address to share):**
   `e002e9ab0bee50f874a8ee461fe053aca71c7e3be502b941d8933008e357f9e0`. It names a Swarm feed (owner
   `0x3c221Ba84864c187DaA72e9A861b20aAdE1F89C1`, topic `website`): the feed keeps one address across
@@ -61,11 +66,13 @@ The app is also live on Swarm, so the verifier survives if GitHub Pages goes awa
   [arkiv/swarm.md](arkiv/swarm.md) and the [evidence log](docs/evidence-log.md).
 - **bzz.link is not working yet:** <https://bzz.link/bzz/e002e9ab0bee50f874a8ee461fe053aca71c7e3be502b941d8933008e357f9e0/> and
   <https://bah5qcgza4abotkyl5zipq5fi5zdb7yctvstry7r34ublsqoysmyary2x7hqa.bzz.link/> show
-  `/forbidden` until the Swarm team allowlists the hash; we have asked. The download gateway above
-  is unaffected.
-- **Browse and verify only.** Capturing and publishing use the GitHub Pages app: the extension only
-  accepts messages from its listed origins (the Pages app, `*.bzz.link`, localhost), and the
-  download gateway is not one of them.
+  `/forbidden` until the Swarm team allowlists the hash; we have asked. Once it does, bzz.link
+  serves the app.
+- **The public download gateway serves the files, but as downloads.**
+  download.gateway.ethswarm.org answers `/bzz/...` with `Content-Disposition: attachment`, so a
+  browser saves `index.html` instead of showing the app.
+- **Browse and verify only.** Capturing and publishing use the GitHub Pages app: the release
+  extension accepts messages from the Pages app only.
 
 ## Demo
 
@@ -126,13 +133,16 @@ runs is needed to find it, fetch it or check it.
   offline file, as long as the Arkiv record and the Swarm batch are paid for and the testnet runs.
 - **O: Open source.** MIT ([LICENSE](LICENSE)); the forked TLSNotary code keeps its MIT/Apache-2.0
   notices. Extension, witness, app, scripts and the local devnet all build and run from this repo.
-- **P: Privacy.** No analytics or trackers. The witness sees the page you capture and your IP; the
-  Cloudflare tunnel, Arkiv RPC, Swarm gateways, Gnosis RPC and GitHub Pages see your IP and what you
-  ask them for (details under [Limitations](#limitations)); the captured site sees the witness's IP,
-  not yours. A record is public and names the wallet that wrote it.
+- **P: Privacy.** No analytics or trackers. The extension fetches the page once directly from your
+  browser (without cookies) to check its size before capturing, so the site sees your IP once; the
+  capture itself goes through the witness, which sees the page and your IP, and the site sees the
+  witness's IP. The Cloudflare tunnel, Arkiv RPC, Swarm gateways, Gnosis RPC and GitHub Pages see
+  your IP and what you ask them for (details under [Limitations](#limitations)). A record is public
+  and names the wallet that wrote it.
 - **S: Security.** Keys stay on the device (MetaMask; the stamp key in the extension; the witness key
   on the witness). You trust the witness you pin; gateways and RPCs can withhold data but not forge
-  it, because every view recomputes the Swarm hash and re-runs the checks. tlsn alpha.15 is unaudited.
+  it, because every view recomputes the Swarm hash (except free-mode records, which rely on checks
+  A–C plus the record cross-check) and re-runs the checks. tlsn alpha.15 is unaudited.
 
 ## Run it
 
@@ -179,8 +189,10 @@ pnpm extension:zip     # release build (Mozilla roots, no dev hooks) -> dist/rec
 
 ### The web app
 - Hosted: <https://localhostwastaken.github.io/Recall/app/> (live networks).
-- On Swarm: <https://download.gateway.ethswarm.org/bzz/e002e9ab0bee50f874a8ee461fe053aca71c7e3be502b941d8933008e357f9e0/> (same build; see "Live" above). Use
-  it to browse and verify; capture and publish from the GitHub Pages app.
+- On Swarm: feed manifest `e002e9ab0bee50f874a8ee461fe053aca71c7e3be502b941d8933008e357f9e0` (same build; see "Live"
+  above), through any Bee node at `/bzz/<feed manifest>/` (`bash scripts/swarm-reader.sh` starts one
+  at `http://127.0.0.1:1733`). Use it to browse and verify; capture and publish from the GitHub
+  Pages app.
 - From source: `pnpm --filter web dev` (local devnet) or `VITE_RECALL_NET=live pnpm --filter web dev`
   (live networks). A build is plain static files (`pnpm --filter web build`), so it can be served
   from anywhere, including Swarm: `pnpm publish:swarm --net live --feed` (that is how the copy above
@@ -253,8 +265,8 @@ now on show `"readonly":true`.
 - **Public gateway moderation.** By default evidence is uploaded and read through the public Swarm
   gateways (api/download.gateway.ethswarm.org, bzz.link), which can refuse or take content down. We
   met this ourselves: api.gateway and bzz.link redirect the HTML of a hash that is not allowlisted
-  to `/forbidden`, which is why our Swarm copy of the app is only reachable through
-  download.gateway.ethswarm.org for now. Raw evidence bytes (`/bytes/<ref>`) were served by
+  to `/forbidden`, and download.gateway.ethswarm.org sends `/bzz/` files as downloads, so for now
+  our Swarm copy of the app opens through a Bee node of your own (`scripts/swarm-reader.sh`). Raw evidence bytes (`/bytes/<ref>`) were served by
   download.gateway and bzz.link. The data stays on Swarm while its batch is paid; any Bee node or gateway can be set in
   Settings.
 - **The Arkiv access key ships in the client, by design.** It is a public rate-limit key baked into
