@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { WalletChip } from './components/WalletChip';
 import { useRoute, type Route } from './router';
 import { Home } from './routes/Home';
+import { Landing } from './routes/Landing';
 import { Settings } from './routes/Settings';
 import { Storage } from './routes/Storage';
 import { applyTheme, getSettings, saveSettings, type Theme } from './settings';
@@ -21,6 +22,8 @@ function NotFound({ path }: { path: string }) {
 function Page({ route }: { route: Route }) {
   switch (route.name) {
     case 'home':
+      return <Landing />;
+    case 'reader':
       return <Home />;
     case 'storage':
       return <Storage />;
@@ -94,7 +97,7 @@ export function App() {
             Recall
           </a>
           <nav aria-label="Main" className="nav">
-            {link('#/', 'home', 'Find captures')}
+            {link('#/reader', 'reader', 'Find captures')}
             {link('#/settings', 'settings', 'Settings')}
           </nav>
           <div className="header-tools">

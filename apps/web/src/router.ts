@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 /** Hash routes (#/…), so the built app works from any static host or folder. */
 export type Route =
   | { name: 'home' }
+  | { name: 'reader' }
   | { name: 'storage' }
   | { name: 'settings' }
   | { name: 'not-found'; path: string };
@@ -12,6 +13,8 @@ export function parseHash(hash: string): Route {
   switch (path) {
     case '':
       return { name: 'home' };
+    case '/reader':
+      return { name: 'reader' };
     case '/storage':
       return { name: 'storage' };
     case '/settings':
