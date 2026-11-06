@@ -16,7 +16,9 @@ import { normalizeKey } from '../../packages/net/src/config';
  *   wallet emits `accountsChanged` and `chainChanged`.
  * - Setting `window.__rejectNext = true` makes the next request that would open a
  *   MetaMask prompt (connect, add/switch chain, send, sign) fail with `{code: 4001}`.
- *   Reads never open a prompt, so they never consume the flag.
+ *   Reads never open a prompt, so they never consume the flag. To aim at one prompt, set
+ *   a method name (`'eth_sendTransaction'`) or `{ method?, skip? }`: only that method
+ *   counts, and the first `skip` matching requests go through before one is rejected.
  */
 export type MockWalletOptions = {
   /** With or without the 0x prefix. */
@@ -70,9 +72,17 @@ const PAGE_SCRIPT = `(() => {
     async request(args) {
       const method = args.method;
       const params = Array.isArray(args.params) ? args.params : args.params === undefined ? [] : [args.params];
-      if (PROMPTS.has(method) && window.__rejectNext) {
-        window.__rejectNext = false;
-        throw Object.assign(new Error('User rejected the request.'), { code: 4001 });
+      const flag = window.__rejectNext;
+      if (flag) {
+        const f = flag === true ? {} : typeof flag === 'string' ? { method: flag } : flag;
+        if (f.method ? f.method === method : PROMPTS.has(method)) {
+          if (f.skip > 0) {
+            window.__rejectNext = { method: f.method, skip: f.skip - 1 };
+          } else {
+            window.__rejectNext = false;
+            throw Object.assign(new Error('User rejected the request.'), { code: 4001 });
+          }
+        }
       }
       const reply = await window.__mockWalletRequest(method, params);
       if (reply.error) throw Object.assign(new Error(reply.error.message), { code: reply.error.code });

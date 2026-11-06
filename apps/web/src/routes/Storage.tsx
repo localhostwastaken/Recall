@@ -2,7 +2,7 @@ import { XBZZ, batchTtlSeconds, buyBatch, costFor, waitBatchUsable } from '@reca
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPublicClient, erc20Abi, http, isAddress, type Address, type Hex } from 'viem';
 import { addBatches, getStampAddress } from '../ext';
-import { formatBzz, formatTtl, formatXdai } from '../format';
+import { ceilSig, formatBzz, formatBzzCeil, formatTtl, formatXdaiCeil } from '../format';
 import { getNetConfig } from '../net';
 import { getSettings } from '../settings';
 import { Field } from '../ui/Field';
@@ -28,9 +28,10 @@ type SlotState = 'waiting' | 'buying' | 'bought' | 'ready' | 'cancelled' | 'fail
 type Slot = { state: SlotState; batchId?: Hex; ttl?: bigint | null };
 type Phase = 'idle' | 'connecting' | 'buying' | 'waiting';
 type Outcome =
-  | { kind: 'success'; count: number; owner: Address; registered: boolean }
+  | { kind: 'success'; count: number; owner: Address }
   | { kind: 'unconfirmed'; count: number }
-  | { kind: 'cancelled'; bought: number; target: number }
+  /** `stage` tells whether a purchase transaction could already have been approved. */
+  | { kind: 'cancelled'; bought: number; target: number; stage: 'wallet' | 'purchase' }
   | { kind: 'failed'; bought: number; target: number; message: string }
   | { kind: 'short'; need: bigint }
   | { kind: 'no-wallet' };
@@ -105,8 +106,14 @@ export function Storage() {
   const outcomeSeq = useRef(0);
   const show = (o: Outcome | null) => setOutcome(o && { ...o, seq: ++outcomeSeq.current });
   const [extWarning, setExtWarning] = useState<string | null>(null);
+  // Batches the extension has accepted; set only after `addBatches` resolved.
   const [registered] = useState(() => new Set<Hex>());
+  const [handedOver, setHandedOver] = useState(false);
   const running = phase !== 'idle';
+  // A purchase that stopped part-way keeps its owner, amount and duration until it is finished.
+  const partial = slots.some((s) => s.batchId) && slots.some((s) => !s.batchId);
+  const locked = running || partial;
+  const allHandedOver = (list: Slot[]) => list.length > 0 && list.every((s) => s.batchId && registered.has(s.batchId));
 
   /** Buys every slot that has no batch yet, waits for usability, then tells the extension. */
   async function run(resume: boolean) {
@@ -118,6 +125,7 @@ export function Storage() {
     commit();
     show(null);
     setExtWarning(null);
+    setHandedOver(false);
 
     // 1. Wallet on Gnosis with enough xBZZ.
     setPhase('connecting');
@@ -130,12 +138,15 @@ export function Storage() {
       const have = await pub.readContract({ address: XBZZ, abi: erc20Abi, functionName: 'balanceOf', args: [address] });
       if (have < need) {
         show({ kind: 'short', need });
+        if (boughtCount() === 0) setSlots([]);
         return setPhase('idle');
       }
     } catch (err) {
       if (err instanceof WalletError && err.kind === 'no-wallet') show({ kind: 'no-wallet' });
-      else if (isUserRejection(err)) show({ kind: 'cancelled', bought: boughtCount(), target });
+      else if (isUserRejection(err)) show({ kind: 'cancelled', bought: boughtCount(), target, stage: 'wallet' });
       else show({ kind: 'failed', bought: boughtCount(), target, message: reason(err) });
+      // Nothing was bought, so there is no batch list to show.
+      if (boughtCount() === 0) setSlots([]);
       return setPhase('idle');
     }
 
@@ -154,8 +165,10 @@ export function Storage() {
         const cancelled = isUserRejection(err);
         plan[i] = { state: cancelled ? 'cancelled' : 'failed' };
         stopped = cancelled
-          ? { kind: 'cancelled', bought: boughtCount(), target }
+          ? { kind: 'cancelled', bought: boughtCount(), target, stage: 'purchase' }
           : { kind: 'failed', bought: boughtCount(), target, message: reason(err) };
+        // Say so right away; the usability polling below can take minutes.
+        show(stopped);
       }
       commit();
     }
@@ -187,15 +200,14 @@ export function Storage() {
           setExtWarning(reason(err));
         }
       }
+      setHandedOver(extLink.kind === 'connected' && allHandedOver(plan));
     }
 
-    const ready = plan.filter((s) => s.state === 'ready').length;
-    show(
-      stopped ??
-        (ready === plan.length
-          ? { kind: 'success', count: plan.length, owner, registered: extLink.kind === 'connected' }
-          : { kind: 'unconfirmed', count: plan.length }),
-    );
+    // A stop (cancelled / failed) was already shown and stays; only a clean run reports here.
+    if (!stopped) {
+      const ready = plan.filter((s) => s.state === 'ready').length;
+      show(ready === plan.length ? { kind: 'success', count: plan.length, owner } : { kind: 'unconfirmed', count: plan.length });
+    }
     setPhase('idle');
   }
 
@@ -208,7 +220,9 @@ export function Storage() {
     buying: `Buying batch ${buyingIndex || bought + 1} of ${slots.length}…`,
     waiting: 'Waiting for storage…',
   }[phase];
-  const blocker = !owner
+  const blocker = partial
+    ? 'Finish the purchase in progress first: use the button in the notice below.'
+    : !owner
     ? 'Enter the owner address to continue.'
     : !countValid
       ? `Choose 1 to ${MAX_BATCHES} batches to continue.`
@@ -262,7 +276,7 @@ export function Storage() {
                 placeholder="0x…"
                 spellCheck={false}
                 autoComplete="off"
-                disabled={running}
+                disabled={locked}
               />
             </>
           )}
@@ -280,7 +294,7 @@ export function Storage() {
           onBlur={() => setCountTouched(true)}
           error={countTouched && !countValid ? `Enter a whole number from 1 to ${MAX_BATCHES}.` : undefined}
           helper="One batch = one capture."
-          disabled={running}
+          disabled={locked}
         />
         <Segmented
           legend="Storage lasts"
@@ -290,7 +304,7 @@ export function Storage() {
             { value: 30, label: '30 days' },
           ]}
           onChange={setDays}
-          disabled={running}
+          disabled={locked}
         />
 
         <p className="price" aria-live="polite">
@@ -304,9 +318,10 @@ export function Storage() {
               </button>
             </>
           ) : countValid ? (
+            // Round the unit up once and multiply it, so "n × a = b" is exact and never below the real cost.
             <span className="tabular">
-              {count} × {formatBzz(price.perBatch)} xBZZ = {formatBzz(price.perBatch * BigInt(count))} xBZZ + network fees ~
-              {formatXdai(price.gasPrice * GAS_PER_BATCH * BigInt(count))} xDAI
+              {count} × {formatBzz(ceilSig(price.perBatch))} xBZZ = {formatBzz(ceilSig(price.perBatch) * BigInt(count))} xBZZ + network
+              fees ~{formatXdaiCeil(price.gasPrice * GAS_PER_BATCH * BigInt(count))} xDAI
             </span>
           ) : (
             <span className="muted">Choose 1 to {MAX_BATCHES} batches to see the cost.</span>
@@ -344,7 +359,14 @@ export function Storage() {
 
       {outcome ? (
         <section className="stack" aria-label="Result">
-          <OutcomeNotice key={outcome.seq} outcome={outcome} remaining={remaining} onRetry={() => void run(true)} />
+          <OutcomeNotice
+            key={outcome.seq}
+            outcome={outcome}
+            remaining={remaining}
+            busy={running}
+            handoff={extLink.kind !== 'connected' ? 'none' : handedOver ? 'done' : 'failed'}
+            onRetry={() => void run(slots.some((s) => s.batchId))}
+          />
           {extWarning ? (
             <Notice
               kind="warn"
@@ -359,6 +381,7 @@ export function Storage() {
                       await addBatches(ids);
                       ids.forEach((id) => registered.add(id));
                       setExtWarning(null);
+                      setHandedOver(allHandedOver(slots));
                     } catch (err) {
                       setExtWarning(reason(err));
                     }
@@ -409,19 +432,33 @@ export function Storage() {
 function OutcomeNotice({
   outcome,
   remaining,
+  busy,
+  handoff,
   onRetry,
 }: {
   outcome: Outcome;
   remaining: number;
+  /** A run is still in progress (waiting for usability): the actions stay off until it ends. */
+  busy: boolean;
+  /** Whether the extension has the batches: only `done` may say it can use them. */
+  handoff: 'done' | 'failed' | 'none';
   onRetry: () => void;
 }) {
+  const action = (label: string) => (
+    <button type="button" className="btn btn-secondary" onClick={onRetry} disabled={busy}>
+      {label}
+    </button>
+  );
+  const captures = (n: number) => `${n} more ${n === 1 ? 'capture' : 'captures'}`;
   switch (outcome.kind) {
     case 'success':
       return (
         <Notice kind="success" title={`${plural(outcome.count)} ready.`} focus>
-          {outcome.registered
-            ? `You can make ${outcome.count} more ${outcome.count === 1 ? 'capture' : 'captures'}.`
-            : `The stamp key ${middle(outcome.owner)} can now make ${outcome.count} more ${outcome.count === 1 ? 'capture' : 'captures'}.`}
+          {handoff === 'done'
+            ? `You can make ${captures(outcome.count)}.`
+            : handoff === 'failed'
+              ? "They are paid for, but they are not in the extension's pool yet."
+              : `These batches are owned by the stamp key ${middle(outcome.owner)}. The Recall extension has not been told about them.`}
         </Notice>
       );
     case 'unconfirmed':
@@ -430,53 +467,40 @@ function OutcomeNotice({
           The storage is paid for, but the Swarm node has not accepted it yet. This normally takes 1 to 2 minutes.
         </Notice>
       );
-    case 'cancelled':
+    case 'cancelled': {
+      // A rejected wallet or network prompt cannot have charged anything. A rejected purchase
+      // prompt can come after the xBZZ approval already went through.
+      const body =
+        outcome.stage === 'wallet'
+          ? `You rejected the request in MetaMask. ${outcome.bought === 0 ? 'Nothing was charged.' : 'Nothing more was charged.'}`
+          : `${outcome.bought === 0 ? 'You rejected the request in MetaMask.' : `You rejected batch ${outcome.bought + 1} in MetaMask.`} No ${
+              outcome.bought === 0 ? '' : 'more '
+            }storage was bought. If you already approved the xBZZ spend, that approval and its small network fee remain.`;
       return outcome.bought === 0 ? (
-        <Notice
-          kind="warn"
-          title="Not bought"
-          focus
-          actions={
-            <button type="button" className="btn btn-secondary" onClick={onRetry}>
-              Try again
-            </button>
-          }
-        >
-          You rejected the request in MetaMask. Nothing was charged.
+        <Notice kind="warn" title="Not bought" focus actions={action('Try again')}>
+          {body}
         </Notice>
       ) : (
-        <Notice
-          kind="warn"
-          title={`${outcome.bought} of ${outcome.target} bought.`}
-          focus
-          actions={
-            <button type="button" className="btn btn-secondary" onClick={onRetry}>
-              Buy remaining {remaining}
-            </button>
-          }
-        >
-          You rejected batch {outcome.bought + 1} in MetaMask. Nothing more was charged.
+        <Notice kind="warn" title={`${outcome.bought} of ${outcome.target} bought.`} focus actions={action(`Buy remaining ${remaining}`)}>
+          {body}
         </Notice>
       );
+    }
     case 'failed':
       return (
         <Notice
           kind="error"
           title="Buying failed"
           focus
-          actions={
-            <button type="button" className="btn btn-secondary" onClick={onRetry}>
-              {outcome.bought > 0 ? `Buy remaining ${remaining}` : 'Try again'}
-            </button>
-          }
+          actions={action(outcome.bought > 0 ? `Buy remaining ${remaining}` : 'Try again')}
         >
           {outcome.message}. {outcome.bought} of {outcome.target} bought.
         </Notice>
       );
     case 'short':
       return (
-        <Notice kind="error" title="Not enough xBZZ" focus>
-          You need {formatBzz(outcome.need)} xBZZ on Gnosis.
+        <Notice kind="error" title="Not enough xBZZ" focus actions={action('Try again')}>
+          You need {formatBzzCeil(outcome.need)} xBZZ on Gnosis.
         </Notice>
       );
     case 'no-wallet':
