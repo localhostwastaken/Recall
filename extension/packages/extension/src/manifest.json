@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "version": "0.1.0.1501",
+  "version": "0.1.0.1502",
   "name": "Recall",
   "description": "Capture a public web page with a witness signature. Evidence goes to Swarm; the index goes to Arkiv.",
   "options_page": "options.html",
