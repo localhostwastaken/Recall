@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page, type Route } from '@playwright/test';
+import { expect, test, type Frame, type Locator, type Page, type Route } from '@playwright/test';
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import http from 'node:http';
@@ -144,6 +144,8 @@ let a1: Captured, a1c: Captured, a2: Captured, b: Captured, c1: Captured, s: Cap
 let e0: Captured, w1: Captured, w2: Captured;
 let keyW1: Hex, keyE0: Hex;
 let keyA1: Hex, keyA2: Hex, keyB: Hex, keyC1: Hex, keyS: Hex, keyPdf: Hex, keyHostile: Hex;
+let keyMxss: Hex, keyClosed: Hex, keyMention: Hex;
+let mxss: Captured, closed: Captured, mention: Captured;
 
 /** n random 5-letter words: two such texts have almost nothing in common. */
 const randomWords = (n: number) => Array.from({ length: n }, () => randomBytes(4).toString('hex').slice(0, 5)).join(' ');
@@ -173,6 +175,13 @@ const HOSTILE = `<!doctype html><html><head><meta charset="utf-8">
 <svg width="200" height="30" xmlns="http://www.w3.org/2000/svg"><a target="_self"><set attributeName="href" to="http://localhost:15174/smil" begin="0s" fill="freeze"/><text x="5" y="20">smil link</text></a></svg>
 <math><mi href="http://localhost:15174/mathml" target="_self">mathml link</mi></math>
 <form action="http://localhost:15174/form"><button type="submit">submit</button></form></body></html>`;
+
+/** Page bodies that try to hide a link from a sanitiser (see the tests that use them). */
+const MXSS_PAGE =
+  `<math><mtext><table><mglyph><style><!--</style><img title="--&gt;&lt;img src=1&gt;&lt;div&gt;&lt;template shadowrootmode=closed&gt;` +
+  `&lt;a target=_self href=http://localhost:${OUTSIDE_PORT}/mxss style=display:block;width:400px;height:200px&gt;CLICK&lt;/a&gt;&lt;/template&gt;&lt;/div&gt;">`;
+const CLOSED_PAGE = `<!doctype html><html><body><p>closed shadow page</p><div><template shadowrootmode="closed"><a target="_self" href="http://localhost:${OUTSIDE_PORT}/closed" style="display:block;width:400px;height:200px">closed link</a></template></div></body></html>`;
+const MENTION_PAGE = `<!doctype html><html><body><h1>Shadow DOM notes</h1><p>The attribute shadowrootmode turns a template into a shadow root, for example <code>&lt;template shadowrootmode="open"&gt;</code>.</p></body></html>`;
 
 test.beforeAll(async () => {
   test.setTimeout(420_000);
@@ -206,6 +215,9 @@ test.beforeAll(async () => {
     await setNoticeVersion(1);
   }
   hostile = await captureHtml(`/hostile?tlh=${run}`, HOSTILE);
+  mxss = await captureHtml(`/mxss?tlm=${run}`, MXSS_PAGE);
+  closed = await captureHtml(`/closed?tlc2=${run}`, CLOSED_PAGE);
+  mention = await captureHtml(`/mention?tlm2=${run}`, MENTION_PAGE);
   w1 = await captureHtml(targetW, `<!doctype html><html><body><p>${randomWords(6000)}</p></body></html>`);
   await sleep(1_100);
   w2 = await captureHtml(targetW, `<!doctype html><html><body><p>${randomWords(6000)}</p></body></html>`);
@@ -229,6 +241,9 @@ test.beforeAll(async () => {
   keyS = await publish(s);
   keyPdf = await publish(pdf);
   keyHostile = await publish(hostile);
+  keyMxss = await publish(mxss);
+  keyClosed = await publish(closed);
+  keyMention = await publish(mention);
 
   // targetD: three junk rows, more than the budget of 2 the spec gives the page.
   const d = await captureAt(targetD, await record(targetD));
@@ -250,7 +265,7 @@ test.beforeAll(async () => {
   await publish(lying, { bodySha256: `0x${'ab'.repeat(32)}` });
 
   // The fixture itself must be sound, or every test below would prove nothing.
-  expect([keyA1, keyA2, keyB, keyC1, keyS, keyPdf, keyHostile].every((k) => /^0x[0-9a-f]{64}$/.test(k))).toBe(true);
+  expect([keyA1, keyA2, keyB, keyC1, keyS, keyPdf, keyHostile, keyMxss, keyClosed, keyMention].every((k) => /^0x[0-9a-f]{64}$/.test(k))).toBe(true);
   expect(DEVNET_WITNESS_ADDRESS).toBe(a1.signer);
 });
 
@@ -417,71 +432,82 @@ test('@p3 timeline preview iframe is sandboxed and scripts do not run', async ({
   expect(errors).toEqual([]);
 });
 
-test('@p3 timeline preview blocks scripts, outside resources, redirects, links and forms of a hostile page', async ({ page }) => {
-  // A real server stands in for "the rest of the internet". Whatever the captured page asks of it
-  // (an image, a stylesheet, a frame, a fetch, a redirect, a preconnect, a link of any kind) would be
-  // counted here: requests, and also bare connections. (The browser's own request events do not
-  // report a sandboxed frame's requests, so they cannot be used.)
+/**
+ * A real server stands in for "the rest of the internet" while `body` runs. Whatever a captured page
+ * asks of it (an image, a stylesheet, a frame, a fetch, a redirect, a preconnect, a link of any kind)
+ * is counted: requests, and also bare connections. (The browser's own request events do not report a
+ * sandboxed frame's requests, so they cannot be used.)
+ */
+async function withOutside(body: (outside: { hits: string[]; connections: () => number }) => Promise<void>): Promise<void> {
   const hits: string[] = [];
   let connections = 0;
-  const outside = http.createServer((req, res) => {
+  const server = http.createServer((req, res) => {
     hits.push(`${req.method} ${req.url}`);
     res.writeHead(200, { 'content-type': 'text/html' }).end('outside');
   });
-  outside.on('connection', () => connections++);
+  server.on('connection', () => connections++);
   await new Promise<void>((done, fail) => {
-    outside.once('error', fail); // e.g. the port is taken: fail now instead of hanging
-    outside.listen(OUTSIDE_PORT, done);
+    server.once('error', fail); // e.g. the port is taken: fail now instead of hanging
+    server.listen(OUTSIDE_PORT, done);
   });
   try {
+    await body({ hits, connections: () => connections });
+  } finally {
+    server.closeAllConnections();
+    await new Promise((done) => server.close(done));
+  }
+}
+
+/** Nothing reached "the internet", the frame never left about:srcdoc, no popup, the app did not navigate. */
+async function expectQuiet(page: Page, frame: Frame, outside: { hits: string[]; connections: () => number }, key: Hex, what: string) {
+  expect(outside.hits, what).toEqual([]);
+  expect(outside.connections(), `${what}: connections`).toBe(0);
+  expect(await frame.evaluate(() => location.href), what).toBe('about:srcdoc');
+  expect(page.context().pages(), `${what}: popup`).toHaveLength(1);
+  await expect(page).toHaveURL(capturePage(key));
+}
+
+const frameOf = async (page: Page): Promise<Frame> => (await (await preview(page).elementHandle())!.contentFrame())!;
+
+test('@p3 timeline preview blocks scripts, outside resources, redirects, links and forms of a hostile page', async ({ page }) => {
+  await withOutside(async (outside) => {
     await page.goto(capturePage(keyHostile));
     await expect(verdict(page)).toHaveAttribute('data-verdict', 'pass');
     const frameEl = preview(page);
-    const frame = await (await frameEl.elementHandle())!.contentFrame();
-    await expect.poll(() => frame!.evaluate(() => document.body?.textContent ?? '')).toContain('hostile page');
+    const frame = await frameOf(page);
+    await expect.poll(() => frame.evaluate(() => document.body?.textContent ?? '')).toContain('hostile page');
     await page.waitForTimeout(1_500); // a meta refresh or a late request would have fired by now
-    const quiet = async (what: string) => {
-      expect(hits, what).toEqual([]);
-      expect(connections, `${what}: connections`).toBe(0);
-      expect(await frame!.evaluate(() => location.href), what).toBe('about:srcdoc');
-      expect(page.context().pages(), `${what}: popup`).toHaveLength(1);
-      await expect(page).toHaveURL(capturePage(keyHostile));
-    };
+    const quiet = (what: string) => expectQuiet(page, frame, outside, keyHostile, what);
     await quiet('after load');
-    expect(await frame!.evaluate(() => (window as unknown as { __ran?: number }).__ran)).toBeUndefined();
+    expect(await frame.evaluate(() => (window as unknown as { __ran?: number }).__ran)).toBeUndefined();
 
-    // Nothing in the document can navigate: no href is left on any link, whatever its target.
-    expect(await frame!.evaluate(() => [...document.querySelectorAll('a, area')].filter((a) => a.hasAttribute('href') || a.hasAttributeNS('http://www.w3.org/1999/xlink', 'href')).length)).toBe(0);
-    expect(await frame!.evaluate(() => document.querySelectorAll('link, iframe, meta[http-equiv="refresh"], base[href]').length)).toBe(0);
-    // Declarative shadow DOM: a link inside `<template shadowrootmode>` is invisible to a query but becomes
-    // live in the frame's own parser. No template is left, and nothing in the frame has a shadow root.
-    expect(await frame!.evaluate(() => document.querySelectorAll('template, animate, set').length)).toBe(0);
-    expect(await frame!.evaluate(() => [...document.querySelectorAll('*')].filter((e) => e.shadowRoot).length)).toBe(0);
-    expect(await frame!.evaluate(() => [...document.querySelectorAll('*')].filter((e) => [...e.attributes].some((a) => a.localName === 'href')).length)).toBe(0);
+    // Only plain HTML and CSS are left: no link target, template, SVG, MathML, animation, frame, form or href.
+    expect(await frame.evaluate(() => document.querySelectorAll('template, svg, math, animate, set, link, iframe, form, script, meta[http-equiv="refresh"], base[href], [href], [*|href], [ping]').length)).toBe(0);
+    expect(await frame.evaluate(() => [...document.querySelectorAll('*')].filter((e) => e.shadowRoot).length)).toBe(0);
 
-    // Clicks: a plain link, target=_self, target=_top, SVG links (xlink:href and href), an image map, a form.
-    for (const target of ['a link', 'self link', 'top link', 'svg xlink link', 'svg href link']) {
-      await frame!.getByText(target, { exact: true }).click({ force: true });
+    // Clicks: a plain link, target=_self, target=_top; then every hiding place the page tried (SVG links with
+    // xlink:href and href, shadow roots, an SMIL-written href, MathML). Those are gone, so clicking a missing
+    // one just times out quickly; if one survived, the click would reach the listener.
+    for (const target of ['a link', 'self link', 'top link']) {
+      await frame.getByText(target, { exact: true }).click({ force: true });
       await page.waitForTimeout(250);
       await quiet(`click "${target}"`);
     }
-    // Links that only exist if a hiding place survived (a shadow root, an SMIL-written href, MathML): clicking
-    // them must go nowhere whether or not they are there (a missing one just times out quickly).
-    for (const target of ['dsd html link', 'dsd svg link', 'smil link', 'mathml link']) {
-      await frame!.getByText(target, { exact: true }).click({ force: true, timeout: 1_500 }).catch(() => undefined);
+    for (const target of ['svg xlink link', 'svg href link', 'dsd html link', 'dsd svg link', 'smil link', 'mathml link']) {
+      await frame.getByText(target, { exact: true }).click({ force: true, timeout: 1_500 }).catch(() => undefined);
       await page.waitForTimeout(250);
       await quiet(`click "${target}"`);
     }
-    await frame!.locator('area').click({ force: true, position: { x: 10, y: 10 } }).catch(() => undefined); // an area has no box
-    await frame!.locator('img[usemap]').click({ position: { x: 10, y: 10 } });
-    await frame!.getByRole('button', { name: 'submit' }).click();
+    await frame.locator('area').click({ force: true, position: { x: 10, y: 10 } }).catch(() => undefined); // an area has no box
+    await frame.locator('img[usemap]').click({ position: { x: 10, y: 10 }, timeout: 3_000 }).catch(() => undefined);
+    await frame.getByRole('button', { name: 'submit' }).click({ timeout: 1_500 }).catch(() => undefined); // forms are gone
     await page.waitForTimeout(300);
     await quiet('image map and form');
 
-    // Keyboard: Enter on a focused link (any kind, any target) goes nowhere. Focus is set inside the frame
-    // itself; a link that cannot take focus (no href) simply leaves focus where it was.
-    for (const sel of ['#self', 'a', 'svg a', 'area']) {
-      await frame!.locator(sel).first().evaluate((el) => (el as HTMLElement | SVGElement).focus());
+    // Keyboard: Enter on a focused link goes nowhere. Focus is set inside the frame itself; a link that
+    // cannot take focus (no href) simply leaves focus where it was.
+    for (const sel of ['#self', 'a', 'area']) {
+      await frame.locator(sel).first().evaluate((el) => (el as HTMLElement).focus());
       await page.keyboard.press('Enter');
       await page.waitForTimeout(150);
     }
@@ -490,10 +516,44 @@ test('@p3 timeline preview blocks scripts, outside resources, redirects, links a
     // The preview is still there and was never replaced by the "stopped" notice.
     await expect(frameEl).toHaveCount(1);
     await expect(page.getByText('The preview was stopped.')).toHaveCount(0);
-  } finally {
-    outside.closeAllConnections();
-    await new Promise((done) => outside.close(done));
+  });
+});
+
+test('@p3 timeline preview of a mutation-XSS page and of a hidden closed shadow root goes nowhere', async ({ page }) => {
+  // The first page hides a closed shadow root with a link inside an attribute: after one parse and
+  // serialise it becomes real markup that no query can see (a reviewer's payload, reproduced in
+  // Chromium). The second writes the closed shadow root directly. A click anywhere in the 400 x 200
+  // block, where the link would be, must go nowhere.
+  for (const [what, key] of [['mutation XSS', keyMxss], ['closed shadow root', keyClosed]] as const) {
+    await withOutside(async (outside) => {
+      await page.goto(capturePage(key));
+      await expect(verdict(page), what).toHaveAttribute('data-verdict', 'pass');
+      const frameEl = preview(page);
+      await expect(frameEl, what).toHaveCount(1);
+      const frame = await frameOf(page);
+      await page.waitForTimeout(1_000);
+      expect(await frame.evaluate(() => [...document.querySelectorAll('*')].filter((e) => e.shadowRoot).length), what).toBe(0);
+      expect(await frame.evaluate(() => document.querySelectorAll('template, [href]').length), what).toBe(0);
+      for (const [x, y] of [[40, 30], [150, 80], [300, 150]]) {
+        await frameEl.click({ position: { x, y }, force: true });
+        await page.waitForTimeout(250);
+        await expectQuiet(page, frame, outside, key, `${what}: click at ${x},${y}`);
+      }
+      await frame.locator('body').press('Enter').catch(() => undefined);
+      await page.waitForTimeout(300);
+      await expectQuiet(page, frame, outside, key, `${what}: keyboard`);
+    });
   }
+});
+
+test('@p3 timeline a page that only talks about shadowrootmode still previews', async ({ page }) => {
+  await page.goto(capturePage(keyMention));
+  await expect(verdict(page)).toHaveAttribute('data-verdict', 'pass');
+  const frame = await frameOf(page);
+  await expect.poll(() => frame.evaluate(() => document.body?.textContent ?? '')).toContain('The attribute shadowrootmode turns a template into a shadow root');
+  expect(await frame.evaluate(() => document.body.textContent)).toContain('<template shadowrootmode="open">');
+  await expect(page.getByText('This page could not be shown safely.')).toHaveCount(0);
+  expect(await frame.evaluate(() => document.querySelector('h1')?.textContent)).toBe('Shadow DOM notes');
 });
 
 test('@p3 timeline a preview that loads twice is stopped', async ({ page }) => {

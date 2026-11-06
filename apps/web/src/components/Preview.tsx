@@ -52,8 +52,10 @@ function PdfDownload({ facts }: { facts: VerifiedFacts }) {
 /**
  * The captured bytes, drawn safely (design brief 4.5). HTML and text go into
  * `<iframe sandbox="" srcdoc>` (an empty sandbox: no scripts, no same-origin, no forms, no
- * popups) with outside resources blocked and every link and redirect taken out (see
- * `previewDoc`). The captured page is never put into the app's own DOM.
+ * popups). The page first goes through an allowlist sanitiser (plain HTML and CSS only: no
+ * link, form, frame, template, SVG or MathML), then gets a CSP that blocks every outside
+ * resource, and the final string must pass a fail-closed check (see `previewDoc`). The captured
+ * page is never put into the app's own DOM.
  *
  * `facts` exist when checks A and B passed and the signature is not invalid, so they can also
  * belong to a witness the person has not trusted (check C warns) or to an HTTP error page; the
