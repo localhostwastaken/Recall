@@ -2,8 +2,9 @@ import { ADDRESS_ERROR, URL_ERROR, checkAddress, checkUrl } from '@recall/net';
 import { useEffect, useState } from 'react';
 import type { Address } from 'viem';
 import { DEFAULT_WITNESS_LABEL, EXTENSION_ID, baseNetConfig, defaultExtensionId, defaultWitnessAddress } from './defaults';
+import { initTheme } from './theme';
 
-/** Kept for settings saved by older versions; the app itself is light only (see applyTheme). */
+/** Kept for settings saved by older versions; the live theme lives in theme.ts (see applyTheme). */
 export type Theme = 'system' | 'light' | 'dark';
 export type PinnedWitness = { address: Address; label: string };
 
@@ -307,10 +308,10 @@ export function useSettings(): Settings {
 }
 
 /**
- * The app is light only (the bright archive). A theme saved by an older version ("dark",
- * "system") is still read and kept, so stored settings stay compatible, but it no longer
- * changes the look: <html> always carries `data-theme="light"`.
+ * The theme is the visitor's system setting or their explicit choice (header toggle, kept under
+ * its own key by theme.ts). A `theme` saved in the settings by an older version is still read and
+ * kept, so stored settings stay compatible, but it does not decide the look.
  */
 export function applyTheme(_theme?: Theme): void {
-  document.documentElement.setAttribute('data-theme', 'light');
+  initTheme();
 }

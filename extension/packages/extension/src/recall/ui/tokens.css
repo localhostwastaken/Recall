@@ -1,20 +1,14 @@
-/* Recall: a bright living archive. Shared, light-only product tokens (the web app and the
-   extension use the same values). Cream paper, navy ink, cobalt for actions and links. */
-:root {
-  --bg: #fffdf5; --surface: #ffffff; --surface-sunken: #f0f4ff; --surface-raised: #ffffff;
-  --text: #162743; --text-muted: #52607a; --border: #d5dcec; --border-strong: #7c8ba5;
-  --accent: #2455df; --accent-hover: #183eb0; --on-accent: #ffffff; --focus: #2455df;
-  --accent-soft: #e9efff; --exhibit: #dfe9ff;
-  --citrus: #f7d84d; --citrus-soft: #fff5c8; --coral: #f58b76; --coral-soft: #ffebe5;
-  --highlight: var(--citrus);
-  --pass: #126345; --pass-bg: #e5f5eb; --fail: #ae2a37; --fail-bg: #fff0ed;
-  --warn: #78520a; --warn-bg: #fff4cb; --na: #52607a; --na-bg: #eef1f7;
-  --info: #2455bf; --info-bg: #e9efff; --diff-add-bg: #e5f5eb; --diff-rem-bg: #ffebe5;
-  --danger: var(--fail); --on-danger: #ffffff; --scrim: rgb(22 39 67 / 0.4);
-  /* Flat: hairlines do the separating; shadows only lift dialogs and toasts off the page. */
-  --shadow-1: none;
-  --shadow-2: 0 12px 32px rgb(22 39 67 / 0.12);
+/* Recall, "Swarm Night": shared product tokens, dark and light (the web app and the extension
+   use byte-identical copies of this file). Palette from the sponsors' own marks: Swarm orange
+   and its lime glint, Arkiv blue for "time left in storage".
+   Meanings (the same everywhere): orange = you can press it, never a status; green = a check
+   ran and passed; amber = needs attention; red = failed; blue (--life) = time left in storage;
+   grey = not checked. Light is the default; dark follows the system or [data-theme=dark].
+   The dark set is written twice on purpose (explicit attribute, and the system setting when no
+   explicit light choice was made); test/contrast.test.ts keeps both copies equal. */
 
+/* Tokens that do not change with the theme. */
+:root {
   --font-sans: 'Public Sans', system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
   --font-display: 'Bricolage Grotesque', 'Public Sans', system-ui, -apple-system, 'Segoe UI', Arial, sans-serif;
   /* Older styles name the heading face "serif"; it is the display face now. */
@@ -29,17 +23,81 @@
   --text-2xl: 30px; --lh-2xl: 36px;
   --text-3xl: 40px; --lh-3xl: 48px;
 
-  /* An 8 px scale (4 px for hairline gaps only). */
+  /* An 8 px scale (4 px for hairline gaps only): 4, 8, 12, 16, 24, 32, 48, 64, 96. */
   --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
-  --space-5: 24px; --space-6: 32px; --space-7: 48px; --space-8: 64px;
+  --space-5: 24px; --space-6: 32px; --space-7: 48px; --space-8: 64px; --space-9: 96px;
 
-  --radius-1: 8px; --radius-2: 12px;
+  /* Corners by role: 8 chips and small tiles, 14 cards, panels and inputs, pill for buttons and status. */
+  --radius-1: 8px; --radius-2: 14px; --radius-pill: 999px;
   --dur-fast: 150ms; --dur-base: 200ms; --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
 
   --measure: 44rem; --page-max: 72rem;
   --control-h: 48px;
   --z-header: 10; --z-dialog: 100; --z-toast: 200;
+}
+
+/* Light (default). */
+:root,
+[data-theme=light] {
+  --bg: #f4f5f2; --bg-alt: #eaede8; --surface: #ffffff; --surface-2: #eef1ed;
+  --surface-sunken: #eef1ed; --surface-raised: #ffffff;
+  --text: #101411; --text-muted: #4f5852; --border: #dde1dc; --border-strong: #838c85;
+  --accent: #f47a20; --accent-hover: #d9650f; --accent-text: #a84300; --on-accent: #101411;
+  --focus: #a84300;
+  --accent-soft: #ffe4cc; --exhibit: var(--accent-soft);
+  --citrus: #bfe38a; --citrus-soft: #eef8d8; --coral: var(--accent-soft); --coral-soft: var(--accent-soft);
+  --highlight: var(--citrus);
+  --pass: #126345; --pass-bg: #e5f5eb; --fail: #ae2a37; --fail-bg: #fff0ed;
+  --warn: #7a4f00; --warn-bg: #fff2d1; --na: #4f5852; --na-bg: #eef1ed;
+  --life: #181ea9; --life-bg: #e8e9fb; --info: var(--life); --info-bg: var(--life-bg);
+  --diff-add-bg: var(--pass-bg); --diff-rem-bg: var(--fail-bg);
+  --danger: var(--fail); --on-danger: #ffffff; --scrim: rgb(16 20 17 / 0.45);
+  /* Flat: hairlines do the separating; shadows only lift dialogs and toasts off the page. */
+  --shadow-1: none;
+  --shadow-2: 0 12px 32px rgb(16 20 17 / 0.12);
   color-scheme: light;
+}
+
+/* Dark, chosen explicitly. */
+[data-theme=dark] {
+  --bg: #000000; --bg-alt: #0b0e0c; --surface: #121713; --surface-2: #1c231e;
+  --surface-sunken: #1c231e; --surface-raised: #1c231e;
+  --text: #f2f2f2; --text-muted: #a9b2ab; --border: #2a322c; --border-strong: #667069;
+  --accent: #f47a20; --accent-hover: #ff8c3a; --accent-text: #ff9a52; --on-accent: #000000;
+  --focus: #ff9a52;
+  --accent-soft: #2a1608; --exhibit: var(--accent-soft);
+  --citrus: #def4b6; --citrus-soft: #1c2810; --coral: var(--accent-soft); --coral-soft: var(--accent-soft);
+  --highlight: var(--citrus);
+  --pass: #7fdc9c; --pass-bg: #0f2a1a; --fail: #ff8f85; --fail-bg: #341614;
+  --warn: #f0b65a; --warn-bg: #2e2210; --na: #a9b2ab; --na-bg: #1c231e;
+  --life: #9ea4ff; --life-bg: #181c3d; --info: var(--life); --info-bg: var(--life-bg);
+  --diff-add-bg: var(--pass-bg); --diff-rem-bg: var(--fail-bg);
+  --danger: var(--fail); --on-danger: #000000; --scrim: rgb(0 0 0 / 0.7);
+  --shadow-1: none;
+  --shadow-2: 0 12px 32px rgb(0 0 0 / 0.6);
+  color-scheme: dark;
+}
+
+/* Dark, because the system says so (and the person has not chosen light). */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme=light]) {
+    --bg: #000000; --bg-alt: #0b0e0c; --surface: #121713; --surface-2: #1c231e;
+    --surface-sunken: #1c231e; --surface-raised: #1c231e;
+    --text: #f2f2f2; --text-muted: #a9b2ab; --border: #2a322c; --border-strong: #667069;
+    --accent: #f47a20; --accent-hover: #ff8c3a; --accent-text: #ff9a52; --on-accent: #000000;
+    --focus: #ff9a52;
+    --accent-soft: #2a1608; --exhibit: var(--accent-soft);
+    --citrus: #def4b6; --citrus-soft: #1c2810; --coral: var(--accent-soft); --coral-soft: var(--accent-soft);
+    --highlight: var(--citrus);
+    --pass: #7fdc9c; --pass-bg: #0f2a1a; --fail: #ff8f85; --fail-bg: #341614;
+    --warn: #f0b65a; --warn-bg: #2e2210; --na: #a9b2ab; --na-bg: #1c231e;
+    --life: #9ea4ff; --life-bg: #181c3d; --info: var(--life); --info-bg: var(--life-bg);
+    --diff-add-bg: var(--pass-bg); --diff-rem-bg: var(--fail-bg);
+    --danger: var(--fail); --on-danger: #000000; --scrim: rgb(0 0 0 / 0.7);
+    --shadow-1: none;
+    --shadow-2: 0 12px 32px rgb(0 0 0 / 0.6);
+    color-scheme: dark;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
