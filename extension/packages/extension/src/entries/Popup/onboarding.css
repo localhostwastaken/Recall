@@ -29,8 +29,6 @@
   font-size: var(--text-xs);
   line-height: var(--lh-xs);
   font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -79,21 +77,22 @@
   background: var(--border-strong);
 }
 
+/* Progress is a status, so the markers are neutral: orange stays for the one button to press. */
 .ob-marker-done {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  color: var(--accent-text);
+  border-color: var(--text);
+  background: var(--surface);
+  color: var(--text);
 }
 
 .ob-marker.ob-marker-done::before,
 .ob-marker.ob-marker-active::before {
-  background: var(--accent);
+  background: var(--text);
 }
 
 .ob-marker-active {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: var(--on-accent);
+  border-color: var(--text);
+  background: var(--text);
+  color: var(--bg);
 }
 
 .ob-card {
@@ -112,8 +111,9 @@
   width: 56px;
   height: 56px;
   border-radius: var(--radius-2);
-  background: var(--exhibit);
-  color: var(--accent-text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
 }
 
 .ob-title {

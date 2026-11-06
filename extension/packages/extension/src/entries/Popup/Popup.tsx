@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { LoaderCircle, Settings as SettingsIcon } from 'lucide-react';
+import { ArrowUpRight, History, LoaderCircle, Settings as SettingsIcon } from 'lucide-react';
 import { StatusBadge } from '../../recall/ui/StatusBadge';
 import { WitnessChip, type WitnessState } from '../../recall/ui/WitnessChip';
 import { Notice } from '../../recall/ui/Notice';
@@ -145,8 +145,9 @@ function useRepoTarget(url: string | undefined): RepoInfo | undefined {
 function EarlierCapturesView({ value }: { value: EarlierCaptures | undefined }) {
   const v = earlierCopy(value);
   const timeline = (href: string) => (
-    <a className="link" href={href} target="_blank" rel="noreferrer">
+    <a className="link earlier-link" href={href} target="_blank" rel="noreferrer">
       View timeline
+      <ArrowUpRight size={16} strokeWidth={1.75} aria-hidden="true" />
     </a>
   );
   return (
@@ -160,13 +161,16 @@ function EarlierCapturesView({ value }: { value: EarlierCaptures | undefined }) 
         </p>
       ) : v.kind === 'some' ? (
         <div className="earlier">
-          <p className="earlier-counts tabular">{v.counts}</p>
-          <p className="muted tabular">{v.latest}</p>
-          {v.note ? <p className="muted">{v.note}</p> : null}
-          <p>{timeline(v.timelineUrl)}</p>
+          <History size={20} strokeWidth={1.75} aria-hidden="true" className="earlier-icon" />
+          <div className="earlier-text">
+            <p className="earlier-counts tabular">{v.counts}</p>
+            <p className="muted tabular">{v.latest}</p>
+            {v.note ? <p className="muted">{v.note}</p> : null}
+            <p>{timeline(v.timelineUrl)}</p>
+          </div>
         </div>
       ) : v.kind === 'unavailable' ? (
-        <div className="earlier">
+        <div className="earlier earlier-plain">
           <p>
             <StatusBadge status="unavailable" />
           </p>
@@ -174,12 +178,12 @@ function EarlierCapturesView({ value }: { value: EarlierCaptures | undefined }) 
           <p>{timeline(v.timelineUrl)}</p>
         </div>
       ) : v.kind === 'unchecked' ? (
-        <div className="earlier">
+        <div className="earlier earlier-plain">
           <p className="muted">{v.text}</p>
           <p>{timeline(v.timelineUrl)}</p>
         </div>
       ) : (
-        <p className="muted">{v.text}</p>
+        <p className="muted earlier-empty">{v.text}</p>
       )}
     </section>
   );
@@ -283,6 +287,14 @@ export function Popup() {
   else if (witness === 'checking') disabledReason = 'Checking the witness…';
   else if (witness === 'offline') disabledReason = witnessOfflineCopy(witnessWhy).helper;
   const busy = Boolean(running && mine);
+  // One primary action per screen: when a result's own notice has the next step (Open Recall tab,
+  // Try again), the footer's capture button steps back to an outline button.
+  const resultLeads =
+    mine?.status === 'done' ||
+    (mine?.status === 'error' && errorCopy(mine.code, mine.error, page?.host ?? '', mine.size).actions.includes('retry'));
+  // While a capture runs or its result shows, the "Takes about 30 s" line is noise: it stays for
+  // screen readers (the button's description) but leaves the screen.
+  const quietHelper = disabledReason === null && Boolean(mine);
   const helper =
     disabledReason ?? (repo?.status === 'ok' ? repoSubline(repo.target.branch) : CAPTURE_HELPER);
 
@@ -314,8 +326,9 @@ export function Popup() {
       ) : (
         <>
           <main className="popup-body">
-            <section aria-labelledby="this-page">
-              <h2 id="this-page" className="section-label">
+            {/* The page as one compact row (no label: the tile and host say what it is). */}
+            <section aria-labelledby="this-page" className="page-section">
+              <h2 id="this-page" className="visually-hidden">
                 This page
               </h2>
               {page === undefined ? (
@@ -323,20 +336,23 @@ export function Popup() {
               ) : page === null ? (
                 <p className="muted">No page to capture in this tab.</p>
               ) : (
-                <>
-                  <p className="page-host">{page.host}</p>
-                  <p className="page-url mono" title={page.url}>
-                    {page.url}
-                  </p>
-                </>
+                <div className="page-card">
+                  <span className="page-fav" aria-hidden="true">
+                    {(page.host.replace(/^www\./, '').charAt(0) || '?').toUpperCase()}
+                  </span>
+                  <div className="page-text">
+                    <p className="page-host">{page.host}</p>
+                    <p className="page-url" title={page.url}>
+                      {page.url}
+                    </p>
+                  </div>
+                </div>
               )}
             </section>
 
-            <hr className="rule" />
-
             {mine?.status === 'running' && running ? (
               <section aria-labelledby="capture-progress">
-                <h2 id="capture-progress" className="section-label">
+                <h2 id="capture-progress" className="visually-hidden">
                   Capture progress
                 </h2>
                 <Steps
@@ -383,7 +399,7 @@ export function Popup() {
               />
             ) : mine && mine.status !== 'running' ? (
               <section aria-labelledby="capture-result">
-                <h2 id="capture-result" className="section-label">
+                <h2 id="capture-result" className="visually-hidden">
                   Capture result
                 </h2>
                 <CaptureError
@@ -407,7 +423,7 @@ export function Popup() {
               </section>
             ) : witness === 'offline' ? (
               <section aria-labelledby="capture-result">
-                <h2 id="capture-result" className="section-label">
+                <h2 id="capture-result" className="visually-hidden">
                   Witness
                 </h2>
                 <Notice
@@ -415,7 +431,7 @@ export function Popup() {
                   title="Witness offline"
                   actions={
                     <>
-                      <button type="button" className="btn btn-secondary" onClick={checkWitness}>
+                      <button type="button" className="btn btn-primary" onClick={checkWitness}>
                         Try again
                       </button>
                       <button type="button" className="btn btn-ghost" onClick={openSettings}>
@@ -436,7 +452,7 @@ export function Popup() {
             <button
               type="button"
               // One primary action per screen: after a capture the result's own action leads.
-              className={`btn ${mine?.status === 'done' ? 'btn-secondary' : 'btn-primary'} btn-block`}
+              className={`btn ${resultLeads ? 'btn-secondary' : 'btn-primary'} btn-block`}
               disabled={busy || disabledReason !== null}
               aria-busy={busy}
               aria-describedby="capture-helper"
@@ -453,7 +469,7 @@ export function Popup() {
                 PAGE_BUTTON
               )}
             </button>
-            <p id="capture-helper" className="popup-helper muted">
+            <p id="capture-helper" className={quietHelper ? 'visually-hidden' : 'popup-helper muted'}>
               {helper}
             </p>
           </footer>
@@ -529,7 +545,7 @@ function CaptureResult({
   };
   return (
     <section aria-labelledby="capture-result">
-      <h2 id="capture-result" className="section-label">
+      <h2 id="capture-result" className="visually-hidden">
         Capture result
       </h2>
       {up ? (
@@ -612,7 +628,7 @@ function CaptureError({
       </button>
     ),
     retry: (
-      <button key="retry" type="button" className="btn btn-secondary" onClick={onRetry}>
+      <button key="retry" type="button" className="btn btn-primary" onClick={onRetry}>
         Try again
       </button>
     ),
