@@ -1,4 +1,4 @@
-import { XBZZ, batchFromTx, batchTtlSeconds, buyBatch, costFor, waitBatchUsable } from '@recall/net';
+import { XBZZ, batchTtlSeconds, costFor, waitBatchUsable } from '@recall/net';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPublicClient, erc20Abi, http, isAddress, type Address, type Hex } from 'viem';
 import { addBatches, extensionIdFromLink, getStampAddress } from '../ext';
@@ -12,15 +12,19 @@ import { Notice } from '../ui/Notice';
 import { Segmented } from '../ui/Segmented';
 import { StatusBadge, type Status } from '../ui/StatusBadge';
 import { chainFor, connectWallet, ensureChain, isUserRejection, walletFor, WalletError } from '../wallet';
+import {
+  DEPTH,
+  USABLE_TIMEOUT_MS,
+  buyOneBatch,
+  forgetSent as forgetSentKey,
+  linkNeedsConfirm,
+  reason,
+  recallSent as recallSentKey,
+  settlePurchase,
+} from '../storage/buy';
 
-/** One batch per capture; depth 17 is the capture default (design brief 4.7). */
-const DEPTH = 17;
 const MAX_BATCHES = 20;
 const DEFAULT_BATCHES = 4;
-/** Bee needs about 12 blocks (1 to 2 minutes) before it accepts stamps for a new batch. */
-const USABLE_TIMEOUT_MS = 4 * 60_000;
-/** How long a sent purchase is looked up before it counts as "not known yet". */
-const SETTLE_TIMEOUT_MS = 30_000;
 
 type SlotState = 'waiting' | 'checking' | 'buying' | 'bought' | 'ready' | 'unknown' | 'cancelled' | 'failed';
 /** `txHash`: the slot's createBatch transaction once it was sent, kept until its outcome is known. */
@@ -55,7 +59,7 @@ function initialExtChoice(): ExtChoice {
   const settingsId = getSettings().extensionId || undefined;
   const linkId = extensionIdFromLink();
   if (!linkId) return { kind: 'settled', extensionId: settingsId };
-  if (linkId === settingsId || linkId === defaultSettings().extensionId) return { kind: 'settled', extensionId: linkId };
+  if (!linkNeedsConfirm(linkId)) return { kind: 'settled', extensionId: linkId };
   return { kind: 'ask', linkId, settingsId };
 }
 
@@ -72,49 +76,10 @@ const SLOT_VIEW: Record<SlotState, { status: Status; label: string }> = {
 
 const plural = (n: number) => `${n} ${n === 1 ? 'batch' : 'batches'}`;
 
-/**
- * The createBatch hash of slot `i`, kept until its outcome is known, so a retry looks the purchase
- * up instead of paying for it again: in memory for as long as the app is open, and in this tab's
- * sessionStorage so it survives a reload. Not in sessionStorage on a shared /bzz/ origin (R38),
- * where another site could plant one, nor when the browser blocks it: there memory alone keeps it.
- */
+/** The createBatch hash of slot `i` is kept under this key until its outcome is known (storage/buy.ts). */
 const sentKey = (i: number) => `recall.storage.sentTx.v1.${i}`;
-const sentInMemory = new Map<number, Hex>();
-function rememberSent(i: number, txHash: Hex): void {
-  sentInMemory.set(i, txHash);
-  if (isSharedOrigin()) return;
-  try {
-    window.sessionStorage.setItem(sentKey(i), txHash);
-  } catch {
-    /* storage blocked: memory keeps it */
-  }
-}
-function recallSent(i: number): Hex | undefined {
-  if (!isSharedOrigin()) {
-    try {
-      const v = window.sessionStorage.getItem(sentKey(i));
-      if (v && /^0x[0-9a-fA-F]{64}$/.test(v)) return v as Hex;
-    } catch {
-      /* storage blocked: memory keeps it */
-    }
-  }
-  return sentInMemory.get(i);
-}
-function forgetSent(i: number): void {
-  sentInMemory.delete(i);
-  try {
-    window.sessionStorage.removeItem(sentKey(i));
-  } catch {
-    /* nothing stored */
-  }
-}
-
-/** "the batch price rose to <n> (16 decimals) from the quoted <m>": buyBatch's price ceiling. */
-function priceRose(err: unknown): { total: bigint; quoted: bigint } | null {
-  const m = /price rose to (\d+) \(16 decimals\) from the quoted (\d+)/.exec(err instanceof Error ? err.message : '');
-  return m ? { total: BigInt(m[1]!), quoted: BigInt(m[2]!) } : null;
-}
-const reason = (e: unknown) => (e as { shortMessage?: string }).shortMessage ?? (e instanceof Error ? e.message : String(e));
+const recallSent = (i: number) => recallSentKey(sentKey(i));
+const forgetSent = (i: number) => forgetSentKey(sentKey(i));
 
 export function Storage() {
   const cfg = useMemo(getNetConfig, []);
@@ -231,15 +196,10 @@ export function Storage() {
 
     /** The batch a sent purchase made: `bought`, `none` (safe to buy again) or `unknown`. */
     const settle = async (i: number, txHash: Hex): Promise<{ kind: 'bought'; slot: Slot } | { kind: 'none' | 'unknown' }> => {
-      const r = await batchFromTx(pub, txHash, { timeoutMs: SETTLE_TIMEOUT_MS });
-      if (r.status === 'unknown') return { kind: 'unknown' };
+      const r = await settlePurchase(pub, txHash, owner);
+      if (r.kind === 'unknown') return r;
       forgetSent(i);
-      // A batch for another owner or depth (an older plan in this tab) is not this slot's.
-      if (r.status === 'created' && r.owner.toLowerCase() === owner.toLowerCase() && r.depth === DEPTH) {
-        const ttl = await batchTtlSeconds(pub, r.batchId).catch(() => null);
-        return { kind: 'bought', slot: { state: 'bought', batchId: r.batchId, ttl } };
-      }
-      return { kind: 'none' };
+      return r.kind === 'bought' ? { kind: 'bought', slot: { state: 'bought', batchId: r.batchId, ttl: r.ttl } } : r;
     };
     commit();
     show(null);
@@ -307,46 +267,42 @@ export function Storage() {
         if (plan[i].batchId) continue;
         plan[i] = { state: 'buying' };
         commit();
-        try {
-          const { batchId } = await buyBatch(wallet, {
-            owner,
-            depth: DEPTH,
-            days,
-            quotedTotal, // the price may move up 10% at most between the quote and the purchase
-            onSent: (txHash) => {
-              plan[i] = { state: 'buying', txHash };
-              rememberSent(i, txHash);
-              commit();
-            },
-          });
+        const r = await buyOneBatch(wallet, pub, {
+          owner,
+          days,
+          quotedTotal,
+          sentKey: sentKey(i),
+          onSent: (txHash) => {
+            plan[i] = { state: 'buying', txHash };
+            commit();
+          },
+        });
+        if (r.kind === 'bought') {
           forgetSent(i);
-          const ttl = await batchTtlSeconds(pub, batchId).catch(() => null);
-          plan[i] = { state: 'bought', batchId, ttl };
-        } catch (err) {
-          const sent = plan[i].txHash;
-          const found = sent ? await settle(i, sent) : null;
-          if (sent && found?.kind === 'bought') {
-            plan[i] = found.slot; // only reading the result failed
-          } else if (sent && found?.kind === 'unknown') {
-            notKnown(i, sent);
-          } else {
-            const cancelled = !sent && isUserRejection(err);
-            const rose = sent ? null : priceRose(err);
-            if (rose) setPriceTry((n) => n + 1); // show the new price before another try
-            plan[i] = { state: cancelled ? 'cancelled' : 'failed' };
-            stopped = cancelled
-              ? { kind: 'cancelled', bought: boughtCount(), target, stage: 'purchase' }
-              : {
-                  kind: 'failed',
-                  bought: boughtCount(),
-                  target,
-                  message: rose
-                    ? `The price rose to ${formatBzzCeil(rose.total)} xBZZ per batch from the ${formatBzzCeil(rose.quoted)} xBZZ shown, so nothing was sent. Check the new price`
-                    : reason(err),
-                };
-            // Say so right away; the usability polling below can take minutes.
-            show(stopped);
-          }
+          plan[i] = { state: 'bought', batchId: r.batchId, ttl: r.ttl };
+        } else if (r.kind === 'unknown') {
+          notKnown(i, r.txHash);
+        } else {
+          // Nothing was sent, or what was sent bought nothing: safe to buy again.
+          forgetSent(i);
+          const cancelled = r.kind === 'cancelled';
+          const rose = r.kind === 'failed' ? r.rose : undefined;
+          if (rose) setPriceTry((n) => n + 1); // show the new price before another try
+          plan[i] = { state: cancelled ? 'cancelled' : 'failed' };
+          stopped = cancelled
+            ? { kind: 'cancelled', bought: boughtCount(), target, stage: 'purchase' }
+            : {
+                kind: 'failed',
+                bought: boughtCount(),
+                target,
+                message: rose
+                  ? `The price rose to ${formatBzzCeil(rose.total)} xBZZ per batch from the ${formatBzzCeil(rose.quoted)} xBZZ shown, so nothing was sent. Check the new price`
+                  : r.kind === 'failed'
+                    ? r.message
+                    : '',
+              };
+          // Say so right away; the usability polling below can take minutes.
+          show(stopped);
         }
         commit();
       }
