@@ -1017,12 +1017,34 @@ export function Approve({ captureId }: { captureId: string | null }) {
   return (
     <div className="approve" data-kind={pending.kind}>
       <h1 tabIndex={-1}>{heading}</h1>
-      <ExhibitCard
-        facts={facts}
-        unverified={report.C.status !== 'pass'}
-        {...(load.stored ? { evidenceRef: load.stored.evidenceRef } : {})}
-      />
-
+      {publish.state === 'published' ? (
+        <Notice
+          kind="success"
+          title="Published"
+          focus
+          actions={
+            <>
+              <a className="btn btn-primary" href={timelineHref}>
+                View timeline
+              </a>
+              <a className="btn btn-ghost" href={`#/c/${pending.kind === 'capture' ? publish.entityKey : load.earlier!.key}`}>
+                {pending.kind === 'capture' ? 'View this capture' : 'View the earlier capture'}
+              </a>
+            </>
+          }
+        >
+          {publish.until ? `Record on Arkiv until ${formatDay(publish.until)}.` : `Record on Arkiv for ${RECORD_DAYS} days.`}{' '}
+          <span className="approve-record">
+            Record <MonoValue value={publish.entityKey} />
+          </span>
+          {publish.markError ? (
+            <span className="approve-record">
+              The extension could not be told, so it still lists this capture as pending.
+              <TechnicalDetails text={publish.markError} />
+            </span>
+          ) : null}
+        </Notice>
+      ) : null}
       <section className="approve-proves" aria-labelledby="proves-title">
         <h2 id="proves-title" className="section-title">
           What this proves
@@ -1046,8 +1068,6 @@ export function Approve({ captureId }: { captureId: string | null }) {
         <WhyWitness />
       </section>
 
-      <CheckSummary report={report} />
-
       {needsStorage && !published ? (
         <section className="approve-save" aria-labelledby="save-title">
           <h2 id="save-title" className="section-title">
@@ -1065,6 +1085,13 @@ export function Approve({ captureId }: { captureId: string | null }) {
           ) : null}
         </section>
       ) : null}
+
+      <CheckSummary report={report} />
+      <ExhibitCard
+        facts={facts}
+        unverified={report.C.status !== 'pass'}
+        {...(load.stored ? { evidenceRef: load.stored.evidenceRef } : {})}
+      />
 
       {load.stored?.gatewayCopy === 'unavailable' && !published ? (
         <Notice kind="warn" title="Stored copy not confirmed">
@@ -1177,35 +1204,6 @@ export function Approve({ captureId }: { captureId: string | null }) {
           {publish.technical ? <TechnicalDetails text={publish.technical} /> : null}
         </Notice>
       ) : null}
-      {publish.state === 'published' ? (
-        <Notice
-          kind="success"
-          title="Published"
-          focus
-          actions={
-            <>
-              <a className="btn btn-secondary" href={timelineHref}>
-                View timeline
-              </a>
-              <a className="btn btn-ghost" href={`#/c/${pending.kind === 'capture' ? publish.entityKey : load.earlier!.key}`}>
-                {pending.kind === 'capture' ? 'View this capture' : 'View the earlier capture'}
-              </a>
-            </>
-          }
-        >
-          {publish.until ? `Record on Arkiv until ${formatDay(publish.until)}.` : `Record on Arkiv for ${RECORD_DAYS} days.`}{' '}
-          <span className="approve-record">
-            Record <MonoValue value={publish.entityKey} />
-          </span>
-          {publish.markError ? (
-            <span className="approve-record">
-              The extension could not be told, so it still lists this capture as pending.
-              <TechnicalDetails text={publish.markError} />
-            </span>
-          ) : null}
-        </Notice>
-      ) : null}
-
       {primary ? (
         <div className="approve-bar">
           <button
