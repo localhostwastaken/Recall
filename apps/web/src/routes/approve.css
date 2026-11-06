@@ -112,3 +112,33 @@
   flex-wrap: wrap;
   gap: var(--space-2);
 }
+
+/* The storage choice keeps its height while the price and balance are read, so nothing under the
+   pointer moves when the two buttons appear. */
+.approve-choices {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-height: var(--control-h);
+}
+
+.approve-checking {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-h);
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.approve-bar .approve-helper-reserve {
+  min-height: calc(3 * var(--lh-xs));
+}
+
+@media (max-width: 599px) {
+  .approve-choices {
+    min-height: calc(2 * var(--control-h) + var(--space-2));
+  }
+}

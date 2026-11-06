@@ -162,13 +162,13 @@ async function connectWallet(page: Page): Promise<void> {
 }
 
 /**
- * Clicks "Buy storage and publish" once the publish page has settled. MetaMask is not connected, so
- * once the price is read the page puts free storage first and buying second. Before that, the
- * primary button reads "Buy storage and publish" (disabled while the price loads) and turns into
- * "Publish with free storage" in place: a click aimed at it in that moment uploads to free storage.
+ * Clicks "Buy storage and publish" once the publish page has settled. Until the price and the
+ * wallet are read the page shows "Checking storage options…" and no button; then the two buttons
+ * ("Use free storage instead" first while MetaMask is not connected, "Buy storage and publish"
+ * second) keep their place and label, and only the primary styling can move.
  */
 async function buyWithoutWallet(page: Page): Promise<void> {
-  await expect(page.getByRole('button', { name: 'Publish with free storage' })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole('button', { name: 'Use free storage instead' })).toBeVisible({ timeout: 15_000 });
   await page.getByRole('button', { name: 'Buy storage and publish' }).click();
 }
 
@@ -270,13 +270,15 @@ test.describe('@p2 capture first', () => {
     }
     await expect(page.getByText('Your extension has no storage left.', { exact: false })).toBeVisible();
     // MetaMask not connected yet, so the xBZZ balance is unknown: free storage comes first, buying second.
-    await expect(page.getByRole('button', { name: 'Publish with free storage' })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole('button', { name: 'Use free storage instead' })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole('button', { name: 'Use free storage instead' })).toHaveClass(/btn-primary/);
     await expect(page.getByText("Your xBZZ balance isn't known yet", { exact: false })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Buy storage and publish' })).toBeEnabled();
     // Connected (this wallet holds xBZZ): buying is the primary action, with the price.
     await connectWallet(page);
     await expect(page.getByText(/One storage batch for 7 days: about [\d.]+ xBZZ/)).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByRole('button', { name: 'Publish with free storage' })).toHaveCount(0);
+    // The same two buttons, the same labels: only the primary styling moved to buying.
+    await expect(page.getByRole('button', { name: 'Buy storage and publish' })).toHaveClass(/btn-primary/);
     await expect(page.getByRole('button', { name: 'Use free storage instead' })).toBeVisible();
     await expect(page.getByText('Step 1 of 6')).toBeVisible();
     await page.getByRole('button', { name: 'Buy storage and publish' }).click();

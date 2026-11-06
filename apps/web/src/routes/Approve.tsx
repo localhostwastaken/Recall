@@ -47,6 +47,7 @@ import { ExtError, addBatches, ext, extensionIdFromLink, getStampAddress } from 
 import { formatBytes, formatBzzCeil, formatDay, formatUtc } from '../format';
 import { saveSettingsChecked } from '../settings';
 import { ATTACHMENT_DEPTH, USABLE_TIMEOUT_MS, buyOneBatch, depthFor, forgetSent, linkNeedsConfirm, reason as buyReason, recallSent, settlePurchase } from '../storage/buy';
+import { choiceSettled } from '../storage/choice';
 import { getNetConfig } from '../net';
 import { MonoValue } from '../ui/MonoValue';
 import { Notice } from '../ui/Notice';
@@ -64,6 +65,7 @@ import {
   ensureChain,
   getProvider,
   isUserRejection,
+  refreshWallet,
   useWallet,
   walletFor,
   WalletError,
@@ -79,7 +81,9 @@ import './approve.css';
  *     capture alive, or discard;
  * (b) a new or changed page: upload with a batch the extension has, or buy one batch first
  *     (MetaMask on Gnosis, never twice), or use the gateway's free storage (always a choice here;
- *     the primary one when the wallet holds no xBZZ for a batch); then publish;
+ *     the primary one when the wallet holds no xBZZ for a batch); then publish. Until the price, the
+ *     wallet and its balance are read the choice reads "Checking storage options…" (no button); then
+ *     the two buttons keep their place and label, and only the primary styling can move;
  * (c) published.
  * The page never takes the extension's word for anything: it runs checks A to C on the evidence
  * itself (A and B must pass, C must not fail), checks that the uploaded evidence reference really
@@ -605,8 +609,13 @@ type Save =
 /** The ?ext= rule (as on Storage): an extension only the link names owns nothing bought until the person says so. */
 type ExtAsk = { state: 'none' } | { state: 'ask'; address: Address | null | 'error' } | { state: 'ok'; address: Address };
 type Price = { kind: 'loading' } | { kind: 'error' } | { kind: 'ready'; perBatch: bigint };
-/** The connected wallet's xBZZ on Gnosis; `unknown`: no wallet connected yet, or the read failed. */
-type Funds = { kind: 'loading' } | { kind: 'unknown' } | { kind: 'ready'; have: bigint };
+/**
+ * The connected wallet's xBZZ on Gnosis; `unknown`: no wallet connected yet, or the read failed.
+ * `for`: the account the read was made for (so a read of another account never counts as settled).
+ */
+type Funds = { kind: 'loading' } | { kind: 'unknown'; for?: Address } | { kind: 'ready'; have: bigint; for: Address };
+/** The storage choice stops waiting for a slow read after this long (the free option is never held back). */
+const CHECK_CAP_MS = 10_000;
 
 const FREE_NOTE = "Free: stored by the public Swarm gateway, no xBZZ needed. Less durable, and it can't be extended.";
 
@@ -728,20 +737,49 @@ export function Approve({ captureId }: { captureId: string | null }) {
   // MetaMask already shares with this page).
   const [funds, setFunds] = useState<Funds>({ kind: 'unknown' });
   useEffect(() => {
-    if (!needsBuy || !wallet.address) {
+    const account = wallet.address;
+    if (!needsBuy || !account) {
       setFunds({ kind: 'unknown' });
       return;
     }
     let live = true;
     setFunds({ kind: 'loading' });
-    gnosisPub.readContract({ address: XBZZ, abi: erc20Abi, functionName: 'balanceOf', args: [wallet.address] }).then(
-      (have) => live && setFunds({ kind: 'ready', have }),
-      () => live && setFunds({ kind: 'unknown' }),
+    gnosisPub.readContract({ address: XBZZ, abi: erc20Abi, functionName: 'balanceOf', args: [account] }).then(
+      (have) => live && setFunds({ kind: 'ready', have, for: account }),
+      () => live && setFunds({ kind: 'unknown', for: account }),
     );
     return () => {
       live = false;
     };
   }, [needsBuy, wallet.address, gnosisPub]);
+
+  // No account in the wallet state can only mean "not read yet" until the wallet has been asked once.
+  const [walletChecked, setWalletChecked] = useState(false);
+  useEffect(() => {
+    let live = true;
+    void refreshWallet().then(() => live && setWalletChecked(true));
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  // No xBZZ for a batch (or no way to tell: no price, no wallet account to read): free storage
+  // is the primary action and buying the secondary one.
+  const noXbzz = needsBuy && price.kind === 'ready' && funds.kind === 'ready' && funds.have < price.perBatch;
+  const freeFirst = needsBuy && (price.kind === 'error' || (price.kind === 'ready' && (funds.kind === 'unknown' || noXbzz)));
+  // What decides the primary action is settled: the price is read (or failed), and the wallet is
+  // not connected, or its balance is read (or failed).
+  const inputsSettled = choiceSettled({ price: price.kind, account: wallet.address, funds, walletChecked, hasProvider: wallet.hasProvider });
+  const [checkCapped, setCheckCapped] = useState(false);
+  // The order of the two buttons, fixed once the inputs settle (later changes only move the
+  // primary styling): until then the choice reads "Checking storage options…" and has no button.
+  const [storageChoice, setStorageChoice] = useState<{ freeFirst: boolean } | null>(null);
+  if (needsBuy && storageChoice === null && (inputsSettled || checkCapped)) setStorageChoice({ freeFirst });
+  useEffect(() => {
+    if (!needsBuy || storageChoice) return;
+    const t = setTimeout(() => setCheckCapped(true), CHECK_CAP_MS);
+    return () => clearTimeout(t);
+  }, [needsBuy, storageChoice]);
 
   const run = useCallback(
     async (what: 'connect' | 'switch' | 'publish', readyArg?: Ready) => {
@@ -1317,17 +1355,14 @@ export function Approve({ captureId }: { captureId: string | null }) {
         : funds.kind === 'loading'
           ? 'Checking your xBZZ balance…'
           : undefined;
-  // No xBZZ for a batch (or no way to tell: no price, no wallet account to read): free storage
-  // is the primary action and buying the secondary one.
-  const noXbzz = needsBuy && price.kind === 'ready' && funds.kind === 'ready' && funds.have < price.perBatch;
-  const freeFirst = needsBuy && (price.kind === 'error' || (price.kind === 'ready' && (funds.kind === 'unknown' || noXbzz)));
+  const checking = needsBuy && !storageChoice && !busy;
   // One primary action at a time: after a rejection or failure the notice's "Try again" is it.
   let primary: { label: string; onClick: () => void; blocked?: string } | null = null;
   if (!published && publish.state !== 'rejected' && publish.state !== 'failed' && save.state !== 'error' && extAsk.state !== 'ask') {
     if (isConfirmation) primary = { label: "Confirm it's still the same", onClick: publishNow };
     else if (!needsStorage) primary = { label: 'Publish record', onClick: publishNow };
     else if (hasBatch) primary = { label: 'Upload and publish', onClick: () => void saveAndPublish('stamped') };
-    else if (freeFirst) primary = { label: 'Publish with free storage', onClick: () => void saveAndPublish('free') };
+    else if (freeFirst) primary = { label: 'Use free storage instead', onClick: () => void saveAndPublish('free') };
     else {
       primary = {
         label: 'Buy storage and publish',
@@ -1360,7 +1395,9 @@ export function Approve({ captureId }: { captureId: string | null }) {
                   : publish.state === 'publishing'
                     ? 'Publishing… waiting for the network'
                     : '';
-  const helper = primary?.blocked
+  const helper = checking
+    ? 'Reading the storage price and your xBZZ balance…'
+    : primary?.blocked
     ? primary.blocked
     : freeFirst && !hasBatch
       ? `${
@@ -1616,23 +1653,60 @@ export function Approve({ captureId }: { captureId: string | null }) {
       ) : null}
       {primary ? (
         <div className="approve-bar">
-          <button
-            type="button"
-            className="btn btn-primary btn-wide"
-            disabled={busy || !getProvider() || primary.blocked !== undefined}
-            aria-busy={busy}
-            onClick={primary.onClick}
-          >
-            {busy ? (
-              <>
-                <LoaderCircle size={16} strokeWidth={1.75} aria-hidden="true" className="spin" />
-                {busyLabel}
-              </>
-            ) : (
-              primary.label
-            )}
-          </button>
-          <p className="field-helper" aria-live="polite">
+          {needsBuy && !busy ? (
+            // Two buttons in fixed places with fixed labels once the inputs settle; only the
+            // primary styling (and the helper line) can change afterwards.
+            <div className="approve-choices" data-state={storageChoice ? 'ready' : 'checking'}>
+              {storageChoice ? (
+                (storageChoice.freeFirst ? ['free', 'buy'] : ['buy', 'free']).map((which) =>
+                  which === 'buy' ? (
+                    <button
+                      key="buy"
+                      type="button"
+                      className={`btn btn-wide ${freeFirst ? 'btn-secondary' : 'btn-primary'}`}
+                      disabled={buyBlocked !== undefined || !getProvider()}
+                      onClick={startBuy}
+                    >
+                      Buy storage and publish
+                    </button>
+                  ) : (
+                    <button
+                      key="free"
+                      type="button"
+                      className={`btn btn-wide ${freeFirst ? 'btn-primary' : 'btn-secondary'}`}
+                      disabled={!getProvider()}
+                      onClick={() => void saveAndPublish('free')}
+                    >
+                      Use free storage instead
+                    </button>
+                  ),
+                )
+              ) : (
+                <p className="approve-checking" role="status">
+                  <LoaderCircle size={16} strokeWidth={1.75} aria-hidden="true" className="spin" />
+                  Checking storage options…
+                </p>
+              )}
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="btn btn-primary btn-wide"
+              disabled={busy || !getProvider() || primary.blocked !== undefined}
+              aria-busy={busy}
+              onClick={primary.onClick}
+            >
+              {busy ? (
+                <>
+                  <LoaderCircle size={16} strokeWidth={1.75} aria-hidden="true" className="spin" />
+                  {busyLabel}
+                </>
+              ) : (
+                primary.label
+              )}
+            </button>
+          )}
+          <p className={needsBuy ? 'field-helper approve-helper-reserve' : 'field-helper'} aria-live="polite">
             {helper}
           </p>
           {!busy ? (
@@ -1642,14 +1716,9 @@ export function Approve({ captureId }: { captureId: string | null }) {
                   Keep the earlier capture alive…
                 </a>
               ) : null}
-              {needsStorage && freeAllowed && !freeFirst ? (
+              {needsStorage && hasBatch ? (
                 <button type="button" className="btn btn-secondary" onClick={() => void saveAndPublish('free')}>
                   Use free storage instead
-                </button>
-              ) : null}
-              {freeFirst && !hasBatch ? (
-                <button type="button" className="btn btn-secondary" disabled={buyBlocked !== undefined || !getProvider()} onClick={startBuy}>
-                  Buy storage and publish
                 </button>
               ) : null}
               {isConfirmation || needsStorage ? (
@@ -1659,7 +1728,7 @@ export function Approve({ captureId }: { captureId: string | null }) {
               ) : null}
             </div>
           ) : null}
-          {!busy && needsStorage && freeAllowed && !freeFirst ? <p className="field-helper">{FREE_NOTE}</p> : null}
+          {!busy && needsStorage && freeAllowed && !freeFirst && !checking ? <p className="field-helper">{FREE_NOTE}</p> : null}
         </div>
       ) : null}
       {discardDialog(pending.kind)}
