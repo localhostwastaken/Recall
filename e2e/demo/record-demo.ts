@@ -829,6 +829,12 @@ async function run(context: BrowserContext, stage: Stage, o: Opts): Promise<void
     if (await visible(exhibit)) {
       await stage.say('What the witness saw: the server, the time, the exact answer it signed');
       await stage.point(exhibit, 3100);
+      // "Check it yourself": the same record in the outside tools (pointed at, not opened).
+      const arkivLink = exhibit.getByRole('link', { name: /^Record on Arkiv explorer/ });
+      if (await visible(arkivLink)) {
+        await stage.say("Check it yourself: the same record in Arkiv's own block explorer");
+        await stage.point(arkivLink, 2600);
+      }
     }
   });
   await soft(stage, 'the repository snapshot', async () => {
@@ -894,19 +900,23 @@ async function run(context: BrowserContext, stage: Stage, o: Opts): Promise<void
     await sleep(1200);
     await record.evaluate(() => {
       window.location.hash = '#/';
-  });
-  await record.locator('.dropzone').first().waitFor({ timeout: 30_000 });
-  await stage.overlay();
-  await stage.scrollTo(0, 300);
-  await stage.say('Change one byte and it fails.');
-  await dropFile(stage, record, `edited-${dl.suggestedFilename()}`, edited);
-  const bad = record.locator('[data-verdict]').first();
-  await until('the red verdict', async () => (await bad.getAttribute('data-verdict', { timeout: 300 }).catch(() => null)) === 'fail', 30_000);
-  await sleep(700);
-  await stage.point(bad, 2400);
-  const checkA = record.locator('[data-check="A"]').first();
-  if (await visible(checkA)) await stage.point(checkA, 2600);
-  await stage.cut();
+    });
+    // Home is the landing page: its file tools sit under the "More ways to check" disclosure.
+    const zone = record.locator('.dropzone').first();
+    const moreWays = record.locator('details.more-ways > summary').first();
+    await record.locator('.dropzone:visible, details.more-ways > summary').first().waitFor({ timeout: 30_000 });
+    await stage.overlay();
+    await stage.say('Change one byte and it fails.');
+    if (!(await zone.isVisible()) && (await visible(moreWays))) await stage.press(moreWays, 900);
+    await zone.waitFor({ timeout: 10_000 });
+    await dropFile(stage, record, `edited-${dl.suggestedFilename()}`, edited);
+    const bad = record.locator('[data-verdict]').first();
+    await until('the red verdict', async () => (await bad.getAttribute('data-verdict', { timeout: 300 }).catch(() => null)) === 'fail', 30_000);
+    await sleep(700);
+    await stage.point(bad, 2400);
+    const checkA = record.locator('[data-check="A"]').first();
+    if (await visible(checkA)) await stage.point(checkA, 2600);
+    await stage.cut();
   });
 
   // i. The app on Swarm.
@@ -919,7 +929,7 @@ async function run(context: BrowserContext, stage: Stage, o: Opts): Promise<void
     const swarmVerdict = record.locator('[data-verdict]').first();
     await narrate(
       stage,
-      [{ caption: 'The app itself is hosted on Swarm too: no single server can take it down.' }],
+      [{ caption: 'The app itself is on Swarm too, so it does not depend on GitHub Pages.' }],
       async () => (await swarmVerdict.getAttribute('data-verdict', { timeout: 300 }).catch(() => null)) === 'pass',
       { minMs: 4200, timeoutMs: 180_000 },
     );
