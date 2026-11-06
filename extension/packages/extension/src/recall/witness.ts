@@ -1,7 +1,12 @@
 import type { Address } from 'viem';
 
-/** How long the popup waits for `GET {witness}/info` before calling the witness offline. */
-export const WITNESS_CHECK_TIMEOUT_MS = 2_000;
+/**
+ * How long the popup waits for `GET {witness}/info` before calling the witness offline. The
+ * live witness sits behind a Cloudflare quick tunnel, where a browser's first /info measured
+ * about 2 s (DNS, TLS, the tunnel hop), so 2 s showed it offline. The popup shows "Checking
+ * the witness" meanwhile.
+ */
+export const WITNESS_CHECK_TIMEOUT_MS = 6_000;
 
 /**
  * Health check: the witness is online when `GET {witnessUrl}/info` answers 200 with a
