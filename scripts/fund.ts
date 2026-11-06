@@ -13,7 +13,10 @@
 //
 // A token whose amount is 0 is skipped. Prints only addresses, amounts and tx hashes (with
 // explorer links); a private key is never printed, and an error shows only its first line.
-import { readFileSync } from 'node:fs';
+// Each hash is printed as soon as the transaction is broadcast, before the receipt is awaited.
+// Live sends are NEVER retried: a retry after a gateway error could pay twice. Only the shared
+// local devnet keys retry, on a lost nonce race.
+import { readFileSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
@@ -36,7 +39,7 @@ import {
 import { privateKeyToAccount, type PrivateKeyAccount } from 'viem/accounts';
 import { gnosis } from 'viem/chains';
 import { BEE_COMPOSE_FAUCET_KEY, DEV_PRIVATE_KEY } from '../e2e/fixtures/keys';
-import { LOCAL, XBZZ, arkivPublic, liveConfig, normalizeKey, type NetConfig } from '../packages/net/src/index';
+import { LOCAL, POSTAGE_STAMP, XBZZ, arkivPublic, liveConfig, normalizeKey, type NetConfig } from '../packages/net/src/index';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const XBZZ_DECIMALS = 16;
@@ -45,9 +48,13 @@ const DEFAULTS = { tglm: '0.2', xdai: '0.003', xbzz: '0.4' } as const;
 const CAPS = { tglm: '2', xdai: '0.02', xbzz: '1' } as const;
 /** Gas the xDAI send and the xBZZ transfer use at most on Gnosis (with room), for the balance check. */
 const GNOSIS_GAS = 21_000n + 120_000n;
-const RETRIES = 5;
-const NONCE_RACE =
-  /nonce too low|nonce has already been used|replacement transaction underpriced|already known|nonce.*(too low|lower than)/i;
+/** Local devnet only: how many times a send may be retried after losing a nonce race. */
+const LOCAL_RETRIES = 5;
+/**
+ * A lost nonce race on a shared devnet key. "already known" is deliberately NOT here: it means
+ * the node holds this very transaction, so signing another one would pay twice.
+ */
+const NONCE_RACE = /nonce too low|nonce has already been used|replacement transaction underpriced|nonce.*(too low|lower than)/i;
 
 /** Everything that must never reach the output: loaded private keys and the Arkiv access key. */
 const secrets: string[] = [];
@@ -55,12 +62,19 @@ function redact(text: string): string {
   return secrets.reduce((t, s) => (s ? t.split(s).join('***') : t), text);
 }
 function keep<T extends string>(secret: T): T {
-  secrets.push(secret, secret.replace(/^0x/i, ''));
+  // The key as typed, without 0x, and as it appears inside a URL (percent-encoded).
+  secrets.push(secret, secret.replace(/^0x/i, ''), encodeURIComponent(secret));
   return secret;
 }
 
+/** Transfers already broadcast in this run, repeated when a later step fails. */
+const sent: string[] = [];
+
 function fail(msg: string): never {
   console.error(`fund: ${redact(msg)}`);
+  if (sent.length) {
+    console.error(`fund: already broadcast before this error: ${redact(sent.join('; '))}. Check the recipient's balances before running again.`);
+  }
   process.exit(1);
 }
 
@@ -107,16 +121,22 @@ const errorText = (e: unknown): string =>
   e instanceof Error ? `${e.message} ${(e as { details?: string }).details ?? ''} ${(e.cause as Error | undefined)?.message ?? ''}` : String(e);
 
 /**
- * Sends with the funder's current pending nonce, and again with a fresh one when another sender
- * on the same key (the devnet keys are shared with other test runs) wins that nonce.
+ * Sends with the funder's current pending nonce. With `retries` > 0 (local devnet only) it signs
+ * again with a fresh nonce when another sender on the same key wins that nonce. On live
+ * `retries` is 0: one broadcast, no second attempt whatever the error says.
  */
-async function sendFresh(pub: PublicClient, from: Address, send: (nonce: number) => Promise<Hex>): Promise<Hex> {
+export async function sendFresh(
+  pub: Pick<PublicClient, 'getTransactionCount'>,
+  from: Address,
+  send: (nonce: number) => Promise<Hex>,
+  retries: number,
+): Promise<Hex> {
   for (let attempt = 0; ; attempt++) {
     const nonce = await pub.getTransactionCount({ address: from, blockTag: 'pending' });
     try {
       return await send(nonce);
     } catch (e) {
-      if (attempt >= RETRIES || !NONCE_RACE.test(errorText(e))) throw e;
+      if (attempt >= retries || !NONCE_RACE.test(errorText(e))) throw e;
       await sleep(250 * 2 ** attempt + Math.random() * 250);
     }
   }
@@ -131,10 +151,19 @@ async function confirm(question: string): Promise<boolean> {
   }
 }
 
-type Side = { chain: Chain; transport: Transport; pub: PublicClient; explorer?: string };
+type Side = { label: 'Arkiv' | 'Gnosis'; chain: Chain; transport: Transport; pub: PublicClient; explorer?: string };
 
-function side(chain: Chain, transport: Transport, explorer?: string): Side {
-  return { chain, transport, pub: createPublicClient({ chain, transport }) as PublicClient, explorer };
+function side(label: Side['label'], chain: Chain, transport: Transport, explorer?: string): Side {
+  return { label, chain, transport, pub: createPublicClient({ chain, transport }) as PublicClient, explorer };
+}
+
+/** Runs one RPC step and names the chain in its error (first line only, never the URL). */
+async function at<T>(s: Side, what: string, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (e) {
+    throw new Error(`${s.label} ${what} failed: ${(e instanceof Error ? e.message : String(e)).split('\n')[0]}`);
+  }
 }
 
 async function main() {
@@ -197,41 +226,46 @@ async function main() {
     cfg = liveConfig({ ARKIV_ACCESS_KEY: access });
     // The chain's own RPC URL carries the access key; it is never printed.
     const chain = arkivPublic(cfg).chain as Chain;
-    arkiv = side(chain, http(), chain.blockExplorers?.default.url);
+    arkiv = side('Arkiv', chain, http(), chain.blockExplorers?.default.url);
   } else {
     cfg = LOCAL;
     tglmFunder = xdaiFunder = privateKeyToAccount(DEV_PRIVATE_KEY);
     xbzzFunder = privateKeyToAccount(BEE_COMPOSE_FAUCET_KEY);
-    arkiv = side(arkivPublic(cfg).chain as Chain, http(cfg.arkiv.rpcUrl));
+    arkiv = side('Arkiv', arkivPublic(cfg).chain as Chain, http(cfg.arkiv.rpcUrl));
   }
   const gnosisChain: Chain = { ...gnosis, rpcUrls: { default: { http: [cfg.gnosis.rpcUrl] } } };
-  const chainGnosis = side(gnosisChain, http(cfg.gnosis.rpcUrl), live ? 'https://gnosisscan.io' : undefined);
+  const chainGnosis = side('Gnosis', gnosisChain, http(cfg.gnosis.rpcUrl), live ? 'https://gnosisscan.io' : undefined);
 
   const funders = new Set([tglmFunder, xdaiFunder, xbzzFunder].map((a) => a.address));
   if (funders.has(to)) fail("the recipient is one of the funder's own addresses");
+  if (to === XBZZ || to === POSTAGE_STAMP) fail('the recipient is a token or postage contract, which would lock the funds');
   const sides: Record<Token, Side> = { tglm: arkiv, xdai: chainGnosis, xbzz: chainGnosis };
   const funderOf: Record<Token, PrivateKeyAccount> = { tglm: tglmFunder, xdai: xdaiFunder, xbzz: xbzzFunder };
 
   const balanceOf = (token: Token, owner: Address): Promise<bigint> =>
     token === 'xbzz'
-      ? (chainGnosis.pub.readContract({ address: XBZZ, abi: erc20Abi, functionName: 'balanceOf', args: [owner] }) as Promise<bigint>)
-      : sides[token].pub.getBalance({ address: owner });
+      ? at(chainGnosis, 'balance read', () =>
+          chainGnosis.pub.readContract({ address: XBZZ, abi: erc20Abi, functionName: 'balanceOf', args: [owner] }) as Promise<bigint>,
+        )
+      : at(sides[token], 'balance read', () => sides[token].pub.getBalance({ address: owner }));
   const show = (token: Token, v: bigint) => `${formatUnits(v, DECIMALS[token])} ${SYMBOL[token]}`;
-  const holdings = async (owner: Address, which: Token[]) =>
-    (await Promise.all(which.map(async (t) => show(t, await balanceOf(t, owner))))).join(', ');
+  const holdings = async (owner: Address, which: Token[]): Promise<Record<string, bigint>> =>
+    Object.fromEntries(await Promise.all(which.map(async (t) => [t, await balanceOf(t, owner)] as const)));
+  const list = (h: Record<string, bigint>) => (Object.keys(h) as Token[]).map((t) => show(t, h[t])).join(', ');
 
   console.log(`net        ${net} (Arkiv ${cfg.arkiv.chain}, Gnosis ${gnosisChain.id})`);
   console.log(`recipient  ${to}`);
   console.log(`send       ${tokens.map((t) => show(t, amounts[t])).join(', ')}`);
   for (const f of [...funders]) {
     const own = tokens.filter((t) => funderOf[t].address === f);
-    console.log(`funder     ${f} holds ${await holdings(f, own)}`);
+    if (own.length) console.log(`funder     ${f} holds ${list(await holdings(f, own))}`);
   }
-  console.log(`before     ${await holdings(to, tokens)}`);
+  const before = await holdings(to, tokens);
+  console.log(`before     ${list(before)}`);
 
   // Each funder must hold what it sends plus the gas of its sends (priced at double the current rate).
-  const arkivGas = (await arkiv.pub.getGasPrice()) * 21_000n * 2n;
-  const gnosisGas = (await chainGnosis.pub.getGasPrice()) * GNOSIS_GAS * 2n;
+  const arkivGas = (await at(arkiv, 'gas price read', () => arkiv.pub.getGasPrice())) * 21_000n * 2n;
+  const gnosisGas = (await at(chainGnosis, 'gas price read', () => chainGnosis.pub.getGasPrice())) * GNOSIS_GAS * 2n;
   for (const f of funders) {
     const sends = (t: Token) => tokens.includes(t) && funderOf[t].address === f;
     const wants: { token: Token; have: bigint; want: bigint }[] = [];
@@ -253,20 +287,49 @@ async function main() {
     if (!(await confirm(`Send these to ${to} on the live networks? [y/N] `))) fail('cancelled, nothing sent');
   }
 
+  const retries = live ? 0 : LOCAL_RETRIES;
   for (const t of tokens) {
     const s = sides[t];
     const account = funderOf[t];
     const wallet = createWalletClient({ account, chain: s.chain, transport: s.transport });
-    const hash = await sendFresh(s.pub, account.address, (nonce) =>
-      t === 'xbzz'
-        ? wallet.writeContract({ address: XBZZ, abi: erc20Abi, functionName: 'transfer', args: [to, amounts.xbzz], nonce })
-        : wallet.sendTransaction({ to, value: amounts[t], nonce }),
-    );
-    const receipt = await s.pub.waitForTransactionReceipt({ hash, pollingInterval: 1_000 });
+    let hash: Hex;
+    try {
+      hash = await at(s, 'send', () =>
+        sendFresh(
+          s.pub,
+          account.address,
+          (nonce) =>
+            t === 'xbzz'
+              ? wallet.writeContract({ address: XBZZ, abi: erc20Abi, functionName: 'transfer', args: [to, amounts.xbzz], nonce })
+              : wallet.sendTransaction({ to, value: amounts[t], nonce }),
+          retries,
+        ),
+      );
+    } catch (e) {
+      // The node may have taken the transaction before the error came back; never guess.
+      fail(`${(e as Error).message}. The ${SYMBOL[t]} transfer may or may not have gone out: check ${account.address} and the recipient before running again.`);
+    }
+    // Print the hash now, so a later failure (or a lost receipt) leaves a record.
+    const link = s.explorer ? ` ${s.explorer}/tx/${hash}` : '';
+    console.log(`${SYMBOL[t].padEnd(10)} ${formatUnits(amounts[t], DECIMALS[t])} broadcast, tx ${hash}${link}`);
+    sent.push(`${SYMBOL[t]} ${formatUnits(amounts[t], DECIMALS[t])} tx ${hash}`);
+    const receipt = await at(s, `wait for the receipt of ${hash}`, () => s.pub.waitForTransactionReceipt({ hash, pollingInterval: 1_000 }));
     if (receipt.status !== 'success') fail(`the ${SYMBOL[t]} transfer ${hash} reverted`);
-    console.log(`${SYMBOL[t].padEnd(10)} ${formatUnits(amounts[t], DECIMALS[t])} sent, tx ${hash}${s.explorer ? ` ${s.explorer}/tx/${hash}` : ''}`);
+    console.log(`${SYMBOL[t].padEnd(10)} confirmed in block ${receipt.blockNumber}`);
   }
-  console.log(`after      ${await holdings(to, tokens)}`);
+  const after = await holdings(to, tokens);
+  console.log(`after      ${list(after)}`);
+  for (const t of tokens) {
+    if (after[t] - before[t] !== amounts[t]) {
+      console.log(
+        `warning    ${SYMBOL[t]} rose by ${formatUnits(after[t] - before[t], DECIMALS[t])}, expected ${formatUnits(amounts[t], DECIMALS[t])} (a lagging RPC, or another transfer to this address); check the explorer`,
+      );
+    }
+  }
 }
 
-main().catch((err) => fail(err instanceof Error ? err.message.split('\n')[0] : String(err).split('\n')[0]));
+/** True when run as `tsx scripts/fund.ts`; false when a test imports `sendFresh`. */
+const isMain = process.argv[1] !== undefined && realpathSync(fileURLToPath(import.meta.url)) === realpathSync(resolve(process.argv[1]));
+if (isMain) {
+  main().catch((err) => fail(err instanceof Error ? err.message.split('\n')[0] : String(err).split('\n')[0]));
+}

@@ -13,6 +13,7 @@ import { canonicalUrl, urlHash } from '../../packages/evidence/src/index';
 // verified capture. Read-only: nothing is written to any chain.
 //
 // Optional:
+//   RECALL_P3_REQUIRE=1   At the P3 gate: "no capture yet" FAILS instead of skipping.
 //   RECALL_P3_APP=<url>   The app to open (default: GitHub Pages). For a local build against the
 //                         live networks use the dev server with `?net=live`, e.g.
 //                         RECALL_P3_APP='http://localhost:5173/?net=live'.
@@ -53,11 +54,15 @@ test.describe('@live p3', () => {
     const unreachable = page.getByText("Couldn't reach Arkiv.");
     const nonePassed = page.getByText('No capture of this page passed its checks.');
     await expect(version.or(nothingYet).or(unreachable).or(nonePassed)).toBeVisible({ timeout: 120_000 });
+    // Records are checked one after another; "Checking n records in your browser..." goes away
+    // when the last one is done, and only then is the list (and its newest version) final.
+    await expect(page.locator('.tl-checking'), 'the timeline is still checking records').toBeHidden({ timeout: 120_000 });
 
-    test.skip(
-      await nothingYet.isVisible(),
-      `no live capture of ${url} is indexed on Arkiv Rabdi yet (urlHash ${hash}): make the P2 live capture first, then rerun`,
-    );
+    if (await nothingYet.isVisible()) {
+      const why = `no live capture of ${url} is indexed on Arkiv Rabdi yet (urlHash ${hash}): make the P2 live capture first, then rerun`;
+      expect(process.env.RECALL_P3_REQUIRE !== '1', `${why} (RECALL_P3_REQUIRE=1)`).toBe(true);
+      test.skip(true, why);
+    }
     await expect(unreachable, 'the app could not read Arkiv').toBeHidden();
     await expect(nonePassed, 'records exist for this address but none passed its checks').toBeHidden();
 
