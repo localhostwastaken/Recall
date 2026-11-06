@@ -1437,54 +1437,6 @@ export function Approve({ captureId }: { captureId: string | null }) {
   return (
     <div className="approve" data-kind={pending.kind}>
       <h1 tabIndex={-1}>{heading}</h1>
-      {publish.state === 'published' ? (
-        <Notice
-          kind="success"
-          title="Published"
-          focus
-          actions={
-            <>
-              <a className="btn btn-primary" href={timelineHref}>
-                View timeline
-              </a>
-              <a className="btn btn-ghost" href={`#/c/${pending.kind === 'capture' ? publish.entityKey : load.earlier!.key}`}>
-                {pending.kind === 'capture' ? 'View this capture' : 'View the earlier capture'}
-              </a>
-            </>
-          }
-        >
-          {publish.until ? `Record on Arkiv until ${formatDay(publish.until)}.` : `Record on Arkiv for ${RECORD_DAYS} days.`}{' '}
-          <span className="approve-record">
-            {publish.attachmentKey ? 'Capture record' : 'Record'} <MonoValue value={publish.entityKey} />
-            {recordUrl ? (
-              <OutsideLink after href={recordUrl}>
-                View on Arkiv explorer
-              </OutsideLink>
-            ) : null}
-          </span>
-          {publish.attachmentKey ? (
-            <span className="approve-record">
-              Code record <MonoValue value={publish.attachmentKey} />
-              {codeRecordUrl ? (
-                <OutsideLink after href={codeRecordUrl}>
-                  View on Arkiv explorer
-                </OutsideLink>
-              ) : null}
-            </span>
-          ) : null}
-          {buyTxUrl ? (
-            <span className="approve-record">
-              <OutsideLink href={buyTxUrl}>Storage payment on Gnosisscan</OutsideLink>
-            </span>
-          ) : null}
-          {publish.markError ? (
-            <span className="approve-record">
-              The extension could not be told, so it still lists this capture as pending.
-              <TechnicalDetails text={publish.markError} />
-            </span>
-          ) : null}
-        </Notice>
-      ) : null}
       <section className="approve-proves" aria-labelledby="proves-title">
         <h2 id="proves-title" className="section-title">
           What this proves
@@ -1558,6 +1510,57 @@ export function Approve({ captureId }: { captureId: string | null }) {
         </Notice>
       ) : null}
 
+      {/* The side panel: what is happening now (published, the steps, the questions and errors, the
+          actions). Desktop keeps it in view beside the record; phones show it in the page flow. */}
+      <aside className="approve-side" aria-label={isConfirmation ? 'Confirm on Arkiv' : 'Save and publish'}>
+      {publish.state === 'published' ? (
+        <Notice
+          kind="success"
+          title="Published"
+          focus
+          actions={
+            <>
+              <a className="btn btn-primary" href={timelineHref}>
+                View timeline
+              </a>
+              <a className="btn btn-ghost" href={`#/c/${pending.kind === 'capture' ? publish.entityKey : load.earlier!.key}`}>
+                {pending.kind === 'capture' ? 'View this capture' : 'View the earlier capture'}
+              </a>
+            </>
+          }
+        >
+          {publish.until ? `Record on Arkiv until ${formatDay(publish.until)}.` : `Record on Arkiv for ${RECORD_DAYS} days.`}{' '}
+          <span className="approve-record">
+            {publish.attachmentKey ? 'Capture record' : 'Record'} <MonoValue value={publish.entityKey} />
+            {recordUrl ? (
+              <OutsideLink after href={recordUrl}>
+                View on Arkiv explorer
+              </OutsideLink>
+            ) : null}
+          </span>
+          {publish.attachmentKey ? (
+            <span className="approve-record">
+              Code record <MonoValue value={publish.attachmentKey} />
+              {codeRecordUrl ? (
+                <OutsideLink after href={codeRecordUrl}>
+                  View on Arkiv explorer
+                </OutsideLink>
+              ) : null}
+            </span>
+          ) : null}
+          {buyTxUrl ? (
+            <span className="approve-record">
+              <OutsideLink href={buyTxUrl}>Storage payment on Gnosisscan</OutsideLink>
+            </span>
+          ) : null}
+          {publish.markError ? (
+            <span className="approve-record">
+              The extension could not be told, so it still lists this capture as pending.
+              <TechnicalDetails text={publish.markError} />
+            </span>
+          ) : null}
+        </Notice>
+      ) : null}
       <section aria-labelledby="publish-steps-title">
         <h2 id="publish-steps-title" className="section-title">
           {isConfirmation ? 'Confirm on Arkiv' : 'Save and publish'}
@@ -1770,6 +1773,7 @@ export function Approve({ captureId }: { captureId: string | null }) {
           {!busy && needsStorage && freeAllowed && !freeFirst && !checking ? <p className="field-helper">{FREE_NOTE}</p> : null}
         </div>
       ) : null}
+      </aside>
       {discardDialog(pending.kind)}
     </div>
   );

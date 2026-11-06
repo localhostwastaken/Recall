@@ -160,38 +160,55 @@
   }
 }
 
-/* Layout of the actions (user feedback, 7 Nov): a sticky bar across the bottom cut the scrolling
-   content in half. Desktop: the content scrolls at full height on the left and the actions live in
-   a sticky side panel. Narrower screens: the actions sit at the end of the page like any form, so
-   nothing is covered. CSS only; the page's markup is unchanged. */
+/* Layout (user feedback, 7 Nov): everything about publishing (Published, the steps, questions,
+   errors and the actions) lives in one side panel, `.approve-side`. Desktop: the record scrolls at
+   full height on the left and the panel stays in view on the right, so the right side is never empty
+   and the page is shorter. Phones: the panel's parts flow with the page and Published comes first. */
+.approve-side > * + * {
+  margin-top: var(--space-4);
+}
+
+.approve-side > section[aria-labelledby='publish-steps-title'] {
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  background: var(--surface);
+}
+
+.approve-side .approve-bar {
+  position: static;
+  max-width: none;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  background: var(--surface);
+}
+
 @media (min-width: 1024px) {
-  .approve:has(> .approve-bar) {
+  .approve {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(18rem, 22rem);
+    grid-template-columns: minmax(0, 1fr) minmax(18rem, 24rem);
     column-gap: var(--space-6);
     align-items: start;
   }
 
-  .approve:has(> .approve-bar) > * {
+  .approve > * {
     grid-column: 1;
   }
 
-  .approve:has(> .approve-bar) > h1 {
+  .approve > h1 {
     grid-column: 1 / -1;
   }
 
-  .approve:has(> .approve-bar) > .approve-bar {
+  .approve > .approve-side {
     grid-column: 2;
     grid-row: 2 / span 40;
     position: sticky;
     top: calc(var(--header-h, 64px) + var(--space-5));
-    bottom: auto;
     margin-top: var(--space-5);
-    max-width: none;
-    padding: var(--space-5);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-2);
-    background: var(--surface);
+    max-height: calc(100vh - var(--header-h, 64px) - var(--space-7));
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
 
   .approve-bar .approve-choices,
@@ -212,8 +229,32 @@
 }
 
 @media (max-width: 1023px) {
-  .approve-bar {
-    position: static;
-    border-top: 1px solid var(--border);
+  .approve {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .approve > h1 {
+    order: -2;
+  }
+
+  /* The panel's parts join the page flow; Published moves up under the title. */
+  .approve > .approve-side {
+    display: contents;
+  }
+
+  .approve-side > .notice-success {
+    order: -1;
+    margin-top: var(--space-5);
+  }
+
+  .approve-side > * {
+    margin-top: var(--space-5);
+  }
+
+  /* Flex items may shrink below their content (long addresses and hashes wrap instead). */
+  .approve > *,
+  .approve-side > * {
+    min-width: 0;
   }
 }
