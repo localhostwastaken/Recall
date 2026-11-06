@@ -19,13 +19,16 @@ body {
   line-height: var(--lh-md);
   font-weight: 400;
   -webkit-font-smoothing: antialiased;
+  font-optical-sizing: auto;
 }
 
 h1,
 h2,
 h3 {
   margin: 0;
+  font-family: var(--font-display);
   font-weight: 600;
+  letter-spacing: -0.015em;
 }
 
 p {
@@ -33,7 +36,7 @@ p {
 }
 
 :focus-visible {
-  outline: 2px solid var(--focus);
+  outline: 3px solid var(--focus);
   outline-offset: 2px;
 }
 
@@ -78,6 +81,7 @@ p {
   line-height: var(--lh-sm);
   font-weight: 600;
   cursor: pointer;
+  text-decoration: none;
   transition:
     background-color var(--dur-fast) var(--ease-out),
     border-color var(--dur-fast) var(--ease-out);
@@ -95,7 +99,11 @@ p {
 
 .btn-primary:hover:not(:disabled) {
   background: var(--accent-hover);
+  color: var(--on-accent);
 }
+
+.btn-primary:active:not(:disabled) { background: var(--accent-hover); }
+.btn-secondary:active:not(:disabled) { background: var(--border); }
 
 .btn-secondary {
   background: var(--surface);
@@ -112,9 +120,18 @@ p {
   color: var(--accent);
 }
 
+.btn-ghost:hover:not(:disabled) {
+  background: var(--accent-soft);
+  color: var(--accent-hover);
+}
+
 .btn-danger {
   background: var(--danger);
   color: var(--on-danger);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 85%, black);
 }
 
 .btn-block {
@@ -127,7 +144,7 @@ p {
   align-items: center;
   gap: var(--space-1);
   padding: 0 var(--space-2);
-  border: 1px solid currentColor;
+  border: 1px solid transparent;
   border-radius: var(--radius-1);
   font-size: var(--text-xs);
   line-height: 22px;
@@ -153,6 +170,9 @@ p {
   color: var(--warn);
   background: var(--warn-bg);
 }
+
+.badge-unknown { color: var(--warn); background: var(--warn-bg); }
+.badge-not-applicable { color: var(--na); background: transparent; border-color: var(--border); }
 
 .badge-unavailable {
   color: var(--na);
@@ -248,7 +268,7 @@ p {
 }
 
 .notice-title:focus-visible {
-  outline: 2px solid var(--focus);
+  outline: 3px solid var(--focus);
   outline-offset: 2px;
 }
 
@@ -408,3 +428,64 @@ p {
 .mono-value {
   font-size: var(--text-xs);
 }
+
+/* Checks summary: one line with a badge per check; the rows open below it ("Show details"). */
+.checks-summary-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+}
+
+.checks-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: var(--control-h);
+  padding: 0 var(--space-2);
+  margin-left: auto;
+  border: 0;
+  border-radius: var(--radius-1);
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.checks-toggle:hover {
+  background: var(--accent-soft);
+}
+
+.checks-toggle svg {
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.checks-toggle[aria-expanded='true'] svg {
+  transform: rotate(180deg);
+}
+
+.check-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.check-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  line-height: var(--lh-xs);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.check-pill-pass svg { color: var(--pass); }
+.check-pill-fail svg { color: var(--fail); }
+.check-pill-warn svg, .check-pill-unknown svg { color: var(--warn); }
+.check-pill-pending svg { color: var(--info); }

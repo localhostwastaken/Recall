@@ -1,0 +1,18 @@
+/* SIL OFL 1.1 (licences in ./fonts). Local Latin variable fonts, bundled by the build so they
+   load under any base path (GitHub Pages, a Swarm gateway) and offline; other scripts fall back
+   to system fonts. */
+@font-face {
+  font-family: 'Public Sans';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url('./fonts/public-sans-latin.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Bricolage Grotesque';
+  font-style: normal;
+  font-weight: 400 800;
+  font-display: swap;
+  src: url('./fonts/bricolage-grotesque-latin.woff2') format('woff2');
+}

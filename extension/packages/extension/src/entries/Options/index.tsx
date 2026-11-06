@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { LogLevel, logLevelToName, logger } from '@tlsn/common';
 import { getStoredLogLevel, setStoredLogLevel } from '../../utils/logLevelStorage';
 import { SettingsPanel } from '../Popup/SettingsPanel';
+import '../../recall/ui/fonts.css';
 import '../../recall/ui/tokens.css';
 import '../../recall/ui/base.css';
 import './options.css';

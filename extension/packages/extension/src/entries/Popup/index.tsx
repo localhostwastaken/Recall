@@ -1,4 +1,5 @@
 import { createRoot } from 'react-dom/client';
+import '../../recall/ui/fonts.css';
 import '../../recall/ui/tokens.css';
 import '../../recall/ui/base.css';
 import './popup.css';
