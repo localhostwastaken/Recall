@@ -10,7 +10,7 @@ export const USABLE_WAIT_MS = 120_000;
 /** How long the stamped upload itself may take. */
 export const UPLOAD_TIMEOUT_MS = 60_000;
 /** How long the upload of a repository snapshot (up to 25 MB) may take. */
-export const ATTACHMENT_UPLOAD_TIMEOUT_MS = 10 * 60_000;
+export const ATTACHMENT_UPLOAD_TIMEOUT_MS = 15 * 60_000;
 
 /**
  * Evidence is uploaded only when checks A and B passed and C did not fail (an unknown
@@ -103,6 +103,9 @@ export type UploadOutcome =
       error: string;
       updates: BatchUpdate[];
     };
+
+/** Offscreen -> service worker: chunks of the repository snapshot accepted so far (throttled). */
+export type UploadProgressMessage = { type: 'recall.upload.progress'; id: string; done: number; total: number };
 
 /** Offscreen -> service worker: the upload finished. */
 export type UploadResultMessage = {

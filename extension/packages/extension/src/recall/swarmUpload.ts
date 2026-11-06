@@ -14,6 +14,7 @@ import {
   type StamperState,
 } from './poolState';
 import { getAttachment } from './attachmentStore';
+import { uploadStampedConcurrent } from './chunkPush';
 import { sha256Hex } from './gitRepo';
 import {
   ATTACHMENT_UPLOAD_TIMEOUT_MS,
@@ -41,10 +42,14 @@ export type UploadDeps = {
   now: () => number;
   /** A repository snapshot's bytes, by captureId (IndexedDB). */
   loadAttachment: (captureId: string) => Promise<Uint8Array | null>;
+  /** A big file's stamped upload: chunks stamped in order, pushes in parallel (chunkPush.ts). */
+  uploadMany: typeof uploadStampedConcurrent;
+  /** Chunks of the big file accepted so far. */
+  onProgress?: (done: number, total: number) => void;
 };
 
-/** One file of an upload, and how long its upload may take. */
-type UploadFile = { bytes: Uint8Array; timeoutMs: number };
+/** One file of an upload, and how long its upload may take. `big`: pushed in parallel, with progress. */
+type UploadFile = { bytes: Uint8Array; timeoutMs: number; big?: boolean };
 
 type BeeView = { starts: Map<string, number>; block: number };
 
@@ -215,7 +220,14 @@ async function stampAndUpload(
     const refs: Hex[] = [];
     for (const f of files) {
       const ref = await withTimeout(
-        d.upload(f.bytes, { uploadUrl: req.uploadUrl, stamper: guard }),
+        f.big
+          ? d.uploadMany(f.bytes, {
+              uploadUrl: req.uploadUrl,
+              stamper: guard,
+              ...(d.onProgress ? { onProgress: d.onProgress } : {}),
+              ...(signal ? { signal } : {}),
+            })
+          : d.upload(f.bytes, { uploadUrl: req.uploadUrl, stamper: guard }),
         f.timeoutMs,
         `the upload did not finish within ${f.timeoutMs / 1000} s`,
       );
@@ -327,6 +339,8 @@ export async function uploadEvidence(
     now: deps.now ?? Date.now,
     loadAttachment:
       deps.loadAttachment ?? (async (id) => (await getAttachment(id))?.bytes ?? null),
+    uploadMany: deps.uploadMany ?? uploadStampedConcurrent,
+    ...(deps.onProgress ? { onProgress: deps.onProgress } : {}),
   };
   const updates = new Map<Hex, BatchUpdate>();
   const note = (u: BatchUpdate) =>
@@ -358,7 +372,7 @@ export async function uploadEvidence(
     if (snap.length !== req.attachment.size || (await sha256Hex(snap)) !== req.attachment.sha256.toLowerCase()) {
       return fail('failed', 'the repository snapshot in the extension does not match the checked one');
     }
-    files.push({ bytes: snap, timeoutMs: ATTACHMENT_UPLOAD_TIMEOUT_MS });
+    files.push({ bytes: snap, timeoutMs: ATTACHMENT_UPLOAD_TIMEOUT_MS, big: true });
   }
 
   if (req.mode === 'free') return uploadToGateway(req.uploadUrl, files, d, signal);
