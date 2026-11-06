@@ -159,8 +159,8 @@ test.describe('@p2 extension api', () => {
   test('stamp address is stable across reloads', async () => {
     const first = await api<{ address?: string; lastError?: string }>({ type: 'recall.getStampAddress' });
     expect(first.address, JSON.stringify(first)).toMatch(/^0x[0-9a-fA-F]{40}$/);
-    // Only the address leaves the extension, never the key.
-    expect(Object.keys(first)).toEqual(['address']);
+    // Only the address (and the extension's version) leaves the extension, never the key.
+    expect(Object.keys(first).sort()).toEqual(['address', 'version']);
     stampAddress = first.address as Address;
 
     // Reload the extension: the service worker restarts, chrome.storage.local stays.
