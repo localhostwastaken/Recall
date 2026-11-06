@@ -5,15 +5,22 @@ import { WitnessChip, type WitnessState } from '../../recall/ui/WitnessChip';
 import { Notice } from '../../recall/ui/Notice';
 import { Steps, type StepState } from '../../recall/ui/Steps';
 import { CheckRow } from '../../recall/ui/CheckRow';
+import { MonoValue } from '../../recall/ui/MonoValue';
 import { loadSettings } from '../../recall/settings';
 import { witnessOnline } from '../../recall/witness';
-import { CAPTURE_STATE_KEY, STALE_AFTER_MS, type CaptureState } from '../../recall/jobState';
+import { CAPTURE_STATE_KEY, isLiveRunning, type CaptureState } from '../../recall/jobState';
+import { POOL_KEY, parsePool, unusedBatches } from '../../recall/poolState';
 import type { PopupRequest } from '../../recall/messages';
 import {
-  CAPTURE_STEPS,
+  CAPTURE_HELPER,
+  CAPTURE_HELPER_NO_STORAGE,
+  NO_STORAGE_BODY,
+  NO_STORAGE_TITLE,
   checkLines,
   errorCopy,
   formatElapsed,
+  jobSteps,
+  uploadCopy,
   verdict,
   pageBlockedReason,
 } from '../../recall/captureView';
@@ -67,6 +74,30 @@ function useCaptureState(): CaptureState | undefined {
   return state;
 }
 
+/** How many unused batches the pool holds, kept live (undefined while loading). */
+function useUnusedBatches(): number | undefined {
+  const [count, setCount] = useState<number | undefined>(undefined);
+  useEffect(() => {
+    const read = (stored: unknown) => setCount(unusedBatches(parsePool(stored)).length);
+    chrome.storage.local
+      .get(POOL_KEY)
+      .then((r) => read(r[POOL_KEY]))
+      .catch(() => undefined);
+    const onChanged = (changes: Record<string, chrome.storage.StorageChange>) => {
+      if (POOL_KEY in changes) read(changes[POOL_KEY].newValue);
+    };
+    chrome.storage.local.onChanged.addListener(onChanged);
+    return () => chrome.storage.local.onChanged.removeListener(onChanged);
+  }, []);
+  return count;
+}
+
+/** Opens the web app's Buy storage page in a new tab. */
+async function openBuyStorage(): Promise<void> {
+  const { appUrl } = await loadSettings();
+  await chrome.tabs.create({ url: new URL('#/storage', appUrl).href });
+}
+
 /** Re-renders every second while `on`, for the elapsed-time text. */
 function useNow(on: boolean): number {
   const [now, setNow] = useState(() => Date.now());
@@ -83,6 +114,7 @@ export function Popup() {
   const [witness, setWitness] = useState<WitnessState>('checking');
   const [copied, setCopied] = useState(false);
   const job = useCaptureState();
+  const unused = useUnusedBatches();
 
   const probeWitness = useCallback(() => {
     loadSettings()
@@ -103,8 +135,7 @@ export function Popup() {
   }, [probeWitness]);
 
   const now = useNow(job?.status === 'running');
-  const running =
-    job?.status === 'running' && now - job.startedAt < STALE_AFTER_MS ? job : undefined;
+  const running = isLiveRunning(job, now) ? job : undefined;
   // This popup shows the job of its own page; another page's running job only blocks the button.
   const mine = job && page && sameUrl(job.url, page.url) ? job : undefined;
 
@@ -119,6 +150,8 @@ export function Popup() {
   }, [capture, checkWitness]);
   const dismiss = useCallback(() => void send({ type: 'recall.dismissCapture' }), []);
   const cancel = useCallback(() => void send({ type: 'recall.cancelCapture' }), []);
+  const retryUpload = useCallback(() => void send({ type: 'recall.retryUpload' }), []);
+  const buyStorage = useCallback(() => void openBuyStorage(), []);
   const openSettings = useCallback(() => void chrome.runtime.openOptionsPage(), []);
 
   let disabledReason: string | null = null;
@@ -131,7 +164,7 @@ export function Popup() {
   else if (witness === 'offline')
     disabledReason = 'The witness is offline, so new captures are paused.';
   const busy = Boolean(running && mine);
-  const helper = disabledReason ?? 'Takes about 30 s and ~30 MB of data. Pages up to 64 KB.';
+  const helper = disabledReason ?? (unused === 0 ? CAPTURE_HELPER_NO_STORAGE : CAPTURE_HELPER);
 
   return (
     <div className="popup">
@@ -167,7 +200,7 @@ export function Popup() {
               Capture progress
             </h2>
             <Steps
-              steps={CAPTURE_STEPS.map((label, i) => ({
+              steps={jobSteps(mine.uploadPlanned, mine.step).map((label, i) => ({
                 label,
                 state: (i + 1 < mine.step
                   ? 'done'
@@ -188,7 +221,25 @@ export function Popup() {
             <p className="popup-note muted">You can close this popup. The capture keeps running.</p>
           </section>
         ) : mine?.status === 'done' ? (
-          <CaptureResult job={mine} openSettings={openSettings} />
+          <CaptureResult
+            job={mine}
+            hasStorage={(unused ?? 0) > 0}
+            copied={copied}
+            openSettings={openSettings}
+            onBuyStorage={buyStorage}
+            onRetryUpload={retryUpload}
+            onCopy={() => {
+              const u = mine.upload;
+              void navigator.clipboard
+                .writeText(
+                  JSON.stringify({
+                    url: mine.url,
+                    ...(u?.status === 'failed' ? { error: u.error } : {}),
+                  }),
+                )
+                .then(() => setCopied(true));
+            }}
+          />
         ) : mine && mine.status !== 'running' ? (
           <section aria-labelledby="capture-result">
             <h2 id="capture-result" className="section-label">
@@ -236,6 +287,23 @@ export function Popup() {
               verified by anyone.
             </Notice>
           </section>
+        ) : unused === 0 ? (
+          <section aria-labelledby="capture-result">
+            <h2 id="capture-result" className="section-label">
+              Storage
+            </h2>
+            <Notice
+              kind="warn"
+              title={NO_STORAGE_TITLE}
+              actions={
+                <button type="button" className="btn btn-secondary" onClick={buyStorage}>
+                  Buy storage
+                </button>
+              }
+            >
+              {NO_STORAGE_BODY}
+            </Notice>
+          </section>
         ) : (
           // Task 13 loads the earlier captures from Arkiv.
           <section aria-labelledby="earlier-captures">
@@ -275,13 +343,46 @@ export function Popup() {
 
 function CaptureResult({
   job,
+  hasStorage,
+  copied,
   openSettings,
+  onBuyStorage,
+  onRetryUpload,
+  onCopy,
 }: {
   job: Extract<CaptureState, { status: 'done' }>;
+  hasStorage: boolean;
+  copied: boolean;
   openSettings: () => void;
+  onBuyStorage: () => void;
+  onRetryUpload: () => void;
+  onCopy: () => void;
 }) {
   const lines = checkLines(job.checks, job.evidence);
   const v = verdict(lines, job.checks);
+  const up = job.upload ? uploadCopy(job.upload, hasStorage) : null;
+  const upActions = {
+    buyStorage: (
+      <button key="buy" type="button" className="btn btn-secondary" onClick={onBuyStorage}>
+        Buy storage
+      </button>
+    ),
+    uploadNow: (
+      <button key="upload" type="button" className="btn btn-secondary" onClick={onRetryUpload}>
+        Upload now
+      </button>
+    ),
+    retryUpload: (
+      <button key="retry" type="button" className="btn btn-secondary" onClick={onRetryUpload}>
+        Try again
+      </button>
+    ),
+    copy: (
+      <button key="copy" type="button" className="btn btn-ghost" onClick={onCopy}>
+        {copied ? 'Copied' : 'Copy details'}
+      </button>
+    ),
+  };
   return (
     <section aria-labelledby="capture-result">
       <h2 id="capture-result" className="section-label">
@@ -301,6 +402,22 @@ function CaptureResult({
       >
         {v.body}
       </Notice>
+      {up ? (
+        <div className="upload-result">
+          <Notice
+            kind={up.kind}
+            title={up.title}
+            actions={up.actions.length ? up.actions.map((a) => upActions[a]) : undefined}
+          >
+            {up.body}
+            {job.upload?.status === 'uploaded' ? (
+              <span className="upload-ref">
+                Evidence <MonoValue value={job.upload.evidenceRef} />
+              </span>
+            ) : null}
+          </Notice>
+        </div>
+      ) : null}
       <ul className="checks" aria-label="Checks">
         {lines.map((l) => (
           <CheckRow

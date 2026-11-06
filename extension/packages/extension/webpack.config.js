@@ -139,9 +139,8 @@ var options = {
             options: {
               transpileOnly: isDevelopment,
               compiler: require.resolve('typescript'),
-              // Recall: type errors are reported for this extension's own sources only.
-              // packages/* are type-checked by the repo's TypeScript (5.7); this fork's
-              // TS 6 is stricter about Uint8Array bodies in packages/net/src/swarm.ts.
+              // Recall: type errors are reported for this extension's own sources only;
+              // packages/* are type-checked by the repo's TypeScript (5.7).
               reportFiles: ['src/**/*.{ts,tsx}'],
               ...(isDevelopment && {
                 getCustomTransformers: () => ({

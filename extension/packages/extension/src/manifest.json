@@ -29,6 +29,17 @@
       "http://localhost:1633/*"
     ]
   },
-  "host_permissions": ["<all_urls>"],
+  "host_permissions": [
+    "http://localhost/*",
+    "http://127.0.0.1/*",
+    "https://*.trycloudflare.com/*",
+    "https://api.gateway.ethswarm.org/*",
+    "https://download.gateway.ethswarm.org/*",
+    "https://bzz.link/*",
+    "https://*.bzz.link/*",
+    "https://rpc.rabdi.db-chain.testnet.arkiv.network/*",
+    "https://rpc.gnosischain.com/*"
+  ],
+  "optional_host_permissions": ["https://*/*"],
   "permissions": ["offscreen", "storage", "tabs", "activeTab"]
 }

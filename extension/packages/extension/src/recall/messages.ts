@@ -1,6 +1,13 @@
 // Messages between the popup, the service worker and the offscreen document.
-// All of them stay inside the extension (it has no content scripts).
+// All of them stay inside the extension (it has no content scripts). The web app's
+// messages (chrome.runtime.onMessageExternal) are in external.ts.
 import type { CaptureOutcome, CaptureOverrides, CaptureStep } from './captureParts';
+import type { OffscreenUpload, UploadResultMessage } from './uploadParts';
+import type { OffscreenReadEntity } from './arkivRead';
+
+export type { OffscreenUpload, UploadResultMessage } from './uploadParts';
+export type { OffscreenReadEntity } from './arkivRead';
+export type { ExternalRequest } from './external';
 
 /** Service worker -> offscreen: run one capture. Answered at once with `{accepted:true}`. */
 export type OffscreenCapture = {
@@ -29,11 +36,15 @@ export type CaptureResultMessage = {
 export type PopupRequest =
   | { type: 'recall.startCapture'; url: string }
   | { type: 'recall.cancelCapture' }
-  | { type: 'recall.dismissCapture' };
+  | { type: 'recall.dismissCapture' }
+  | { type: 'recall.retryUpload' };
 
 export type RecallMessage =
   | OffscreenCapture
   | OffscreenCancel
+  | OffscreenUpload
+  | OffscreenReadEntity
   | CaptureStepMessage
   | CaptureResultMessage
+  | UploadResultMessage
   | PopupRequest;

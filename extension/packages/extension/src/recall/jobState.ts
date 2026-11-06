@@ -6,7 +6,7 @@ import type { CaptureErrorCode, CaptureStep } from './captureParts';
 
 export const CAPTURE_STATE_KEY = 'recall.capture';
 
-/** A running capture older than this is treated as lost (offscreen crashed, browser slept). */
+/** A running step that has not moved for this long is treated as lost (offscreen crashed, browser slept). */
 export const STALE_AFTER_MS = 4 * 60_000;
 
 /** JSON-safe checks A-C of a fresh capture (chrome.storage cannot hold bigint or bytes). */
@@ -27,11 +27,40 @@ export type CheckSummary = {
   };
 };
 
+/** Job steps: the capture's three, then 4 = uploading the evidence to Swarm. */
+export type JobStep = CaptureStep | 4;
+
+/** What happened to the evidence after the checks. */
+export type UploadState =
+  | { status: 'uploaded'; captureId: string; evidenceRef: Hex; batchId: Hex }
+  /** The pool had no unused batch. */
+  | { status: 'no_storage' }
+  /** The checks did not allow an upload. */
+  | { status: 'skipped'; reason: string }
+  /** `not_ready`: no batch became usable in time (fresh storage takes 1-2 minutes). */
+  | { status: 'failed'; error: string; code?: 'not_ready' };
+
 export type CaptureBase = { id: string; url: string; startedAt: number };
 type Base = CaptureBase;
 export type CaptureState =
-  | (Base & { status: 'running'; step: CaptureStep })
-  | (Base & { status: 'done'; finishedAt: number; evidence: EvidenceFile; checks: CheckSummary })
+  | (Base & {
+      status: 'running';
+      step: JobStep;
+      /** When the current step began (the staleness clock); defaults to startedAt. */
+      stepAt?: number;
+      /** The pool had a batch at the start, so the steps include the upload. */
+      uploadPlanned?: boolean;
+      /** Step 4 only: the checked capture being uploaded. */
+      evidence?: EvidenceFile;
+      checks?: CheckSummary;
+    })
+  | (Base & {
+      status: 'done';
+      finishedAt: number;
+      evidence: EvidenceFile;
+      checks: CheckSummary;
+      upload?: UploadState;
+    })
   | (Base & {
       status: 'error';
       finishedAt: number;
@@ -42,3 +71,9 @@ export type CaptureState =
   | (Base & { status: 'cancelled'; finishedAt: number });
 
 export type FinalState = Exclude<CaptureState, { status: 'running' }>;
+export type RunningState = Extract<CaptureState, { status: 'running' }>;
+
+/** A running job that is still alive (its current step began less than STALE_AFTER_MS ago). */
+export function isLiveRunning(s: CaptureState | undefined, now: number): s is RunningState {
+  return s?.status === 'running' && now - (s.stepAt ?? s.startedAt) < STALE_AFTER_MS;
+}

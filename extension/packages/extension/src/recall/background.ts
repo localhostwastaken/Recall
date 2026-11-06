@@ -7,8 +7,12 @@ import {
   dismissCapture,
   onCaptureResult,
   onCaptureStep,
+  onUploadResult,
+  retryUpload,
   startCapture,
 } from './job';
+import { initExternalApi } from './external';
+import { stampKey } from './stamp';
 import type { RecallMessage } from './messages';
 
 /** Messages from our own pages only: the popup and the offscreen document. */
@@ -18,11 +22,19 @@ function fromOwnPage(sender: chrome.runtime.MessageSender): boolean {
   );
 }
 
-/** Recall's service-worker setup: default settings, the capture job, and a test handle in dev builds. */
+/**
+ * Recall's service-worker setup: default settings, the stamp key, the capture job, the
+ * web app's API, and a test handle in dev builds.
+ */
 export function initRecallBackground(): void {
   chrome.runtime.onInstalled.addListener(() => {
     ensureSettings().catch((err) => console.error('[recall] settings init failed', err));
+    // Created at install so the web app can buy storage for it at once (never logged).
+    stampKey().catch(() => console.error('[recall] stamp key init failed'));
   });
+
+  // Registered at load, so an app message that wakes the worker is never missed.
+  initExternalApi();
 
   chrome.runtime.onMessage.addListener((raw: unknown, sender, sendResponse) => {
     if (!fromOwnPage(sender)) return;
@@ -39,11 +51,16 @@ export function initRecallBackground(): void {
         return reply(cancelCapture().then(() => ({ ok: true })));
       case 'recall.dismissCapture':
         return reply(dismissCapture().then(() => ({ ok: true })));
+      case 'recall.retryUpload':
+        return reply(retryUpload());
       case 'recall.capture.step':
         void onCaptureStep(msg.id, msg.step);
         return;
       case 'recall.capture.result':
         void onCaptureResult(msg.id, msg.outcome);
+        return;
+      case 'recall.upload.result':
+        void onUploadResult(msg.id, msg.outcome);
         return;
       default:
         return;

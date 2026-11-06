@@ -16,6 +16,20 @@ const LOG_LEVELS: { level: LogLevel; description: string }[] = [
 
 const URL_ERROR = 'Enter a full address starting with http:// or https://';
 
+/**
+ * Asks for access to a witness outside the built-in hosts (optional_host_permissions),
+ * so the popup's online check can reach it. Called from the Save click (a user gesture).
+ */
+async function ensureHostPermission(url: string): Promise<boolean> {
+  try {
+    const origins = [`${new URL(url).origin}/*`];
+    if (await chrome.permissions.contains({ origins })) return true;
+    return await chrome.permissions.request({ origins });
+  } catch {
+    return false; // e.g. a plain http:// host other than localhost cannot be requested
+  }
+}
+
 function WitnessSettings() {
   const id = useId();
   const [value, setValue] = useState('');
@@ -37,8 +51,13 @@ function WitnessSettings() {
   const save = async () => {
     setStatus('');
     if (!validate(value)) return;
+    const allowed = await ensureHostPermission(value.trim());
     await saveSettings({ witnessUrl: value.trim() });
-    setStatus('Settings saved');
+    setStatus(
+      allowed
+        ? 'Settings saved'
+        : 'Settings saved. Recall was not allowed to reach this address, so the witness may show as offline.',
+    );
   };
 
   return (

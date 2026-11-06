@@ -1,5 +1,5 @@
 import type { Address } from 'viem';
-import { LOCAL, liveConfig } from '@recall/net/config';
+import { LOCAL, liveConfig, type NetConfig } from '@recall/net/config';
 import { RECALL_DEV } from './build';
 
 export type Net = 'local' | 'live';
@@ -33,6 +33,11 @@ export function defaultSettings(net: Net = RECALL_DEV ? 'local' : 'live'): Setti
     pinnedWitnesses: [...cfg.witness.pinned],
     appUrl: cfg.app.url,
   };
+}
+
+/** Endpoints (Arkiv, Swarm, Gnosis) for the settings' network. */
+export function netConfigFor(s: Pick<Settings, 'net'>): NetConfig {
+  return s.net === 'local' ? LOCAL : liveConfig({});
 }
 
 const isAddress = (v: unknown): v is Address =>

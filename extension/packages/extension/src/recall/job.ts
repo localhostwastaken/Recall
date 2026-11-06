@@ -1,10 +1,22 @@
 // The capture job (service worker side): one capture at a time, run by the offscreen
 // document. Its state lives in chrome.storage.session, so the popup can close and
-// reopen while the capture keeps running.
+// reopen while the capture keeps running. After the checks, a capture that may be
+// uploaded is stamped with one pool batch and uploaded to Swarm (also in offscreen).
 import { runChecks, type CheckReport, type EvidenceFile } from '@recall/evidence';
 import { RECALL_DEV } from './build';
-import { loadSettings } from './settings';
+import { loadSettings, netConfigFor } from './settings';
 import { ensureOffscreen } from './offscreen';
+import { loadPool, recordUpload } from './pool';
+import { unusedBatches } from './poolState';
+import { stampKey } from './stamp';
+import { newCaptureId, savePending } from './pending';
+import {
+  USABLE_WAIT_MS,
+  canonicalEvidence,
+  uploadGate,
+  type OffscreenUpload,
+  type UploadOutcome,
+} from './uploadParts';
 import {
   MAX_RECV_DATA,
   withTimeout,
@@ -16,15 +28,16 @@ import {
 import type { OffscreenCancel, OffscreenCapture } from './messages';
 import {
   CAPTURE_STATE_KEY,
-  STALE_AFTER_MS,
+  isLiveRunning,
   type CaptureBase as Base,
   type CaptureState,
   type CheckSummary,
   type FinalState,
+  type UploadState,
 } from './jobState';
 
 export { CAPTURE_STATE_KEY, STALE_AFTER_MS } from './jobState';
-export type { CaptureState, CheckSummary, FinalState } from './jobState';
+export type { CaptureState, CheckSummary, FinalState, UploadState } from './jobState';
 
 /** How long checks A-C may take in the service worker (they normally take milliseconds). */
 export const CHECKS_TIMEOUT_MS = 15_000;
@@ -53,8 +66,7 @@ export async function readCaptureState(): Promise<CaptureState | undefined> {
   return (await area().get(CAPTURE_STATE_KEY))[CAPTURE_STATE_KEY] as CaptureState | undefined;
 }
 
-const isLive = (s: CaptureState | undefined): s is Extract<CaptureState, { status: 'running' }> =>
-  s?.status === 'running' && Date.now() - s.startedAt < STALE_AFTER_MS;
+const isLive = (s: CaptureState | undefined) => isLiveRunning(s, Date.now());
 
 // Every read-modify-write of the state runs in this chain, so a late step message
 // can never overwrite a finished capture.
@@ -91,7 +103,9 @@ function failure(base: Base, error: string, code: CaptureErrorCode, size?: numbe
 }
 
 /** Sends to the offscreen document, retrying briefly while a new document is still loading. */
-async function sendToOffscreen(msg: OffscreenCapture): Promise<{ accepted?: boolean } | undefined> {
+async function sendToOffscreen(
+  msg: OffscreenCapture | OffscreenUpload,
+): Promise<{ accepted?: boolean } | undefined> {
   for (let attempt = 0; ; attempt++) {
     try {
       return (await chrome.runtime.sendMessage(msg)) as { accepted?: boolean } | undefined;
@@ -115,8 +129,15 @@ export function startCapture(
       await finish(failure(base, 'no witness address is set', 'witness_offline'));
       return { id: base.id };
     }
+    // With no batch in the pool the capture is still proved and checked, but not uploaded.
+    const uploadPlanned = unusedBatches(await loadPool()).length > 0;
     await area().set({
-      [CAPTURE_STATE_KEY]: { ...base, status: 'running', step: 1 } satisfies CaptureState,
+      [CAPTURE_STATE_KEY]: {
+        ...base,
+        status: 'running',
+        step: 1,
+        uploadPlanned,
+      } satisfies CaptureState,
     });
     try {
       await ensureOffscreen();
@@ -142,19 +163,24 @@ export function onCaptureStep(id: string, step: CaptureStep): Promise<void> {
   return update(async () => {
     const s = await readCaptureState();
     if (s?.status === 'running' && s.id === id && step > s.step) {
-      await area().set({ [CAPTURE_STATE_KEY]: { ...s, step } satisfies CaptureState });
+      await area().set({
+        [CAPTURE_STATE_KEY]: { ...s, step, stepAt: Date.now() } satisfies CaptureState,
+      });
     }
   });
 }
 
-/** Offscreen result: run checks A-C on fresh evidence, then store the final state. */
+/** Offscreen result: run checks A-C on fresh evidence, then upload it or store the final state. */
 export function onCaptureResult(id: string, outcome: CaptureOutcome): Promise<void> {
   return update(async () => {
     const s = await readCaptureState();
-    if (s?.status !== 'running' || s.id !== id) return; // cancelled or superseded
+    if (s?.status !== 'running' || s.id !== id || s.step > 3) return; // cancelled or superseded
     const base: Base = { id: s.id, url: s.url, startedAt: s.startedAt };
     if ('evidence' in outcome) {
-      await area().set({ [CAPTURE_STATE_KEY]: { ...s, step: 3 } satisfies CaptureState });
+      await area().set({
+        [CAPTURE_STATE_KEY]: { ...s, step: 3, stepAt: Date.now() } satisfies CaptureState,
+      });
+      let checks: CheckSummary;
       try {
         const { pinnedWitnesses } = await loadSettings();
         // Bounded: a hung check must not leave the job "running" and block later captures.
@@ -163,22 +189,146 @@ export function onCaptureResult(id: string, outcome: CaptureOutcome): Promise<vo
           CHECKS_TIMEOUT_MS,
           `the checks did not finish within ${CHECKS_TIMEOUT_MS / 1000} s`,
         );
-        await finish({
-          ...base,
-          status: 'done',
-          finishedAt: Date.now(),
-          evidence: outcome.evidence,
-          checks: summarizeChecks(report),
-        });
+        checks = summarizeChecks(report);
       } catch (err) {
         const why = err instanceof Error ? err.message : String(err);
         await finish(failure(base, `the evidence could not be checked: ${why}`, 'failed'));
+        return;
+      }
+      const gate = uploadGate(checks, base.url);
+      if (!gate.ok) {
+        await finishDone(base, outcome.evidence, checks, {
+          status: 'skipped',
+          reason: gate.reason,
+        });
+      } else {
+        await beginUpload(base, outcome.evidence, checks);
       }
     } else if (outcome.code === 'cancelled') {
       await finish({ ...base, status: 'cancelled', finishedAt: Date.now() });
     } else {
       await finish(failure(base, outcome.error, outcome.code, outcome.size));
     }
+  });
+}
+
+function finishDone(
+  base: Base,
+  evidence: EvidenceFile,
+  checks: CheckSummary,
+  upload: UploadState,
+): Promise<FinalState> {
+  return finish({ ...base, status: 'done', finishedAt: Date.now(), evidence, checks, upload });
+}
+
+const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
+/**
+ * Step 4: hands the checked evidence, the stamp key and the unused batches to the
+ * offscreen document, which picks a usable batch, stamps and uploads. Runs inside the
+ * state chain. With an empty pool the capture ends without an upload.
+ */
+async function beginUpload(
+  base: Base,
+  evidence: EvidenceFile,
+  checks: CheckSummary,
+): Promise<void> {
+  const candidates = unusedBatches(await loadPool());
+  if (candidates.length === 0) {
+    await finishDone(base, evidence, checks, { status: 'no_storage' });
+    return;
+  }
+  await area().set({
+    [CAPTURE_STATE_KEY]: {
+      ...base,
+      status: 'running',
+      step: 4,
+      stepAt: Date.now(),
+      uploadPlanned: true,
+      evidence,
+      checks,
+    } satisfies CaptureState,
+  });
+  try {
+    const net = netConfigFor(await loadSettings());
+    await ensureOffscreen();
+    const msg: OffscreenUpload = {
+      type: 'recall.offscreen.upload',
+      id: base.id,
+      evidence: canonicalEvidence(evidence),
+      stampKey: await stampKey(),
+      candidates: candidates.map((b) => ({
+        batchId: b.batchId,
+        depth: b.depth,
+        startBlock: b.startBlock,
+        ...(b.stamper ? { stamper: b.stamper } : {}),
+      })),
+      uploadUrl: net.swarm.uploadUrl,
+      gnosisRpcUrl: net.gnosis.rpcUrl,
+      waitMs: USABLE_WAIT_MS,
+    };
+    const ack = await sendToOffscreen(msg);
+    if (!ack?.accepted) throw new Error('the uploader did not start');
+  } catch (err) {
+    await finishDone(base, evidence, checks, { status: 'failed', error: errorText(err) });
+  }
+}
+
+/**
+ * Offscreen upload result. The pool is updated whatever became of the job (a stamped
+ * slot must never be stamped again); the job finishes only if it is still this upload.
+ */
+export function onUploadResult(id: string, outcome: UploadOutcome): Promise<void> {
+  return update(async () => {
+    if (outcome.ok) {
+      await recordUpload(outcome.batchId, { stamper: outcome.stamper, used: true });
+    } else if (outcome.batchId) {
+      await recordUpload(outcome.batchId, { stamper: outcome.stamper, used: false });
+    }
+    const s = await readCaptureState();
+    if (s?.status !== 'running' || s.id !== id || s.step !== 4 || !s.evidence || !s.checks) return;
+    const base: Base = { id: s.id, url: s.url, startedAt: s.startedAt };
+    if (outcome.ok && s.checks.facts) {
+      const captureId = newCaptureId();
+      await savePending({
+        captureId,
+        kind: 'capture',
+        // The same canonical form that was uploaded (session storage sorted its keys).
+        evidence: canonicalEvidence(s.evidence),
+        evidenceRef: outcome.evidenceRef,
+        batchId: outcome.batchId,
+        bodySha256: s.checks.facts.bodySha256,
+        createdAt: Date.now(),
+      });
+      await finishDone(base, s.evidence, s.checks, {
+        status: 'uploaded',
+        captureId,
+        evidenceRef: outcome.evidenceRef,
+        batchId: outcome.batchId,
+      });
+    } else {
+      const error = outcome.ok ? 'the checks gave no verified facts' : outcome.error;
+      await finishDone(base, s.evidence, s.checks, {
+        status: 'failed',
+        error,
+        ...(!outcome.ok && outcome.code === 'not_ready' ? { code: 'not_ready' as const } : {}),
+      });
+    }
+  });
+}
+
+/** The popup's "Try again" after a failed upload (or once storage was bought): upload the same capture. */
+export function retryUpload(): Promise<{ ok: true } | { error: string }> {
+  return update(async () => {
+    const s = await readCaptureState();
+    if (
+      s?.status !== 'done' ||
+      (s.upload?.status !== 'failed' && s.upload?.status !== 'no_storage')
+    ) {
+      return { error: 'there is no capture waiting for an upload' };
+    }
+    await beginUpload({ id: s.id, url: s.url, startedAt: s.startedAt }, s.evidence, s.checks);
+    return { ok: true };
   });
 }
 
@@ -222,12 +372,13 @@ export async function captureForTest(
   url: string,
   overrides?: CaptureOverrides,
 ): Promise<
-  { evidence: EvidenceFile; checks: CheckSummary } | { error: string; code?: CaptureErrorCode }
+  | { evidence: EvidenceFile; checks: CheckSummary; upload?: UploadState }
+  | { error: string; code?: CaptureErrorCode }
 > {
   const started = await startCapture(url, overrides);
   if ('error' in started) return started;
   const s = await waitForCapture(started.id);
-  if (s.status === 'done') return { evidence: s.evidence, checks: s.checks };
+  if (s.status === 'done') return { evidence: s.evidence, checks: s.checks, upload: s.upload };
   if (s.status === 'cancelled') return { error: 'capture cancelled', code: 'cancelled' };
   return { error: s.error, code: s.code };
 }

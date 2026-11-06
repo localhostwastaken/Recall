@@ -229,8 +229,11 @@ async function createProver(config: ProverConfig): Promise<string> {
 /**
  * Sets up the prover with the verifier via WebSocket URL.
  */
-/** Default timeout for prover setup (30 seconds). */
-const SETUP_TIMEOUT_MS = 30_000;
+/**
+ * Timeout for prover setup (MPC preprocessing with the witness). Through the live tunnel
+ * this takes 18-28 s, sometimes more, so 90 s leaves room without hiding a stalled witness.
+ */
+const SETUP_TIMEOUT_MS = 90_000;
 
 async function setupProver(proverId: string, verifierUrl: string): Promise<void> {
   const prover = provers.get(proverId);

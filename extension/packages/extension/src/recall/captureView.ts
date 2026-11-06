@@ -5,7 +5,7 @@ import type { Status } from './ui/StatusBadge';
 import type { NoticeKind } from './ui/Notice';
 import { middle } from './ui/MonoValue';
 import { captureTarget, formatSize, type CaptureErrorCode } from './captureParts';
-import type { CheckSummary } from './jobState';
+import type { CheckSummary, UploadState } from './jobState';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -27,6 +27,21 @@ export const CAPTURE_STEPS = [
   'Proving the page with the witness',
   'Checking the witness signature',
 ] as const;
+
+/** Step 4, shown when the pool has a batch to upload with. */
+export const UPLOAD_STEP = 'Uploading evidence to Swarm';
+
+/** The popup's footer helper while a capture can start (design brief 4.1). */
+export const CAPTURE_HELPER = 'Takes about 30 s and about 80 MB of data. Pages up to 64 KB.';
+
+/** The helper when the pool is empty: the capture still runs, but is not uploaded. */
+export const CAPTURE_HELPER_NO_STORAGE =
+  'No storage left: the page will be checked but not uploaded. Pages up to 64 KB.';
+
+/** The steps a job shows: the capture's three, plus the upload when one is planned. */
+export function jobSteps(uploadPlanned: boolean | undefined, step: number): string[] {
+  return uploadPlanned || step > 3 ? [...CAPTURE_STEPS, UPLOAD_STEP] : [...CAPTURE_STEPS];
+}
 
 export type CheckLine = {
   letter: 'A' | 'B' | 'C';
@@ -191,6 +206,73 @@ export function errorCopy(
 }
 
 export type { CheckResult };
+
+/** "No storage left" (design brief 4.1). */
+export const NO_STORAGE_TITLE = 'No storage left';
+export const NO_STORAGE_BODY = 'Your prepaid storage is used up. Buy more to keep capturing.';
+
+export type UploadCopy = {
+  kind: NoticeKind;
+  title: string;
+  body: string;
+  actions: ('buyStorage' | 'uploadNow' | 'retryUpload' | 'copy')[];
+};
+
+const sentence = (s: string) => {
+  const t = s.trim().replace(/\.+$/, '');
+  return t.charAt(0).toUpperCase() + t.slice(1);
+};
+
+/**
+ * The notice under a finished capture's checks: what happened to its evidence.
+ * `hasStorage`: the pool has an unused batch now (so a no-storage capture can upload).
+ */
+export function uploadCopy(upload: UploadState, hasStorage: boolean): UploadCopy {
+  switch (upload.status) {
+    case 'uploaded':
+      return {
+        kind: 'success',
+        title: 'Uploaded. Ready to publish',
+        body: 'The evidence file is on Swarm. Publishing its record on Arkiv comes next.',
+        actions: [],
+      };
+    case 'no_storage':
+      return hasStorage
+        ? {
+            kind: 'info',
+            title: 'Not uploaded yet',
+            body: `There was no storage left when this capture finished. You can upload it now. ${NOTHING}`,
+            actions: ['uploadNow'],
+          }
+        : {
+            kind: 'error',
+            title: NO_STORAGE_TITLE,
+            body: `${NO_STORAGE_BODY} ${NOTHING}`,
+            actions: ['buyStorage'],
+          };
+    case 'skipped':
+      return {
+        kind: 'info',
+        title: 'Not uploaded',
+        body: `${sentence(upload.reason)}, so the evidence was not uploaded. ${NOTHING}`,
+        actions: [],
+      };
+    case 'failed':
+      return upload.code === 'not_ready'
+        ? {
+            kind: 'warn',
+            title: 'Storage not ready yet',
+            body: `New storage takes about 1–2 minutes to become usable. Try again in a minute. ${NOTHING}`,
+            actions: ['retryUpload'],
+          }
+        : {
+            kind: 'error',
+            title: 'Upload failed',
+            body: `${sentence(upload.error)}. ${NOTHING}`,
+            actions: ['retryUpload', 'copy'],
+          };
+  }
+}
 
 /**
  * Why the current page cannot be captured, as helper text ("Only https:// pages can be

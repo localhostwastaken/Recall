@@ -1,6 +1,12 @@
 // Runs one capture in the offscreen document: MPC-TLS against the witness, which
 // verifies the session and signs the EIP-712 statement; the result is an evidence file.
-import { buildEvidence, statementFromJson } from '@recall/evidence';
+import {
+  base64ToBytes,
+  buildEvidence,
+  bytesToBase64,
+  statementFromJson,
+  type EvidenceFile,
+} from '@recall/evidence';
 import { ProveManager } from '../offscreen/ProveManager';
 import { RECALL_DEV } from './build';
 import {
@@ -52,6 +58,13 @@ export function proveManager(): Promise<ProveManager> {
 export const TRANSCRIPT_UNAVAILABLE = 'capture failed: transcript unavailable';
 
 const cancelled = (): CaptureFailure => ({ error: 'capture cancelled', code: 'cancelled' });
+
+/** Dev override only: the evidence with one received byte flipped after signing (check A fails). */
+function tampered(e: EvidenceFile): EvidenceFile {
+  const recv = base64ToBytes(e.transcript.recv);
+  recv[recv.length - 1] ^= 0x01;
+  return { ...e, transcript: { ...e.transcript, recv: bytesToBase64(recv) } };
+}
 
 /**
  * Captures `url` through the witness at `witnessUrl`. Mode MPC, both directions fully
@@ -150,7 +163,7 @@ export async function captureUrl(url: string, opts: CaptureOptions): Promise<Cap
       recv,
       capturedUrl: target.href,
     });
-    return { evidence };
+    return { evidence: overrides?.tamperEvidence ? tampered(evidence) : evidence };
   } catch (err) {
     if (opts.signal?.aborted) return cancelled();
     return classifyFailure(err, await pm.witnessError(proverId, 2_000));

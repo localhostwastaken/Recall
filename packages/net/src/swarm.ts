@@ -70,7 +70,8 @@ export async function uploadFree(bytes: Uint8Array, uploadUrl: string): Promise<
   const res = await fetch(`${uploadUrl.replace(/\/$/, '')}/bytes`, {
     method: 'POST',
     headers: { 'content-type': 'application/octet-stream' },
-    body: bytes,
+    // TS 6 accepts only ArrayBuffer-backed views as a fetch body; callers never pass a shared one.
+    body: bytes as Uint8Array<ArrayBuffer>,
   });
   if (!res.ok) throw new Error(`free upload failed: ${res.status}`);
   const { reference } = (await res.json()) as { reference: string };

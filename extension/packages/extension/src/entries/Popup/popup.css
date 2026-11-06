@@ -91,3 +91,12 @@ body {
   font-size: var(--text-xs);
   line-height: var(--lh-xs);
 }
+
+.upload-result {
+  margin-top: var(--space-3);
+}
+
+.upload-ref {
+  display: block;
+  margin-top: var(--space-1);
+}

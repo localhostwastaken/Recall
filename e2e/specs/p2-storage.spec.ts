@@ -16,11 +16,12 @@ import { LOCAL, POSTAGE_STAMP, batchTtlSeconds, costFor } from '../../packages/n
 import { ceilSig, formatBzzCeil } from '../../apps/web/src/format';
 import { BEE_COMPOSE_FAUCET_KEY } from '../fixtures/keys';
 import { installMockWallet } from '../fixtures/mockWallet';
+import { launchWithExtension } from '../fixtures/extension';
 
 // The web app (apps/web) on :5173 buys Swarm storage with the mock wallet on the local
-// Gnosis fork. There is no real extension here: the owner is typed in, or (in one test) a
-// stand-in answers the two messages the page sends. The hand-off to the real extension's
-// pool is covered later, in the extension API spec (Task 11).
+// Gnosis fork. Most tests have no real extension: the owner is typed in, or a stand-in
+// answers the two messages the page sends. The last test hands the batches to the real
+// extension's pool (R25).
 
 const APP = 'http://localhost:5173';
 // The full Chromium (new headless mode) is the browser installed for the extension specs too.
@@ -401,4 +402,53 @@ test('@p2 mock wallet answers EIP-1193 requests, signs with its key and rejects 
   expect(await call('personal_sign', [message, wallet.address])).toEqual({ ok: sig.ok });
   expect(await call('personal_sign', [message, wallet.address])).toEqual({ code: 4001 });
   expect(await call('personal_sign', [message, wallet.address])).toEqual({ ok: sig.ok });
+});
+
+test('@p2 storage hands the bought batches to the real extension pool', async () => {
+  test.setTimeout(300_000);
+  const ext = await launchWithExtension({ dev: true });
+  try {
+    const page = await ext.context.newPage();
+    await wallet(page, 100);
+    // The app finds the extension by its ID (Settings, saved in this browser only).
+    await page.addInitScript((id) => {
+      localStorage.setItem('recall.web.settings.v1', JSON.stringify({ extensionId: id, theme: 'system' }));
+    }, ext.extensionId);
+    await page.goto(`${APP}/#/storage`);
+
+    // The owner is the extension's stamp key, as the extension itself reports it.
+    const stamp = (await page.evaluate(
+      (id) =>
+        new Promise((resolve) =>
+          (window as unknown as { chrome: { runtime: { sendMessage: Function } } }).chrome.runtime.sendMessage(
+            id,
+            { type: 'recall.getStampAddress' },
+            (r: { address: string }) => resolve(r.address),
+          ),
+        ),
+      ext.extensionId,
+    )) as Address;
+    expect(stamp).toMatch(/^0x[0-9a-fA-F]{40}$/);
+    await expect(page.locator('.owner-row')).toContainText('Owner (extension):');
+    await expect(page.locator('.owner-row .mono-value')).toHaveAttribute('title', stamp);
+
+    await page.getByLabel('Number of batches').fill('1');
+    await page.getByRole('button', { name: 'Buy 1 batch' }).click();
+    await expect(page.getByText('You can make 1 more capture.')).toBeVisible({ timeout: 240_000 });
+
+    const ids = (await page.locator('li[data-batch-id]').evaluateAll((els) => els.map((e) => e.getAttribute('data-batch-id')))) as Hex[];
+    expect(ids).toHaveLength(1);
+    expect(await pub.readContract({ address: POSTAGE_STAMP, abi: postageAbi, functionName: 'batchOwner', args: [ids[0]] })).toBe(stamp);
+
+    // The extension's pool now holds exactly that batch, unused.
+    const sw = ext.context.serviceWorkers().filter((w) => w.url().includes(ext.extensionId)).pop() ?? ext.serviceWorker;
+    const pool = (await sw.evaluate(async () => {
+      const local = (globalThis as unknown as { chrome: { storage: { local: { get(k: string): Promise<Record<string, unknown>> } } } })
+        .chrome.storage.local;
+      return (await local.get('recall.pool'))['recall.pool'];
+    })) as { batchId: string; used: boolean }[];
+    expect(pool.map((b) => [b.batchId, b.used])).toEqual([[ids[0].toLowerCase(), false]]);
+  } finally {
+    await ext.context.close();
+  }
 });

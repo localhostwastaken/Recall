@@ -194,4 +194,17 @@ describe('failure classification', () => {
       'too_large',
     );
   });
+
+  it("maps tlsn's receive-limit overflow to too large (no pre-check without host access)", () => {
+    // Seen when the page is over the cap and the pre-check could not read it.
+    const raw =
+      'Verification failed: Run failed: internal error: mpc-tls execution failed caused by: I/O error: ' +
+      'unexpected end of file (Protocol: internal error caused by: backend error: internal error: ' +
+      '"record layer error: attempted to receive more data than was configured, increase `max_recv` ' +
+      'in the config: current=65552, additional=16384, max=65568")';
+    expect(classifyFailure(new Error(raw), null)).toEqual({
+      error: 'page too large (over 64 KB)',
+      code: 'too_large',
+    });
+  });
 });

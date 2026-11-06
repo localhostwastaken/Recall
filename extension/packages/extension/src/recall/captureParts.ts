@@ -27,6 +27,8 @@ export type CaptureOverrides = {
   recvRevealEnd?: number;
   commit?: boolean;
   hostHeader?: string;
+  /** Flips one received byte after signing, so check A fails (tests the upload gate). */
+  tamperEvidence?: boolean;
 };
 
 export type CaptureErrorCode =
@@ -273,7 +275,12 @@ export function classifyFailure(err: unknown, witnessError: string | null): Capt
   if (/WebSocket connection failed|closed the session before registering/i.test(raw)) {
     return { error: 'the witness is offline or unreachable', code: 'witness_offline' };
   }
-  if (/max_recv_data|exceeds? (the )?max|too much data|recv data limit/i.test(raw)) {
+  // tlsn-wasm: "attempted to receive more data than was configured, increase `max_recv`".
+  if (
+    /max_recv_data|max_recv\b|more data than was configured|exceeds? (the )?max|too much data|recv data limit/i.test(
+      raw,
+    )
+  ) {
     return { error: 'page too large (over 64 KB)', code: 'too_large' };
   }
   if (/protocol ?version|PeerIncompatible|handshake ?failure|unsupported.*tls/i.test(raw)) {
