@@ -1,11 +1,12 @@
 import { execFile } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { expect, test } from '@playwright/test';
 import { privateKeyToAccount } from 'viem/accounts';
+import { Bee, MantarayNode, feedOwnerOf, feedTopic } from '../../packages/net/src/hosting';
 import { LOCAL } from '../../packages/net/src/index';
 import { BEE_COMPOSE_FAUCET_KEY } from '../fixtures/keys';
 
@@ -67,6 +68,10 @@ test('@p5 local swarm hosting', async ({ page }) => {
   await page.getByRole('link', { name: 'Home' }).click();
   await expect(page.getByText('Prove what a web page said, even after it changes.')).toBeVisible();
   expect(new URL(page.url()).pathname).toBe(`/bzz/${ref}/`);
+
+  // The manifest's error document is the index document: an unknown path serves the app too.
+  const unknown = await fetch(`${url}no/such/page`);
+  expect(Buffer.from(await unknown.arrayBuffer()).equals(readFileSync(join(ROOT, 'apps/web/dist/index.html')))).toBe(true);
 
   // The bare /bzz/<ref> (no trailing slash) lands on the same app.
   await page.goto(`${BEE}/bzz/${ref}`);
@@ -143,6 +148,25 @@ test('@p5 local swarm feed', async () => {
     // A file below the root of the site, through the feed.
     expect((await served(feedRef!, 'assets/app.js')).bytes.equals(big)).toBe(true);
 
+    // Interoperability with bee-js itself. (1) The feed manifest is byte for byte what bee-js
+    // createFeedManifest stores (same reference). (2) bee-js resolves OUR feed manifest to the
+    // site, with its own manifest + feed reader. (3) Its feed reader reads our update.
+    const bee = new Bee(BEE);
+    const { owner: feedOwnerAddr } = feedOwnerOf(BEE_COMPOSE_FAUCET_KEY);
+    const topicValue = feedTopic(topic);
+    const stamps = ((await (await fetch(`${BEE}/stamps`)).json()) as { stamps: { batchID: string; usable: boolean }[] }).stamps;
+    const nodeBatch = stamps.find((st) => st.usable)!.batchID;
+    expect((await bee.feed.createManifest(nodeBatch, topicValue, feedOwnerAddr)).toHex()).toBe(feedRef);
+    const manifest = await MantarayNode.unmarshal(bee, feedRef!);
+    await manifest.loadRecursively(bee);
+    const resolved = await manifest.resolveFeed(bee);
+    // Bee 2.x serves the feed's target content from GET /feeds, so the payload bee-js gets is the
+    // site's root manifest chunk (the same bytes /bytes/<site reference> returns).
+    const siteRoot = Buffer.from(await (await fetch(`${BEE}/bytes/${siteOne}`)).arrayBuffer());
+    expect(Buffer.from(resolved.getOrThrow().payload.toUint8Array()).equals(siteRoot)).toBe(true);
+    const read = await bee.feed.makeReader(topicValue, feedOwnerAddr).downloadReference();
+    expect(read.reference.toHex()).toBe(siteOne);
+
     // Publish a new version: same feed manifest, the next index, the new content.
     writeFileSync(join(dir, 'index.html'), page('two'));
     const second = (await publish(args, env)).stdout;
@@ -153,6 +177,16 @@ test('@p5 local swarm feed', async () => {
     await servesEventually(feedRef!, page('two'));
     // The first version is still there by its own reference.
     expect((await served(siteOne!)).bytes.toString()).toBe(page('one'));
+
+    // A resume on the same (already used) batch: the site manifest is deterministic, so the same
+    // directory gives the same site reference, and the feed takes the next index.
+    const batchId = /^batch: (0x[0-9a-f]{64})/m.exec(second)?.[1];
+    expect(batchId, second).toBeDefined();
+    const third = (await publish(['--net', 'local', '--bee', BEE, '--batch', batchId!, '--no-wait', '--dir', dir, '--feed', '--feed-topic', topic], env)).stdout;
+    expect(/^bzz reference: ([0-9a-f]{64})$/m.exec(third)?.[1]).toBe(siteTwo);
+    expect(/^feed manifest reference: ([0-9a-f]{64})$/m.exec(third)?.[1]).toBe(feedRef);
+    expect(third).toContain('feed update: index 2');
+    await servesEventually(feedRef!, page('two'));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -173,4 +207,23 @@ test('@p5 live publish without --yes stops before building', async () => {
   expect(err!.stderr).toContain('--yes');
   expect(err!.stdout ?? '').not.toContain('Building apps/web');
   expect(err!.stdout ?? '').not.toContain('Batch 0x');
+});
+
+// The spend caps refuse before the build and before any transaction (local fork, no real funds).
+test('@p5 live publish spend caps', async () => {
+  const live = ['--net', 'live', '--gnosis-rpc', LOCAL.gnosis.rpcUrl, '--bee', BEE, '--yes'];
+  const env = { TREASURY_PRIVATE_KEY: BEE_COMPOSE_FAUCET_KEY };
+  const fails = async (extra: string[]) => {
+    const e = await publish([...live, ...extra], env).then(
+      () => undefined,
+      (x: { stdout?: string; stderr?: string }) => x,
+    );
+    expect(e, `${extra.join(' ')} must fail`).toBeDefined();
+    expect(e!.stdout ?? '').not.toContain('Building apps/web');
+    expect(e!.stdout ?? '').not.toContain('Batch 0x');
+    return e!.stderr ?? '';
+  };
+  expect(await fails(['--days', '91'])).toContain('at most 90');
+  expect(await fails(['--max-xbzz', '0.000001'])).toContain('--max-xbzz');
+  expect(await fails(['--max-xbzz', 'lots'])).toContain('--max-xbzz');
 });

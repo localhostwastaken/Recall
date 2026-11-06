@@ -9,6 +9,7 @@
     "devnet:down": "bash devnet/down.sh",
     "test": "vitest run",
     "witness:keygen": "tsx scripts/gen-witness-key.ts",
+    "feed:keygen": "tsx scripts/gen-feed-key.ts",
     "witness:announce": "tsx scripts/announce-witness.ts",
     "fund": "tsx scripts/fund.ts",
     "test:e2e": "playwright test -c e2e --project=local",

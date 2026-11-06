@@ -12,7 +12,8 @@ export default defineConfig(({ command, mode }) => {
   // so visitors need no key of their own (Settings can override it). It is read from the build
   // environment only: ARKIV_ACCESS_KEY in the process env (a CI secret) or in the git-ignored
   // repo-root .env.local. It is injected into the bundle here and written to no file of the repo.
-  const env = loadEnv(mode, REPO_ROOT, '');
+  // Only these prefixes are read, so no wallet key from .env.local ever enters this process's config.
+  const env = loadEnv(mode, REPO_ROOT, ['VITE_', 'ARKIV_ACCESS_KEY']);
   const live = (env.VITE_RECALL_NET ?? '') !== 'local';
   const arkivKey = command === 'build' && live ? (env.ARKIV_ACCESS_KEY ?? '').trim() : '';
   return {

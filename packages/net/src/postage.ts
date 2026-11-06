@@ -58,24 +58,46 @@ function requireAccount(wallet: WalletClient) {
   return { account: wallet.account, chain: wallet.chain };
 }
 
+/** How far above the quoted total a re-quote may be before `buyBatch` refuses to pay (percent). */
+export const QUOTE_TOLERANCE_PERCENT = 10n;
+
 /**
  * Pays for and creates an immutable batch whose stamps are signed by `owner`
  * (the stamp key), paid by the wallet's account. Depth 17 is the capture
  * default; 18 is for the app-hosting batch.
+ *
+ * `quotedTotal` (xBZZ, 16 decimals) is what the person was shown: the price is read again here,
+ * and when it is more than QUOTE_TOLERANCE_PERCENT above the quote nothing is sent. The hooks
+ * fire as soon as each transaction has a hash, BEFORE its receipt is awaited, so a caller can
+ * record the hash even if the wait fails: `onApproveSent` for the xBZZ approval, `onSent` for the
+ * createBatch transaction (the money has moved once it is mined).
  */
 export async function buyBatch(
   wallet: WalletClient,
-  opts: { owner: Address; depth?: 17 | 18; days: number },
+  opts: {
+    owner: Address;
+    depth?: 17 | 18;
+    days: number;
+    quotedTotal?: bigint;
+    onApproveSent?: (hash: Hex) => void;
+    onSent?: (txHash: Hex) => void;
+  },
 ): Promise<{ batchId: Hex; txHash: Hex }> {
   const { account, chain } = requireAccount(wallet);
   const depth = opts.depth ?? 17;
   const pub = publicFrom(wallet);
   const perChunk = (await perChunkFor(pub, opts.days)) + 1n;
   const total = perChunk * 2n ** BigInt(depth);
+  if (opts.quotedTotal !== undefined && total * 100n > opts.quotedTotal * (100n + QUOTE_TOLERANCE_PERCENT)) {
+    throw new Error(
+      `the batch price rose to ${total} (16 decimals) from the quoted ${opts.quotedTotal}, more than ${QUOTE_TOLERANCE_PERCENT}%: nothing was sent`,
+    );
+  }
 
   const approveHash = await wallet.writeContract({
     account, chain, address: XBZZ, abi: erc20Abi, functionName: 'approve', args: [POSTAGE_STAMP, total],
   });
+  opts.onApproveSent?.(approveHash);
   await pub.waitForTransactionReceipt({ hash: approveHash });
 
   // A fresh random nonce makes the batch id unique per call.
@@ -84,6 +106,7 @@ export async function buyBatch(
     account, chain, address: POSTAGE_STAMP, abi: postageAbi, functionName: 'createBatch',
     args: [opts.owner, perChunk, depth, BUCKET_DEPTH, nonce, true],
   });
+  opts.onSent?.(txHash);
   const receipt = await pub.waitForTransactionReceipt({ hash: txHash });
   if (receipt.status !== 'success') throw new Error('createBatch reverted');
   for (const log of receipt.logs) {
