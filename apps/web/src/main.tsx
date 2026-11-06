@@ -1,12 +1,14 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
-import { applyTheme, getSettings } from './settings';
+import { applyTheme } from './settings';
+import './ui/fonts.css';
 import './ui/tokens.css';
 import './ui/base.css';
 import './ui/web.css';
+import './ui/product.css';
 
-applyTheme(getSettings().theme);
+applyTheme();
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

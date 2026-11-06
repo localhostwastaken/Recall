@@ -7,7 +7,7 @@ export function middle(value: string, head = 6, tail = 4): string {
 }
 
 /** Hashes and addresses. `copy` adds a Copy button that confirms with the "Copied" toast. */
-export function MonoValue({ value, copy = true }: { value: string; copy?: boolean }) {
+export function MonoValue({ value, copy = true, full = false }: { value: string; copy?: boolean; full?: boolean }) {
   const toast = useToast();
   const onCopy = async () => {
     try {
@@ -18,9 +18,9 @@ export function MonoValue({ value, copy = true }: { value: string; copy?: boolea
     }
   };
   return (
-    <span className="mono-value-wrap">
+    <span className={`mono-value-wrap${full ? ' mono-value-full' : ''}`}>
       <span className="mono mono-value" title={value} aria-label={value}>
-        {middle(value)}
+        {full ? value : middle(value)}
       </span>
       {copy ? (
         <button type="button" className="icon-btn" aria-label={`Copy ${value}`} onClick={onCopy}>

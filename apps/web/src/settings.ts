@@ -1,4 +1,4 @@
-export type Theme = 'system' | 'light' | 'dark';
+export type Theme = 'light';
 export type Settings = { extensionId: string; theme: Theme };
 
 // "Saved in this browser only." Reads and writes never throw: storage can be blocked.
@@ -6,7 +6,7 @@ const KEY = 'recall.web.settings.v1';
 
 const DEFAULTS: Settings = {
   extensionId: import.meta.env.VITE_RECALL_EXTENSION_ID ?? '',
-  theme: 'system',
+  theme: 'light',
 };
 
 export function getSettings(): Settings {
@@ -16,7 +16,8 @@ export function getSettings(): Settings {
       const p = JSON.parse(raw) as Partial<Settings>;
       return {
         extensionId: typeof p.extensionId === 'string' ? p.extensionId : DEFAULTS.extensionId,
-        theme: p.theme === 'light' || p.theme === 'dark' ? p.theme : 'system',
+        // Legacy dark/system preferences must not override the light-only product.
+        theme: 'light',
       };
     }
   } catch {
@@ -35,9 +36,7 @@ export function saveSettings(patch: Partial<Settings>): Settings {
   return next;
 }
 
-/** `data-theme` on <html>; "system" removes it so the media query decides. */
-export function applyTheme(theme: Theme): void {
-  const root = document.documentElement;
-  if (theme === 'system') root.removeAttribute('data-theme');
-  else root.setAttribute('data-theme', theme);
+/** Keep native controls and old persisted preferences on the product's light theme. */
+export function applyTheme(): void {
+  document.documentElement.setAttribute('data-theme', 'light');
 }

@@ -1,12 +1,14 @@
-import { CircleCheck, CircleDashed, CircleX, LoaderCircle, TriangleAlert, type LucideIcon } from 'lucide-react';
+import { CircleCheck, CircleDashed, CircleHelp, CircleMinus, CircleX, LoaderCircle, TriangleAlert, type LucideIcon } from 'lucide-react';
 
-export type Status = 'pass' | 'fail' | 'warn' | 'unavailable' | 'pending';
+export type Status = 'pass' | 'fail' | 'warn' | 'unknown' | 'unavailable' | 'not-applicable' | 'pending';
 
 const ICONS: Record<Status, LucideIcon> = {
   pass: CircleCheck,
   fail: CircleX,
   warn: TriangleAlert,
+  unknown: CircleHelp,
   unavailable: CircleDashed,
+  'not-applicable': CircleMinus,
   pending: LoaderCircle,
 };
 
@@ -15,7 +17,9 @@ export const STATUS_WORD: Record<Status, string> = {
   pass: 'Passed',
   fail: 'Failed',
   warn: 'Warning',
-  unavailable: 'Not checked',
+  unknown: 'Unknown',
+  unavailable: 'Unavailable',
+  'not-applicable': 'Not applicable',
   pending: 'Checking…',
 };
 

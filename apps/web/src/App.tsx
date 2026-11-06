@@ -1,12 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { WalletChip } from './components/WalletChip';
 import { useRoute, type Route } from './router';
 import { Home } from './routes/Home';
 import { Landing } from './routes/Landing';
 import { Settings } from './routes/Settings';
 import { Storage } from './routes/Storage';
-import { applyTheme, getSettings, saveSettings, type Theme } from './settings';
 import { ToastProvider } from './ui/Toast';
+import { ArchiveMark } from './ui/ArchiveMark';
 
 function NotFound({ path }: { path: string }) {
   return (
@@ -34,41 +34,16 @@ function Page({ route }: { route: Route }) {
   }
 }
 
-function ThemeMenu() {
-  const [theme, setTheme] = useState<Theme>(() => getSettings().theme);
-  return (
-    <label className="theme-menu">
-      <span className="visually-hidden">Theme</span>
-      <select
-        className="input input-compact"
-        value={theme}
-        onChange={(e) => {
-          const next = e.target.value as Theme;
-          setTheme(next);
-          saveSettings({ theme: next });
-          applyTheme(next);
-        }}
-      >
-        <option value="system">System</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
-      </select>
-    </label>
-  );
-}
-
 export function App() {
   const route = useRoute();
   const isLanding = route.name === 'home';
   const main = useRef<HTMLElement>(null);
-  const first = useRef(true);
+  const previousRoute = useRef(route.name);
 
   // On each route change focus moves to the page's h1 (not on first load).
   useEffect(() => {
-    if (first.current) {
-      first.current = false;
-      return;
-    }
+    if (previousRoute.current === route.name) return;
+    previousRoute.current = route.name;
     document.querySelector<HTMLElement>('main h1')?.focus({ preventScroll: true });
     window.scrollTo(0, 0);
   }, [route.name]);
@@ -92,31 +67,47 @@ export function App() {
       >
         Skip to content
       </a>
-      <header className={`site-header${isLanding ? ' landing-header' : ''}`}>
+      <header className="site-header">
         <div className="container header-row">
-          <a className="brand" href="#/">
-            {isLanding && <span className="recall-brand-mark" aria-hidden="true">R</span>}
-            Recall
-          </a>
-          {isLanding ? <nav className="landing-nav" aria-label="Main"><button type="button" onClick={() => { const story = document.getElementById('deadline-story'); story?.scrollIntoView({ behavior: 'auto' }); document.getElementById('story-title')?.focus({ preventScroll: true }); }}>See the example</button><a href="#/reader">Open reader</a></nav> : <>
-          <nav aria-label="Main" className="nav">
-            {link('#/reader', 'reader', 'Find captures')}
-            {link('#/settings', 'settings', 'Settings')}
+          <a className="brand" href="#/" aria-label="Recall home"><ArchiveMark /><span>Recall<span className="brand-caption">The living archive</span></span></a>
+          <nav aria-label="Main" className="nav product-nav">
+            {isLanding ? <>
+              <button className="nav-story" type="button" onClick={() => {
+                document.getElementById('date-story')?.scrollIntoView({ behavior: 'auto' });
+                document.getElementById('story-title')?.focus({ preventScroll: true });
+              }}>See how it works</button>
+              <a className="btn btn-primary" href="#/reader">Open reader</a>
+            </> : <>
+              {link('#/reader', 'reader', 'Reader')}
+              {link('#/settings', 'settings', 'Settings')}
+              <details key={route.name} className="product-tools" onKeyDown={event => {
+                if (event.key === 'Escape') {
+                  event.currentTarget.open = false;
+                  event.currentTarget.querySelector('summary')?.focus();
+                  event.preventDefault();
+                }
+              }} onBlur={event => {
+                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) event.currentTarget.open = false;
+              }}>
+                <summary>Tools</summary>
+                <div className="tools-panel">
+                  <h2>Reader tools</h2>
+                  <a href="#/storage">Buy storage</a>
+                  <div className="wallet-tools"><p className="field-helper">A wallet is only needed for paid storage.</p><WalletChip /></div>
+                </div>
+              </details>
+            </>}
           </nav>
-          <div className="header-tools">
-            <WalletChip />
-            <ThemeMenu />
-          </div>
-          </>}
         </div>
       </header>
       <main id="main" ref={main} tabIndex={-1} className={`container page${isLanding ? ' landing-page' : ''}`}>
         <Page route={route} />
       </main>
-      <footer className={isLanding ? 'landing-footer' : 'site-footer'}>
-        <div className="container">
-          <p className={isLanding ? undefined : 'muted'}>Evidence checks run in your browser. Arkiv uses a test network. Source authenticity depends on the witness.</p>
-          {isLanding && <a href="#/reader">Recall / Reader</a>}
+      <footer className="site-footer">
+        <div className="container footer-row">
+          <a className="footer-brand" href="#/">Recall</a>
+          <p>Inspect the record. Understand its limits.<br /><span>Evidence checks run in your browser. Source claims depend on the witness.</span></p>
+          <a href={isLanding ? '#/reader' : '#/'}>{isLanding ? 'Open reader' : 'About Recall'}</a>
         </div>
       </footer>
     </ToastProvider>
