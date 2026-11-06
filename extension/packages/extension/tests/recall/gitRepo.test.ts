@@ -139,6 +139,7 @@ describe('repoSnapshot (offscreen)', () => {
     const [url, init] = (f as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0]!;
     expect(url).toBe(`https://codeload.github.com/o/r/tar.gz/${'c'.repeat(40)}`);
     expect(init.credentials).toBe('omit');
+    expect(init.redirect).toBe('error');
   });
 
   it('keeps nothing when the tree differs', async () => {

@@ -63,7 +63,8 @@ export async function repoSnapshot(
       credentials: 'omit',
       cache: 'no-store',
       referrerPolicy: 'no-referrer',
-      redirect: 'follow',
+      // codeload answers the tarball itself; a redirect is refused, never followed elsewhere.
+      redirect: 'error',
       signal: ctl.signal,
     });
     if (res.url && new URL(res.url).hostname !== GITHUB_HOSTS.codeload) {
