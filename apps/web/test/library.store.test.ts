@@ -181,6 +181,38 @@ describe('library store', () => {
     now.mockRestore();
   });
 
+  it('a newer record with bad evidence cannot hide a page: the next newest is checked instead', async () => {
+    const real = { ...cap(1), expiresAtBlock: 43_200n * 20n };
+    const bogus = { ...cap(1), entityKey: k(77), signedAt: 999n, evidenceRef: k(778) };
+    const check = vi.fn(async (row: ListedCapture): Promise<Checked> =>
+      row.entityKey === k(77) ? { state: 'unverified', reason: 'x', status: 'fail' } : verified('Real', 'https://site1.example/p'),
+    );
+    const store = createLibraryStore(deps({ check, load: async () => ({ captures: [real, bogus], attachments: [], truncated: false, timing: { currentBlock: 0n, blockSeconds: 2 } }) }));
+    store.subscribe(() => undefined);
+    await flush();
+    expect(store.getSnapshot().entries[0]!.newest.entityKey).toBe(k(77));
+    store.requestCheck(uh(1));
+    for (let i = 0; i < 6; i++) await flush();
+    const s = store.getSnapshot();
+    expect(check).toHaveBeenCalledTimes(2);
+    expect(s.check.get(uh(1))).toBe('verified');
+    expect(s.entries[0]!.newest.entityKey).toBe(k(1));
+    expect(s.entries[0]!.versions).toBe(2);
+    expect(s.days.get(uh(1))).toBe(20);
+  });
+
+  it('gives up after three failed records of one page', async () => {
+    const rows = [1, 2, 3, 4, 5].map((n) => ({ ...cap(1), entityKey: k(n), signedAt: BigInt(n) }));
+    const check = vi.fn(async (): Promise<Checked> => ({ state: 'unverified', reason: 'x', status: 'fail' }));
+    const store = createLibraryStore(deps({ check, load: async () => ({ captures: rows, attachments: [], truncated: false, timing: null }) }));
+    store.subscribe(() => undefined);
+    await flush();
+    store.requestCheck(uh(1));
+    for (let i = 0; i < 10; i++) await flush();
+    expect(check).toHaveBeenCalledTimes(3);
+    expect(store.getSnapshot().check.get(uh(1))).toBe('unverified');
+  });
+
   it('refreshDays re-reads the newest record and updates its days', async () => {
     const store = createLibraryStore(deps());
     store.subscribe(() => undefined);

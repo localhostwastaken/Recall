@@ -22,7 +22,10 @@ export type PageEntry = {
   /** owner/repo, once the newest capture verified as a GitHub branch. */
   repo?: string;
   versions: number;
+  /** The record the card stands for: the newest claimed, or the newest one that passed when that failed. */
   newest: ListedCapture;
+  /** The page's other records, newest first (tried in turn when the newest fails its check). */
+  older?: ListedCapture[];
   signedAt: bigint;
 };
 
@@ -111,6 +114,7 @@ export function groupByPage(rows: readonly ListedCapture[], attachments: readonl
       kind: p.repo ? 'repo' : 'page',
       versions: p.rows.length,
       newest: p.newest,
+      older: p.rows.filter((r) => r !== p.newest).sort((a, b) => (newer(a, b) ? -1 : 1)),
       signedAt: p.newest.signedAt,
     }),
   );

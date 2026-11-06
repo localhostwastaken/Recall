@@ -52,6 +52,12 @@ export type LibraryDeps = {
   readExpiry(entityKey: Hex): Promise<{ expiresAtBlock: bigint } & Timing>;
 };
 
+/**
+ * Records of one page checked at most, newest first. Anyone can write a newer record with bad
+ * evidence; trying the next ones keeps such a record from hiding a real page.
+ */
+const MAX_TRIES = 3;
+
 /** Arkiv gets this long to list the library before the page says it could not be read. */
 const LOAD_MS = 30_000;
 /** A library read older than this is refreshed (quietly) when the library is opened again. */
@@ -96,6 +102,9 @@ export function createLibraryStore(deps: LibraryDeps) {
   const started = new Map<Hex, string>();
   /** urlHash -> what the verified evidence says (address, repo), shown instead of the row's claims. */
   const proven = new Map<Hex, { address: string; repo?: string }>();
+  /** urlHash -> how many of its records failed their check in this read. */
+  const tries = new Map<Hex, number>();
+  let timing: Timing | null = null;
   const listeners = new Set<() => void>();
 
   const set = (patch: Partial<LibraryState>) => {
@@ -117,11 +126,13 @@ export function createLibraryStore(deps: LibraryDeps) {
       queue.cancelAll();
       started.clear();
       proven.clear();
+      tries.clear();
       set({ ...EMPTY });
     }
     withTimeout(deps.load(), LOAD_MS)
-      .then(({ captures, attachments, truncated, timing }) => {
+      .then(({ captures, attachments, truncated, timing: read }) => {
         if (gen !== generation) return;
+        timing = read;
         loadedAt = Date.now();
         const entries = groupByPage(captures, attachments);
         const days = new Map<Hex, number | null>();
@@ -137,6 +148,7 @@ export function createLibraryStore(deps: LibraryDeps) {
           if (started.get(e.urlHash) !== rowFingerprint(e.newest)) {
             started.delete(e.urlHash);
             proven.delete(e.urlHash);
+            tries.delete(e.urlHash);
             continue;
           }
           const c = state.check.get(e.urlHash);
@@ -171,6 +183,22 @@ export function createLibraryStore(deps: LibraryDeps) {
       .then((result) => {
         if (started.get(urlHash) !== key || signal.aborted) return;
         if (result.state !== 'verified') {
+          const now = state.entries.find((e) => e.urlHash === urlHash);
+          const next = now?.older?.[0];
+          const n = (tries.get(urlHash) ?? 0) + 1;
+          tries.set(urlHash, n);
+          if (now && next && n < MAX_TRIES) {
+            // Try the page's next newest record instead (the card stays "Checking…").
+            started.delete(urlHash);
+            const moved: PageEntry = { ...now, newest: next, older: now.older!.slice(1), signedAt: next.signedAt };
+            state = {
+              ...state,
+              entries: state.entries.map((e) => (e.urlHash === urlHash ? moved : e)),
+              days: update(state.days, urlHash, timing ? daysLeft(next.expiresAtBlock, timing.currentBlock, timing.blockSeconds) : null),
+            };
+            requestCheck(urlHash);
+            return;
+          }
           set({ check: update(state.check, urlHash, 'unverified') });
           return;
         }
