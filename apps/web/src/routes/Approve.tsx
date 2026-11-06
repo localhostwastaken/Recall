@@ -1351,8 +1351,9 @@ export function Approve({ captureId }: { captureId: string | null }) {
       {load.repo ? (
         <section className="approve-repo" aria-labelledby="repo-title" data-checked={load.stored?.code ? 'true' : 'false'}>
           <h2 id="repo-title" className="section-title">
-            Repository {load.repo.branch.owner}/{load.repo.branch.repo} @ <CommitId sha={load.repo.branch.commitSha} />: the code matches the
-            commit GitHub reported
+            Repository {load.repo.branch.owner}/{load.repo.branch.repo} @ <CommitId sha={load.repo.branch.commitSha} />
+            {/* Claimed only once this browser has checked the uploaded code. */}
+            {load.stored?.code ? ': the code matches the commit GitHub reported' : null}
           </h2>
           <p>
             Recall notarized GitHub&apos;s answer for branch <span className="mono">{load.repo.branch.branch}</span>. The code is that

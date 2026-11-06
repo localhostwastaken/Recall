@@ -73,7 +73,8 @@ function SnapshotCard({ branch, item, index }: { branch: GitHubBranch; item: Rep
         <StatusBadge status={badge.status} label={badge.label} />
       </div>
       <p className="repo-snapshot-copy">
-        Recall notarized GitHub&apos;s answer for this branch. This code is exactly the commit it named.
+        Recall notarized GitHub&apos;s answer for this branch.
+        {state.phase === 'ok' ? ' This code is exactly the commit it named.' : null}
       </p>
       <dl className="exhibit-list">
         <Row label="Repository">
