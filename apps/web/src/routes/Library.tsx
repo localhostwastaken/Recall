@@ -3,7 +3,7 @@ import { useCallback, useEffect, useId, useRef, useState, type MouseEvent, type 
 import type { Hex } from 'viem';
 import { Duo } from '../brand/Duo';
 import { CaptureCard, type CardStatus } from '../components/CaptureCard';
-import { filterSort, type PageEntry } from '../library/model';
+import { filterSort, shortAddress, type PageEntry } from '../library/model';
 import { LibraryKeepAlive, useKeepAliveLibrary } from '../library/LibraryKeepAlive';
 import { useLibrary, type LibraryData } from '../library/useLibrary';
 import { libraryHash, type LibrarySort, type LibraryType, type LibraryView } from '../router';
@@ -102,15 +102,16 @@ export function LibraryCardItem({
   const hintId = useId();
   const status = cardStatus(lib, entry.urlHash);
   const verified = status === 'verified';
-  // Until verified the title is the claimed host (the address line has host + path); the date is
-  // shown once the check proved the record's time.
-  const title = (verified && lib.titles.get(entry.urlHash)) || entry.address.split('/')[0] || entry.address;
+  // Until verified the title names only the host (the address line has path and query); then the
+  // page's own <title>. The date is shown once the check proved the record's time.
+  const host = shortAddress(entry.address.split('/')[0] || entry.address, 60);
+  const title = (verified && lib.titles.get(entry.urlHash)) || `Capture of ${host}`;
   const date = verified ? new Date(Number(entry.signedAt) * 1000) : undefined;
   return (
     <li ref={observe} data-url-hash={entry.urlHash} data-flip-id={entry.urlHash} className="lib-cell">
       <CaptureCard
         title={title}
-        address={entry.address}
+        address={shortAddress(entry.address)}
         href={`#/c/${entry.newest.entityKey}`}
         status={status}
         rank={rank}

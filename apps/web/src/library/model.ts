@@ -42,6 +42,21 @@ export function hostPath(canonicalUrl: string, fallback: string): string {
   return out.length > MAX_ADDRESS ? `${out.slice(0, MAX_ADDRESS - 1)}…` : out;
 }
 
+/**
+ * An address short enough for one card line that still tells pages apart: the host stays whole
+ * and the middle of the path goes, so the end (often the only difference, e.g. `?run=…`) shows.
+ */
+export function shortAddress(address: string, max = 36): string {
+  if (address.length <= max) return address;
+  const slash = address.indexOf('/');
+  const host = slash < 0 ? address : address.slice(0, slash);
+  if (slash < 0 || host.length > max - 12) {
+    const head = Math.ceil((max - 1) / 2);
+    return `${address.slice(0, head)}…${address.slice(address.length - (max - 1 - head))}`;
+  }
+  return `${host}/…${address.slice(address.length - (max - host.length - 2))}`;
+}
+
 const lower = (h: string) => h.toLowerCase();
 const newer = (a: ListedCapture, b: ListedCapture): boolean =>
   a.signedAt !== b.signedAt ? a.signedAt > b.signedAt : BigInt(a.entityKey) > BigInt(b.entityKey);

@@ -328,3 +328,14 @@
 .lib-error-detail > summary {
   padding: var(--space-2) 0;
 }
+
+/* The selected filter is a state, not an action: neutral ink, never orange (spec 4.2). */
+.lib-type .segmented-option:has(input:checked) {
+  background: var(--text);
+  color: var(--bg);
+}
+
+/* A long host in a title wraps instead of being clipped (the address line stays one line). */
+.lib-cell .ccard-title {
+  overflow-wrap: anywhere;
+}

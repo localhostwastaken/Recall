@@ -137,8 +137,11 @@ function setReducedMotion(reduce: boolean) {
 }
 
 const order = (el: HTMLElement) => [...el.querySelectorAll('.ccard-link')].map((a) => a.textContent);
+// A card is found by its title or its address line (a card without a page title is "Capture of <host>").
 const cardOf = (el: HTMLElement, name: string) =>
-  [...el.querySelectorAll<HTMLElement>('.ccard')].find((c) => c.querySelector('.ccard-link')?.textContent?.startsWith(name))!;
+  [...el.querySelectorAll<HTMLElement>('.ccard')].find((c) =>
+    ['.ccard-link', '.ccard-addr'].some((sel) => c.querySelector(sel)?.textContent?.startsWith(name)),
+  )!;
 const rankOf = (el: HTMLElement, name: string) => cardOf(el, name).querySelector('.ccard-rank')?.textContent;
 const daysOf = (el: HTMLElement, name: string) => cardOf(el, name).querySelector<HTMLElement>('.ccard-days')!;
 
@@ -351,12 +354,12 @@ describe('the library page wires keep-alive to its grid', () => {
     root = createRoot(host);
     act(() => root!.render(<Library />));
     const grid = host.querySelector<HTMLElement>('[data-library-grid]')!;
-    expect(order(grid)).toEqual(['a.example/notice', 'c.example/notice', 'b.example/notice']);
+    expect(order(grid)).toEqual(['Capture of a.example', 'Capture of c.example', 'Capture of b.example']);
 
     await keepAlive(grid, 'b');
 
     expect(store.refreshDays).toHaveBeenCalledWith(B.urlHash);
-    expect(order(grid)).toEqual(['a.example/notice', 'b.example/notice', 'c.example/notice']);
+    expect(order(grid)).toEqual(['Capture of a.example', 'Capture of b.example', 'Capture of c.example']);
     expect(rankOf(grid, 'b')).toBe('#2');
     expect(fromSpy).toHaveBeenCalledTimes(1);
   });

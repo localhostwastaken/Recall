@@ -2,7 +2,7 @@ import { canonicalPageUrl, urlHash as hashUrl } from '@recall/evidence';
 import type { ListedAttachment, ListedCapture } from '@recall/net';
 import type { Address, Hex } from 'viem';
 import { describe, expect, it } from 'vitest';
-import { daysLeft, filterSort, groupByPage, type PageEntry } from '../src/library/model';
+import { daysLeft, filterSort, groupByPage, shortAddress, type PageEntry } from '../src/library/model';
 
 const k = (n: number): Hex => `0x${n.toString(16).padStart(64, '0')}` as Hex;
 const A = '0x1111111111111111111111111111111111111111' as Address;
@@ -100,6 +100,27 @@ describe('groupByPage: records whose address does not hash to their urlHash', ()
     const junk = entries.find((e) => e.junk)!;
     expect(junk.urlHash).toBe(k(2)); // its own id: the record key, never the page's
     expect(junk.address).toBe('evil.example/fake');
+  });
+});
+
+describe('shortAddress', () => {
+  it('keeps short addresses and the host, and cuts the middle of the path so the end shows', () => {
+    expect(shortAddress('gov.example/notice')).toBe('gov.example/notice');
+    const a = shortAddress('localhostwastaken.github.io/Recall/notice/?run=0tzgmo55');
+    const b = shortAddress('localhostwastaken.github.io/Recall/notice/?run=xbvmqf0p');
+    expect(a).toContain('?run=0tzgmo55');
+    expect(a.startsWith('localhostwastaken.')).toBe(true);
+    expect(shortAddress('gov.example/a/very/long/path/to/the/notice?id=7')).toBe('gov.example/…path/to/the/notice?id=7');
+    expect(a).not.toBe(b);
+    expect(a.length).toBeLessThanOrEqual(36);
+    const long = shortAddress(`${'h'.repeat(80)}.example/p`);
+    expect(long.length).toBe(36);
+    expect(long).toContain('…');
+  });
+
+  it('includes the query, so two pages that differ only by it get different addresses', () => {
+    const entries = groupByPage([cap(1, { canonicalUrl: 'https://a.example/n/?run=1' }), cap(2, { canonicalUrl: 'https://a.example/n/?run=2' })], []);
+    expect(entries.map((e) => e.address).sort()).toEqual(['a.example/n/?run=1', 'a.example/n/?run=2']);
   });
 });
 
