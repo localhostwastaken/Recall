@@ -215,3 +215,45 @@ Result:
 - https://github.com/localhostwastaken/Recall/releases/tag/v0.1.0-mumbai, asset `recall-extension.zip` (7,336,204 bytes, sha256 01b2428381bf032bab678e359936ecb69edfd48eaf87783814a77f1988c0d64f).
 - Release build (Mozilla roots, no developer hooks), built from commit a9c97a5.
 - Install: unzip, `chrome://extensions`, Developer mode, Load unpacked, then paste the extension ID in the app's Settings.
+
+## 2026-11-06 live P5 CROPS check (UTC, green at 11:55Z)
+
+`pnpm test:live --grep crops` (`e2e/live/p5-crops.spec.ts`) passed 3/3 in 26 s. It spent nothing. It uses the P2 live capture 0xc50021a907dbd1d511d2e4a1482614647cbbb4a0dd2d4bf26ad70065b3611244.
+
+Witness down:
+- Setup: the release extension in a fresh profile, with default settings.
+- With the witness up, it found the witness through its Arkiv profile on the first popup open. The popup showed "Witness online" and Capture was enabled.
+- With the witness's origins refused in that browser:
+  - the popup showed "Witness offline" and "New captures are paused until the witness is back.";
+  - Capture this page was disabled;
+  - at the same time, the deployed Pages app verified the capture (A, B, C and E pass) and made no request to the witness.
+- After the witness came back, Try again showed "Witness online" again.
+
+The real stop (`RECALL_P5_STOP_WITNESS=1`, 11:55:44 to 11:55:59Z):
+- `docker stop recall-witness-live`; /info then failed on 127.0.0.1:7048 and through the tunnel.
+- The popup and the app gave the same results as above.
+- `docker start`; /info answered locally and through the tunnel again (signer 0xC9319e18e86cd7EB653c0Ed0693c0cf5B63db37D), and the popup showed online again.
+- The tunnel URL did not change, so no new announcement was needed.
+
+Mirror gone:
+- Every request to GitHub Pages was refused.
+- The Swarm copy opened through our own ultra-light Bee 2.8.1 node (`scripts/swarm-reader.sh`): http://127.0.0.1:1733/bzz/e002e9ab0bee50f874a8ee461fe053aca71c7e3be502b941d8933008e357f9e0/ (feed index 0).
+- It verified the capture (A to C pass, E pass) and listed it on its timeline.
+- It downloaded the evidence file `recall-1dcb2ceb-1793945366.json` (2723 B), byte-equal to Swarm `/bytes/4dde720f…3202`.
+- It made no request to Pages.
+
+Fully offline:
+- This checkout's live build was served from 127.0.0.1. After it loaded, the browser went offline and every request was refused.
+- The dropped evidence file passed A, B and C, with verdict pass. E showed "not checked", and the page said "Checked offline. A–C ran in your browser; storage (E) was not checked."
+- Nothing was requested.
+
+## Finding: no public gateway shows the Swarm copy of the app in a browser yet
+
+- download.gateway.ethswarm.org serves every /bzz/ file with `Content-Disposition: attachment`: index.html and the JS asset alike, for both the feed manifest and the site manifest.
+  - Chromium does not show the page: the navigation is aborted and the file is saved as `download.html`.
+  - curl and scripts get the right bytes (HTTP 200), so the earlier checks passed. The "working link" above works for scripts, not for people.
+- api.gateway.ethswarm.org and bzz.link (both the path and the CID forms) still redirect to /forbidden until the hash is allowlisted. gateway.ethswarm.org serves its own gateway page, not the site.
+- A Bee node of your own loads the app in a browser. `bash scripts/swarm-reader.sh` starts an ultra-light mainnet node: no wallet, no blockchain endpoint, no funds, API on 127.0.0.1:1733 only.
+  - The first run took 67 s, including pulling `ethersphere/bee:2.8.1`. The node connected to 4 peers, and 50 a few minutes later.
+  - It resolves the feed and serves the app with `Content-Disposition: inline`.
+  - Its index.html is byte-identical to what download.gateway returns.
