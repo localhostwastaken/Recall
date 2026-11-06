@@ -35,7 +35,24 @@ export function defaultSettings(net: Net = RECALL_DEV ? 'local' : 'live'): Setti
   };
 }
 
-const isAddress = (v: unknown): v is Address => typeof v === 'string' && /^0x[0-9a-fA-F]{40}$/.test(v);
+const isAddress = (v: unknown): v is Address =>
+  typeof v === 'string' && /^0x[0-9a-fA-F]{40}$/.test(v);
+
+/** A witness address must be an http(s) URL without credentials (anything else is dropped). */
+export function isWitnessUrl(v: unknown): v is string {
+  if (typeof v !== 'string' || !v) return false;
+  try {
+    const u = new URL(v);
+    return (
+      (u.protocol === 'http:' || u.protocol === 'https:') &&
+      !u.username &&
+      !u.password &&
+      !!u.hostname
+    );
+  } catch {
+    return false;
+  }
+}
 const isNet = (v: unknown): v is Net => v === 'local' || v === 'live';
 
 /** Fills in defaults and drops malformed values (storage is never trusted blindly). */
@@ -45,8 +62,10 @@ export function mergeSettings(stored: unknown): Settings {
   const d = defaultSettings(net);
   return {
     net,
-    witnessUrl: typeof s.witnessUrl === 'string' && s.witnessUrl ? s.witnessUrl : d.witnessUrl,
-    pinnedWitnesses: Array.isArray(s.pinnedWitnesses) ? s.pinnedWitnesses.filter(isAddress) : d.pinnedWitnesses,
+    witnessUrl: isWitnessUrl(s.witnessUrl) ? s.witnessUrl : d.witnessUrl,
+    pinnedWitnesses: Array.isArray(s.pinnedWitnesses)
+      ? s.pinnedWitnesses.filter(isAddress)
+      : d.pinnedWitnesses,
     appUrl: typeof s.appUrl === 'string' && s.appUrl ? s.appUrl : d.appUrl,
   };
 }
@@ -56,7 +75,10 @@ export async function loadSettings(area: SettingsArea = defaultArea()): Promise<
 }
 
 /** Applies `patch` on top of the stored settings and saves the full result. */
-export async function saveSettings(patch: Partial<Settings>, area: SettingsArea = defaultArea()): Promise<Settings> {
+export async function saveSettings(
+  patch: Partial<Settings>,
+  area: SettingsArea = defaultArea(),
+): Promise<Settings> {
   const next = mergeSettings({ ...(await loadSettings(area)), ...patch });
   await area.set({ [SETTINGS_KEY]: next });
   return next;

@@ -37,9 +37,6 @@ const workerApi = Comlink.wrap<{
   }) => Promise<void>;
   createProver: (config: ProverConfig) => Promise<string>;
   setupProver: (proverId: string, verifierUrl: string) => Promise<void>;
-  setupProverRelay: (proverId: string, sendOut: (bytes: Uint8Array) => void) => Promise<void>;
-  deliverToWasm: (bytes: Uint8Array) => void;
-  signalRelayClosed: () => void;
   sendRequest: (
     proverId: string,
     proxyUrl: string | undefined,
@@ -58,6 +55,7 @@ const workerApi = Comlink.wrap<{
   };
   reveal: (proverId: string, revealConfig: Reveal, commitConfig?: Commit) => Promise<RevealOutput>;
   freeProver: (proverId: string) => void;
+  abortProver: (proverId: string) => Promise<void>;
 }>(worker);
 
 // ============================================================================
@@ -119,15 +117,12 @@ export class ProveManager {
   /** Maps proverId to its session state - each prover has isolated session */
   private sessions: Map<string, SessionState> = new Map();
 
-  /**
-   * Per-prover progress callbacks. Keyed by proverId so concurrent plugin
-   * executions don't overwrite each other's callback.
-   */
+  /** Per-prover progress callbacks, keyed by proverId. */
   private progressCallbacks: Map<string, ProgressCallback> = new Map();
 
   /**
    * Cached transcript bytes per prover. Populated after sendRequest() so the
-   * approval gate can render previews without re-reading from WASM memory
+   * capture can build its evidence file without re-reading from WASM memory
    * (which may be invalidated between calls).
    */
   private transcriptBytes: Map<string, { sent: Uint8Array; recv: Uint8Array }> = new Map();
@@ -313,20 +308,26 @@ export class ProveManager {
 
       ws.onclose = () => {
         logger.debug('[ProveManager] Session WebSocket closed for prover:', proverId);
+        // Recall: a close without a result is a failure, not a 60 s wait.
+        const session = this.sessions.get(proverId);
+        if (!session) {
+          reject(new Error('the witness closed the session before registering it'));
+        } else if (!session.responseReceived) {
+          session.error = session.error ?? 'the witness closed the session without a result';
+          session.responseReceived = true;
+        }
       };
     });
   }
 
-  async createProver(
+  /** Creates a prover in the worker (no network yet). Returns its id. */
+  async newProver(
     serverDns: string,
-    verifierUrl: string,
     maxRecvData = 16384,
     maxSentData = 4096,
-    sessionData: Record<string, string> = {},
     mode: ProverMode = 'Mpc',
-  ) {
-    // Create prover in the worker first to get the ID.
-    const proverId = await workerApi.createProver({
+  ): Promise<string> {
+    return workerApi.createProver({
       server_name: serverDns,
       mode,
       max_sent_data: maxSentData,
@@ -340,20 +341,47 @@ export class ProveManager {
       // Recall: the dev-CA build flag (undefined in release builds = Mozilla roots).
       root_certs: DEV_ROOT_CERTS,
     });
+  }
 
+  /** Registers a session with the witness. Resolves with the prover's /verifier URL. */
+  openSession(
+    proverId: string,
+    verifierUrl: string,
+    maxRecvData: number,
+    maxSentData: number,
+    sessionData: Record<string, string>,
+  ): Promise<string> {
+    return this.createSession(proverId, verifierUrl, maxRecvData, maxSentData, sessionData);
+  }
+
+  /** Connects the prover to the witness's /verifier socket and runs the MPC setup. */
+  async setupProver(proverId: string, verifierWsUrl: string): Promise<void> {
+    await workerApi.setupProver(proverId, verifierWsUrl);
+  }
+
+  /**
+   * newProver + openSession + setupProver in one call. On failure the prover is
+   * cleaned up; callers that need the witness's error message should use the
+   * three steps and read witnessError() before cleanupProver().
+   */
+  async createProver(
+    serverDns: string,
+    verifierUrl: string,
+    maxRecvData = 16384,
+    maxSentData = 4096,
+    sessionData: Record<string, string> = {},
+    mode: ProverMode = 'Mpc',
+  ) {
+    const proverId = await this.newProver(serverDns, maxRecvData, maxSentData, mode);
     try {
-      // Create isolated session for this prover.
-      const sessionUrl = await this.createSession(
+      const sessionUrl = await this.openSession(
         proverId,
         verifierUrl,
         maxRecvData,
         maxSentData,
         sessionData,
       );
-
-      // Setup prover with verifier - IoChannel created in worker.
-      await workerApi.setupProver(proverId, sessionUrl);
-
+      await this.setupProver(proverId, sessionUrl);
       return proverId;
     } catch (error) {
       logger.error('[ProveManager] Failed to create prover:', error);
@@ -363,52 +391,27 @@ export class ProveManager {
   }
 
   /**
-   * Relayed verifier mode: the verifier runs in another browser. The MPC byte
-   * stream is relayed through the host page (which owns the transport
-   * connection): outbound bytes go to `onOut`; inbound bytes arrive via
-   * deliverRelayData(). In `Proxy` mode the server connection routes through the
-   * verifier (which opens its own TCP proxy), so the prover passes no server_io.
+   * Recall: the error the witness sent on the session socket, if any. Waits up to
+   * `waitMs` for it, because a prover-side failure can arrive before the
+   * witness's message explaining it. Returns null once the socket is closed
+   * without one, or after the wait.
    */
-  async createProverRelay(
-    serverDns: string,
-    onOut: (bytes: Uint8Array) => void,
-    maxRecvData = 16384,
-    maxSentData = 4096,
-    mode: ProverMode = 'Mpc',
-  ): Promise<string> {
-    const proverId = await workerApi.createProver({
-      server_name: serverDns,
-      mode,
-      max_sent_data: maxSentData,
-      max_sent_records: undefined,
-      max_recv_data_online: undefined,
-      max_recv_data: maxRecvData,
-      max_recv_records_online: undefined,
-      defer_decryption_from_start: undefined,
-      network: 'Bandwidth',
-      client_auth: undefined,
-      // Recall: the dev-CA build flag (undefined in release builds = Mozilla roots).
-      root_certs: DEV_ROOT_CERTS,
-    });
-
-    try {
-      await workerApi.setupProverRelay(proverId, Comlink.proxy(onOut));
-      return proverId;
-    } catch (error) {
-      logger.error('[ProveManager] Failed to create relay prover:', error);
-      await this.cleanupProver(proverId);
-      throw error;
+  async witnessError(proverId: string, waitMs = 0): Promise<string | null> {
+    const deadline = Date.now() + waitMs;
+    for (;;) {
+      const session = this.sessions.get(proverId);
+      if (!session) return null;
+      if (session.error) return session.error;
+      const closed = session.webSocket.readyState === WebSocket.CLOSED;
+      if (closed || Date.now() >= deadline) return null;
+      await new Promise((resolve) => setTimeout(resolve, 100));
     }
   }
 
-  /** Deliver bytes received over the relay (from the host page) to the prover. */
-  deliverRelayData(bytes: Uint8Array): void {
-    workerApi.deliverToWasm(bytes);
-  }
-
-  /** Signal that the relayed channel closed. */
-  signalRelayClosed(): void {
-    workerApi.signalRelayClosed();
+  /** Recall: cancels a running prover by closing its sockets (its pending calls then fail). */
+  async abort(proverId: string): Promise<void> {
+    this.closeSession(proverId);
+    await workerApi.abortProver(proverId);
   }
 
   /**
@@ -482,7 +485,7 @@ export class ProveManager {
       body: options.body,
     });
 
-    // Snapshot transcript bytes now so the approval gate can read them
+    // Snapshot transcript bytes now so the capture can read them
     // synchronously later without crossing the worker boundary again.
     try {
       const transcript = await workerApi.getTranscript(proverId);
@@ -616,7 +619,8 @@ export class ProveManager {
   }
 
   /**
-   * Get the session ID for a given prover (used to route proxy WS in proxy mode).
+   * Get the session ID for a given prover. Recall: the witness's /proxy needs it
+   * (`/proxy?token=<host>&sessionId=<id>`).
    */
   getSessionId(proverId: string): string | null {
     return this.sessions.get(proverId)?.sessionId ?? null;

@@ -112,6 +112,22 @@ interface IoChannel {
 const provers: Map<string, Prover> = new Map();
 let nextProverId = 0;
 
+// Recall: the WebSocket channels each prover opened (witness verifier + server proxy),
+// so a cancelled or finished capture can close them.
+const channels: Map<string, IoChannel[]> = new Map();
+
+function track(proverId: string, io: IoChannel): IoChannel {
+  channels.set(proverId, [...(channels.get(proverId) ?? []), io]);
+  return io;
+}
+
+/** Recall: closes every channel of a prover, so its pending setup/request/reveal fails fast. */
+async function abortProver(proverId: string): Promise<void> {
+  const list = channels.get(proverId) ?? [];
+  channels.delete(proverId);
+  await Promise.all(list.map((io) => io.close().catch(() => undefined)));
+}
+
 /**
  * Creates an IoChannel adapter from a WebSocket URL.
  * This runs in the worker to avoid cross-thread communication overhead.
@@ -220,7 +236,7 @@ async function setupProver(proverId: string, verifierUrl: string): Promise<void>
   const prover = provers.get(proverId);
   if (!prover) throw new Error(`Prover not found: ${proverId}`);
 
-  const verifierIo = await createIoChannel(verifierUrl);
+  const verifierIo = track(proverId, await createIoChannel(verifierUrl));
   try {
     await Promise.race([
       prover.setup(verifierIo),
@@ -236,93 +252,6 @@ async function setupProver(proverId: string, verifierUrl: string): Promise<void>
     await verifierIo.close();
     throw err;
   }
-}
-
-// ============================================================================
-// Relay transport
-//
-// For relayed proofs the verifier runs in another browser. WebRTC lives in
-// the host page (not here), so the verifier's bytes are relayed: outbound bytes
-// go to a main-thread `sendOut` callback (→ page → data channel); inbound bytes
-// are pushed back via deliverToWasm(). This is a plain byte bridge — no WebRTC.
-//
-// These are module-level singletons, so they assume ONE relayed proof at a time
-// per worker. That holds because the host page disables its Prove button while a
-// proof is in flight, serializing relayed proofs; inbound RELAY_IN chunks are
-// likewise forwarded to the single active prover without a requestId. Concurrent
-// relayed proofs in one offscreen would cross-talk on this state.
-// ============================================================================
-
-let relayInbox: Uint8Array[] = [];
-let relayReadResolver: ((value: Uint8Array | null) => void) | null = null;
-let relayClosed = false;
-let relaySendOut: ((bytes: Uint8Array) => void) | null = null;
-
-function relayIo(): IoChannel {
-  return {
-    async read(): Promise<Uint8Array | null> {
-      if (relayInbox.length > 0) return relayInbox.shift()!;
-      if (relayClosed) return null;
-      return new Promise((res) => {
-        relayReadResolver = res;
-      });
-    },
-    async write(data: Uint8Array): Promise<void> {
-      // Copy off (possibly shared) WASM memory before crossing to the main thread.
-      relaySendOut?.(data.slice());
-    },
-    async close(): Promise<void> {
-      /* the main thread / page owns the data channel lifecycle */
-    },
-  };
-}
-
-/** Push bytes received from the relay (called from the main thread). */
-function deliverToWasm(bytes: Uint8Array): void {
-  if (relayReadResolver) {
-    const resolve = relayReadResolver;
-    relayReadResolver = null;
-    resolve(bytes);
-  } else {
-    relayInbox.push(bytes);
-  }
-}
-
-/** Signal the relayed channel closed (EOF). */
-function signalRelayClosed(): void {
-  relayClosed = true;
-  if (relayReadResolver) {
-    const resolve = relayReadResolver;
-    relayReadResolver = null;
-    resolve(null);
-  }
-}
-
-/** Set up the prover over the relayed channel instead of a WebSocket. */
-async function setupProverRelay(
-  proverId: string,
-  sendOut: (bytes: Uint8Array) => void,
-): Promise<void> {
-  const prover = provers.get(proverId);
-  if (!prover) throw new Error(`Prover not found: ${proverId}`);
-
-  relayInbox = [];
-  relayReadResolver = null;
-  relayClosed = false;
-  relaySendOut = sendOut;
-
-  await Promise.race([
-    prover.setup(relayIo()),
-    new Promise<never>((_, reject) =>
-      setTimeout(
-        () =>
-          reject(
-            new Error(`setupProverRelay timed out after ${SETUP_TIMEOUT_MS}ms for ${proverId}`),
-          ),
-        SETUP_TIMEOUT_MS,
-      ),
-    ),
-  ]);
 }
 
 /**
@@ -342,7 +271,7 @@ async function sendRequest(
   // Proxy mode: the WASM prover routes server traffic over the verifier
   // session mux internally and rejects a server_io. MPC mode: open a
   // websockify channel to the target server and pass it as server_io.
-  const serverIo = proxyUrl ? await createIoChannel(proxyUrl) : undefined;
+  const serverIo = proxyUrl ? track(proverId, await createIoChannel(proxyUrl)) : undefined;
   try {
     await Promise.race([
       prover.send_request(serverIo, request),
@@ -461,7 +390,8 @@ function computeReveal(
 /**
  * Frees a prover instance.
  */
-function freeProver(proverId: string): void {
+async function freeProver(proverId: string): Promise<void> {
+  await abortProver(proverId);
   const prover = provers.get(proverId);
   if (prover) {
     prover.free();
@@ -518,12 +448,10 @@ Comlink.expose({
   init,
   createProver,
   setupProver,
-  setupProverRelay,
-  deliverToWasm,
-  signalRelayClosed,
   sendRequest,
   getTranscript,
   computeReveal,
   reveal,
   freeProver,
+  abortProver,
 });

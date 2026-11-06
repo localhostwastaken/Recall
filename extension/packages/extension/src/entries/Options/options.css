@@ -1,0 +1,102 @@
+/* Extension settings page (Recall tokens; design brief sections 2-3). */
+body {
+  font-size: var(--text-md);
+  line-height: var(--lh-md);
+}
+
+.options {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-4);
+}
+
+.options h1 {
+  font-family: var(--font-serif);
+  font-size: var(--text-2xl);
+  line-height: var(--lh-2xl);
+}
+
+.options-lede {
+  margin-top: var(--space-1);
+  color: var(--text-muted);
+}
+
+.options-section {
+  margin-top: var(--space-6);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border);
+}
+
+.options-section h2 {
+  font-size: var(--text-lg);
+  line-height: var(--lh-lg);
+}
+
+.field {
+  display: grid;
+  gap: var(--space-1);
+  margin-top: var(--space-3);
+}
+
+.field label {
+  font-weight: 600;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+}
+
+.field input[type='url'] {
+  min-height: var(--control-h);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-1);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+.field input[aria-invalid='true'] {
+  border-color: var(--fail);
+}
+
+.field-helper,
+.field-error {
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+}
+
+.field-helper {
+  color: var(--text-muted);
+}
+
+.field-error {
+  color: var(--fail);
+}
+
+.options-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
+.options-status {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.radio-list {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.radio-list label {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  font-size: var(--text-sm);
+}

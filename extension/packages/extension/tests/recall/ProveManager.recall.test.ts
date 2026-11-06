@@ -10,7 +10,7 @@ const mockWorkerApi = {
   init: vi.fn().mockResolvedValue(undefined),
   createProver: vi.fn().mockResolvedValue('prover-0'),
   setupProver: vi.fn().mockResolvedValue(undefined),
-  setupProverRelay: vi.fn().mockResolvedValue(undefined),
+  abortProver: vi.fn().mockResolvedValue(undefined),
   freeProver: vi.fn().mockResolvedValue(undefined),
 };
 vi.mock('comlink', () => ({ wrap: () => mockWorkerApi, proxy: (f: unknown) => f }));
@@ -26,6 +26,7 @@ vi.stubGlobal(
 let completion: Record<string, unknown> = {};
 class FakeWitnessSocket {
   static OPEN = 1;
+  static CLOSED = 3;
   readyState = 1;
   onopen: (() => void) | null = null;
   onmessage: ((e: { data: string }) => void) | null = null;
@@ -38,8 +39,17 @@ class FakeWitnessSocket {
     const msg = JSON.parse(raw);
     if (msg.type === 'register') {
       setTimeout(() => {
-        this.onmessage?.({ data: JSON.stringify({ type: 'session_registered', sessionId: 's-1' }) });
-        setTimeout(() => this.onmessage?.({ data: JSON.stringify(completion) }), 0);
+        this.onmessage?.({
+          data: JSON.stringify({ type: 'session_registered', sessionId: 's-1' }),
+        });
+        setTimeout(() => {
+          if (completion.type === 'close') {
+            this.readyState = 3;
+            this.onclose?.();
+          } else {
+            this.onmessage?.({ data: JSON.stringify(completion) });
+          }
+        }, 0);
       }, 0);
     }
   }
@@ -64,10 +74,23 @@ describe('ProveManager (Recall)', () => {
   });
 
   it('keeps the witness attestation from session_completed', async () => {
-    completion = { type: 'session_completed', results: [{ type: 'RECALL_ATTESTATION', value: '{}' }], attestation: ATTESTATION };
+    completion = {
+      type: 'session_completed',
+      results: [{ type: 'RECALL_ATTESTATION', value: '{}' }],
+      attestation: ATTESTATION,
+    };
     const pm = new ProveManager();
-    const proverId = await pm.createProver('notice.recall.test', 'http://localhost:7047', 65536, 4096, {});
-    expect(mockWorkerApi.setupProver).toHaveBeenCalledWith(proverId, 'ws://localhost:7047/verifier?sessionId=s-1');
+    const proverId = await pm.createProver(
+      'notice.recall.test',
+      'http://localhost:7047',
+      65536,
+      4096,
+      {},
+    );
+    expect(mockWorkerApi.setupProver).toHaveBeenCalledWith(
+      proverId,
+      'ws://localhost:7047/verifier?sessionId=s-1',
+    );
     const response = await pm.getResponse(proverId, 5);
     expect(response).toEqual({ results: completion.results, attestation: ATTESTATION });
   });
@@ -76,8 +99,28 @@ describe('ProveManager (Recall)', () => {
     const pm = new ProveManager();
     await pm.createProver('notice.recall.test', 'http://localhost:7047');
     expect(mockWorkerApi.createProver.mock.calls[0][0].root_certs).toEqual(DEV_CERTS);
+  });
 
-    await pm.createProverRelay('notice.recall.test', () => {});
-    expect(mockWorkerApi.createProver.mock.calls[1][0].root_certs).toEqual(DEV_CERTS);
+  it('has no relay (page-hosted verifier) path any more', () => {
+    const pm = new ProveManager() as unknown as Record<string, unknown>;
+    expect(pm.createProverRelay).toBeUndefined();
+    expect(pm.deliverRelayData).toBeUndefined();
+  });
+
+  it('reports the witness error sent on the session socket', async () => {
+    completion = { type: 'error', message: 'recall: host mismatch' };
+    const pm = new ProveManager();
+    const proverId = await pm.newProver('notice.recall.test', 65536, 4096);
+    await pm.openSession(proverId, 'http://localhost:7047', 65536, 4096, {});
+    expect(await pm.witnessError(proverId, 1_000)).toBe('recall: host mismatch');
+    await expect(pm.getResponse(proverId, 5)).rejects.toThrow('recall: host mismatch');
+  });
+
+  it('fails instead of waiting when the witness closes the session without a result', async () => {
+    completion = { type: 'close' };
+    const pm = new ProveManager();
+    const proverId = await pm.newProver('notice.recall.test', 65536, 4096);
+    await pm.openSession(proverId, 'http://localhost:7047', 65536, 4096, {});
+    await expect(pm.getResponse(proverId, 5)).rejects.toThrow('closed the session');
   });
 });

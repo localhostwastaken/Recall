@@ -25,18 +25,34 @@ Removed from upstream (not needed by Recall, or page-facing attack surface):
   SessionManager's page relay mode and its sessionData.proxyBase override,
   the manifest's content_scripts, web_accessible_resources and webRequest /
   windows permissions, helpers used only by those parts, and their tests.
+- packages/extension, the plugin host and relayed prover: SessionManager
+  (plugin execution via the plugin-sdk Host, the reveal-approval gate and its
+  RENDER_PLUGIN_UI / window callbacks), permissionValidator, the offscreen
+  React shell and its styles, and ProveManager's relay transport
+  (createProverRelay, deliverRelayData, signalRelayClosed and the worker's
+  setupProverRelay / deliverToWasm). The extension now uses the plugin-sdk
+  for its Handler type only, so no plugin-sdk runtime code (Host, QuickJS,
+  reveal-approval overlays) is bundled.
+- packages/extension Options page styles (replaced by Recall's tokens).
 - Browser (Playwright) test suites and their devDependencies in
   packages/extension and packages/plugin-sdk; STORE_LISTING.md,
   test-session-manager.html, a contributor guide and unused images.
 
 Recall changes in packages/extension:
-- manifest: name Recall, action popup, externally_connectable for the Recall
-  web app origins, storage permission.
+- manifest: name Recall (dev builds: "Recall (dev)"), action popup,
+  externally_connectable for the Recall web app origins, storage permission.
 - src/entries/Popup and src/recall: the Recall popup, settings, witness health
   check, build flags and UI tokens.
 - src/offscreen/ProveManager/index.ts: keeps the witness's signed
   `attestation` from session_completed; root_certs come from the build-time
-  dev CA (RECALL_DEV_CA_DER_B64) when set.
+  dev CA (RECALL_DEV_CA_DER_B64) when set; prover creation is split into
+  steps (newProver, openSession, setupProver) so the witness's error message
+  can be read before cleanup; a session closed without a result fails at
+  once; abort() cancels a capture. The worker tracks and closes each
+  prover's sockets.
+- src/recall/capture.ts, captureParts.ts, job.ts: the witness-signed capture
+  (MPC mode, full reveal, allowlisted request headers, size pre-check) and
+  its service-worker job; src/entries/Options: Recall settings (witness URL).
 - webpack.config.js: popup entry, @recall/evidence and @recall/net aliases,
   Recall build flags, a single React copy.
 - src/entries/Background and src/entries/Offscreen: reduced to what the popup

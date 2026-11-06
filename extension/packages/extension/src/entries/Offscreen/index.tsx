@@ -1,50 +1,63 @@
-import { useEffect } from 'react';
-import { createRoot } from 'react-dom/client';
-import browser from 'webextension-polyfill';
-import { SessionManager } from '../../offscreen/SessionManager';
+// Offscreen document: owns the tlsn-wasm prover (a worker) and runs captures for the
+// service worker. Recall fork: the upstream plugin host (SessionManager, plugin
+// execution, reveal approval overlays, page relay) was removed; captures start only
+// from the popup, through the service worker.
 import { logger } from '@tlsn/common';
 import { getStoredLogLevel } from '../../utils/logLevelStorage';
-import type { OffscreenMessage } from '../../types/messages';
+import { captureUrl, proveManager } from '../../recall/capture';
+import type { CaptureOutcome } from '../../recall/captureParts';
+import type {
+  CaptureResultMessage,
+  CaptureStepMessage,
+  OffscreenCapture,
+  RecallMessage,
+} from '../../recall/messages';
 
-const OffscreenApp: React.FC = () => {
-  useEffect(() => {
-    // Initialize logger with stored log level
-    getStoredLogLevel().then((level) => {
-      logger.init(level);
-      logger.info('Offscreen document loaded');
-    });
+getStoredLogLevel().then((level) => {
+  logger.init(level);
+  logger.info('Offscreen document loaded');
+});
 
-    // Initialize SessionManager (owns the ProveManager and the tlsn-wasm worker)
-    const sessionManager = new SessionManager();
-    logger.debug('SessionManager initialized in Offscreen');
-    void sessionManager;
+// Load the wasm prover now, so the first capture does not wait for it.
+proveManager().catch((err) => logger.error('[recall] prover init failed', err));
 
-    // Listen for messages from background script
-    browser.runtime.onMessage.addListener((msg: unknown) => {
-      const request = msg as OffscreenMessage;
-      // Example message handling
-      if (request.type === 'PROCESS_DATA') {
-        return Promise.resolve({
-          success: true,
-          data: 'Processed in offscreen',
-        });
-      }
+const running = new Map<string, AbortController>();
 
-      // Recall fork: the upstream plugin handlers (EXEC_CODE_OFFSCREEN,
-      // GET_PLUGIN_STATS_OFFSCREEN, RELAY_DELIVER*) were removed with the page API.
-    });
-  }, []);
-
-  return (
-    <div className="offscreen-container">
-      <h1>Offscreen Document</h1>
-      <p>This document runs in the background for processing tasks.</p>
-    </div>
-  );
-};
-
-const container = document.getElementById('app-container');
-if (container) {
-  const root = createRoot(container);
-  root.render(<OffscreenApp />);
+function send(msg: CaptureStepMessage | CaptureResultMessage): void {
+  chrome.runtime
+    .sendMessage(msg)
+    .catch((err) => logger.warn('[recall] message to service worker failed', err));
 }
+
+async function run(req: OffscreenCapture): Promise<void> {
+  const ctl = new AbortController();
+  running.set(req.id, ctl);
+  let outcome: CaptureOutcome;
+  try {
+    outcome = await captureUrl(req.url, {
+      witnessUrl: req.witnessUrl,
+      maxRecvData: req.maxRecvData,
+      overrides: req.overrides,
+      signal: ctl.signal,
+      onStep: (step) => send({ type: 'recall.capture.step', id: req.id, step }),
+    });
+  } catch (err) {
+    outcome = { error: err instanceof Error ? err.message : String(err), code: 'failed' };
+  } finally {
+    running.delete(req.id);
+  }
+  send({ type: 'recall.capture.result', id: req.id, outcome });
+}
+
+// Registered at load (not in a framework effect), so the first message is never missed.
+chrome.runtime.onMessage.addListener((raw: unknown, sender, sendResponse) => {
+  if (sender.id !== chrome.runtime.id) return;
+  const msg = raw as RecallMessage;
+  if (msg?.type === 'recall.offscreen.capture') {
+    void run(msg);
+    sendResponse({ accepted: true });
+  } else if (msg?.type === 'recall.offscreen.cancel') {
+    running.get(msg.id)?.abort();
+    sendResponse({ ok: true });
+  }
+});

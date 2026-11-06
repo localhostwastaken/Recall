@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { defaultSettings, loadSettings, mergeSettings, saveSettings, SETTINGS_KEY } from '../../src/recall/settings';
+import {
+  defaultSettings,
+  isWitnessUrl,
+  loadSettings,
+  mergeSettings,
+  saveSettings,
+  SETTINGS_KEY,
+} from '../../src/recall/settings';
 
 function memoryArea() {
   const data: Record<string, unknown> = {};
@@ -42,9 +49,16 @@ describe('settings', () => {
 
   it('saves a patch and reads it back', async () => {
     const pinned = '0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC';
-    await saveSettings({ net: 'local', pinnedWitnesses: [pinned], witnessUrl: 'http://127.0.0.1:7047' }, area);
+    await saveSettings(
+      { net: 'local', pinnedWitnesses: [pinned], witnessUrl: 'http://127.0.0.1:7047' },
+      area,
+    );
     const s = await loadSettings(area);
-    expect(s).toMatchObject({ net: 'local', pinnedWitnesses: [pinned], witnessUrl: 'http://127.0.0.1:7047' });
+    expect(s).toMatchObject({
+      net: 'local',
+      pinnedWitnesses: [pinned],
+      witnessUrl: 'http://127.0.0.1:7047',
+    });
     expect(area.data[SETTINGS_KEY]).toEqual(s);
   });
 
@@ -59,5 +73,25 @@ describe('settings', () => {
     expect(s.appUrl).toBe(defaultSettings(s.net).appUrl);
     expect(s.witnessUrl).toBe(defaultSettings(s.net).witnessUrl);
     expect(s.pinnedWitnesses).toEqual(['0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC']);
+  });
+
+  it('accepts only http(s) witness URLs', () => {
+    expect(isWitnessUrl('http://localhost:7047')).toBe(true);
+    expect(isWitnessUrl('https://witness.example.org/')).toBe(true);
+    for (const bad of [
+      'javascript:alert(1)',
+      'ws://localhost:7047',
+      'file:///etc/passwd',
+      'localhost:7047',
+      'https://u:p@w.example',
+      '',
+    ]) {
+      expect(isWitnessUrl(bad), bad).toBe(false);
+    }
+    const d = defaultSettings('local').witnessUrl;
+    expect(mergeSettings({ net: 'local', witnessUrl: 'javascript:alert(1)' }).witnessUrl).toBe(d);
+    expect(mergeSettings({ net: 'local', witnessUrl: 'https://w.example' }).witnessUrl).toBe(
+      'https://w.example',
+    );
   });
 });

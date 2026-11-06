@@ -1,148 +1,139 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { LogLevel, logLevelToName, logger } from '@tlsn/common';
 import { getStoredLogLevel, setStoredLogLevel } from '../../utils/logLevelStorage';
-import './index.scss';
+import { isWitnessUrl, loadSettings, saveSettings } from '../../recall/settings';
+import '../../recall/ui/tokens.css';
+import '../../recall/ui/base.css';
+import './options.css';
 
-interface LogLevelOption {
-  level: LogLevel;
-  name: string;
-  description: string;
-}
-
-const LOG_LEVEL_OPTIONS: LogLevelOption[] = [
-  {
-    level: LogLevel.DEBUG,
-    name: 'DEBUG',
-    description: 'All logs (verbose)',
-  },
-  {
-    level: LogLevel.INFO,
-    name: 'INFO',
-    description: 'Informational and above',
-  },
-  {
-    level: LogLevel.WARN,
-    name: 'WARN',
-    description: 'Warnings and errors only (default)',
-  },
-  {
-    level: LogLevel.ERROR,
-    name: 'ERROR',
-    description: 'Errors only',
-  },
+const LOG_LEVELS: { level: LogLevel; description: string }[] = [
+  { level: LogLevel.DEBUG, description: 'All logs (verbose)' },
+  { level: LogLevel.INFO, description: 'Informational and above' },
+  { level: LogLevel.WARN, description: 'Warnings and errors only (default)' },
+  { level: LogLevel.ERROR, description: 'Errors only' },
 ];
 
-const Options: React.FC = () => {
-  const [currentLevel, setCurrentLevel] = useState<LogLevel>(LogLevel.WARN);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [saveSuccess, setSaveSuccess] = useState(false);
+const URL_ERROR = 'Enter a full address starting with http:// or https://';
 
-  // Load current log level on mount
+function WitnessSettings() {
+  const id = useId();
+  const [value, setValue] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState('');
+
   useEffect(() => {
-    const loadLevel = async () => {
-      try {
-        const level = await getStoredLogLevel();
-        setCurrentLevel(level);
-        // Initialize the logger with the stored level
-        logger.init(level);
-      } catch (error) {
-        logger.error('Failed to load log level:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    loadLevel();
+    loadSettings()
+      .then((s) => setValue(s.witnessUrl ?? ''))
+      .catch(() => undefined);
   }, []);
 
-  const handleLevelChange = useCallback(async (level: LogLevel) => {
-    setSaving(true);
-    setSaveSuccess(false);
+  const validate = (v: string) => {
+    const bad = !isWitnessUrl(v.trim());
+    setError(bad ? URL_ERROR : null);
+    return !bad;
+  };
 
-    try {
-      await setStoredLogLevel(level);
-      setCurrentLevel(level);
-      // Update the logger immediately
-      logger.setLevel(level);
-
-      setSaveSuccess(true);
-      // Clear success message after 2 seconds
-      setTimeout(() => setSaveSuccess(false), 2000);
-    } catch (error) {
-      logger.error('Failed to save log level:', error);
-    } finally {
-      setSaving(false);
-    }
-  }, []);
-
-  if (loading) {
-    return (
-      <div className="options options--loading">
-        <div className="options__spinner"></div>
-        <p>Loading settings...</p>
-      </div>
-    );
-  }
+  const save = async () => {
+    setStatus('');
+    if (!validate(value)) return;
+    await saveSettings({ witnessUrl: value.trim() });
+    setStatus('Settings saved');
+  };
 
   return (
-    <div className="options">
-      <header className="options__header">
-        <h1>TLSN Extension Settings</h1>
-      </header>
-
-      <main className="options__content">
-        <section className="options__section">
-          <h2>Logging</h2>
-          <p className="options__section-description">
-            Control the verbosity of console logs. Lower levels include all higher severity logs.
+    <section className="options-section" aria-labelledby={`${id}-h`}>
+      <h2 id={`${id}-h`}>Witness</h2>
+      <div className="field">
+        <label htmlFor={`${id}-url`}>Witness URL</label>
+        <input
+          id={`${id}-url`}
+          type="url"
+          inputMode="url"
+          autoComplete="off"
+          spellCheck={false}
+          value={value}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={`${id}-help${error ? ` ${id}-err` : ''}`}
+          onChange={(e) => setValue(e.target.value)}
+          onBlur={(e) => validate(e.target.value)}
+        />
+        <p id={`${id}-help`} className="field-helper">
+          The witness that checks and signs your captures, e.g. http://localhost:7047.
+        </p>
+        {error ? (
+          <p id={`${id}-err`} className="field-error" role="alert">
+            {error}
           </p>
-
-          <div className="options__log-levels">
-            {LOG_LEVEL_OPTIONS.map((option) => (
-              <label
-                key={option.level}
-                className={`options__radio-label ${
-                  currentLevel === option.level ? 'options__radio-label--selected' : ''
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="logLevel"
-                  value={option.level}
-                  checked={currentLevel === option.level}
-                  onChange={() => handleLevelChange(option.level)}
-                  disabled={saving}
-                  className="options__radio-input"
-                />
-                <span className="options__radio-custom"></span>
-                <span className="options__radio-text">
-                  <span className="options__radio-name">{option.name}</span>
-                  <span className="options__radio-description">{option.description}</span>
-                </span>
-              </label>
-            ))}
-          </div>
-
-          <div className="options__status">
-            {saving && <span className="options__saving">Saving...</span>}
-            {saveSuccess && <span className="options__success">Settings saved!</span>}
-            <span className="options__current">Current: {logLevelToName(currentLevel)}</span>
-          </div>
-        </section>
-      </main>
-
-      <footer className="options__footer">
-        <p>Changes are saved automatically and take effect immediately.</p>
-      </footer>
-    </div>
+        ) : null}
+      </div>
+      <div className="options-actions">
+        <button type="button" className="btn btn-primary" onClick={() => void save()}>
+          Save settings
+        </button>
+        <span className="options-status" role="status">
+          {status}
+        </span>
+      </div>
+    </section>
   );
-};
+}
 
-// Mount the app
+function LoggingSettings() {
+  const [level, setLevel] = useState<LogLevel | null>(null);
+
+  useEffect(() => {
+    getStoredLogLevel()
+      .then((l) => {
+        setLevel(l);
+        logger.init(l);
+      })
+      .catch(() => setLevel(LogLevel.WARN));
+  }, []);
+
+  const choose = async (l: LogLevel) => {
+    await setStoredLogLevel(l);
+    logger.setLevel(l);
+    setLevel(l);
+  };
+
+  return (
+    <section className="options-section" aria-labelledby="logging-h">
+      <h2 id="logging-h">Logging</h2>
+      <p className="field-helper">Console log detail for debugging. Changes apply at once.</p>
+      <fieldset className="radio-list">
+        <legend className="visually-hidden">Log level</legend>
+        {LOG_LEVELS.map((o) => (
+          <label key={o.level}>
+            <input
+              type="radio"
+              name="logLevel"
+              checked={level === o.level}
+              disabled={level === null}
+              onChange={() => void choose(o.level)}
+            />
+            <span>
+              <strong>{logLevelToName(o.level)}</strong> {o.description}
+            </span>
+          </label>
+        ))}
+      </fieldset>
+    </section>
+  );
+}
+
+function Options() {
+  return (
+    <main className="options">
+      <h1>Recall settings</h1>
+      <p className="options-lede">Saved in this browser only.</p>
+      <WitnessSettings />
+      <LoggingSettings />
+    </main>
+  );
+}
+
 const container = document.getElementById('root');
 if (container) {
-  const root = createRoot(container);
-  root.render(<Options />);
+  createRoot(container).render(<Options />);
 }

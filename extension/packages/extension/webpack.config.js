@@ -75,6 +75,16 @@ var options = {
         use: 'null-loader',
       },
       {
+        // Recall: viem (and its crypto deps) load secp256k1 with a dynamic import().
+        // A split chunk is fetched with a <script> tag, which a service worker cannot
+        // do, so signature recovery in the background would never resolve. Keep
+        // these imports in the importing chunk.
+        test: /[\\/]node_modules[\\/](viem|ox|@noble|@scure|abitype)[\\/]/,
+        parser: {
+          dynamicImportMode: 'eager',
+        },
+      },
+      {
         // Prevent webpack from splitting QuickJS dynamic imports into separate
         // chunks that fail to load in Chrome extension offscreen documents.
         test: /[\\/]node_modules[\\/](@jitl[\\/]quickjs|quickjs-emscripten)/,
@@ -213,11 +223,15 @@ var options = {
           force: true,
           transform: function (content, path) {
             // generates the manifest file using the package.json informations
+            const manifest = JSON.parse(content.toString());
+            // Recall: a dev build (test CA, devnet defaults) is labelled so it is never
+            // mistaken for the release build in chrome://extensions.
+            if (RECALL_DEV) manifest.name = `${manifest.name} (dev)`;
             return Buffer.from(
               JSON.stringify({
                 description: process.env.npm_package_description,
                 version: process.env.npm_package_version,
-                ...JSON.parse(content.toString()),
+                ...manifest,
               }),
             );
           },
