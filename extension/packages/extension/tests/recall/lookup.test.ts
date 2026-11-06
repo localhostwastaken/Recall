@@ -52,6 +52,15 @@ describe('same-page lookup (service worker side)', () => {
     expect(await latestVerifiedCapture(KEY)).toBeNull();
   });
 
+  it('the new capture signed time goes to the offscreen check (later claims are skipped there)', async () => {
+    sendMessage.mockResolvedValueOnce({ latest: null, truncated: false });
+    await latestVerifiedCapture(KEY, 1_793_800_000n);
+    expect(sendMessage.mock.calls[0][0]).toMatchObject({ want: 'latest', before: '1793800000' });
+    sendMessage.mockResolvedValueOnce({ latest: null, truncated: false });
+    await latestVerifiedCapture(KEY);
+    expect(sendMessage.mock.calls[1][0]).not.toHaveProperty('before');
+  });
+
   it('with no pinned witness nothing can verify, so nothing is asked', async () => {
     settings.pinnedWitnesses = [];
     expect(await latestVerifiedCapture(KEY)).toBeNull();

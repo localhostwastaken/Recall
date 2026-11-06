@@ -17,6 +17,7 @@ import {
 } from '@recall/net';
 import { createPublicClient, custom, erc20Abi, http, type Account, type Hex, type PublicClient } from 'viem';
 import { classifyBatch, type BatchVerdict } from './batch';
+import { errorText, shortErrorText } from '../errors';
 import { settle, type Settled } from './settle';
 import {
   connectWallet,
@@ -148,7 +149,12 @@ export async function readQuote(cfg: NetConfig, target: KeepAliveTarget, days: n
   };
 }
 
-export type Ends = { swarm: Date | null; arkiv: Date | null };
+export type Ends = {
+  swarm: Date | null;
+  arkiv: Date | null;
+  /** The viewed record's expiry block, exact (null when it could not be read). */
+  arkivBlock?: bigint | null;
+};
 
 const endsOf = (e: ArkivExpiry): Date | null => secondsFromNow(Number(e.expiresAtBlock - e.currentBlock) * e.blockSeconds);
 
@@ -165,11 +171,11 @@ export async function readEnds(cfg: NetConfig, target: KeepAliveTarget): Promise
           () => null,
         ),
     readArkivExpiry(arkivPublic(cfg), target.entityKeys.slice(0, 1)).then(
-      (e) => endsOf(e[0]!),
-      () => null,
+      (e) => ({ date: endsOf(e[0]!), block: e[0]!.expiresAtBlock as bigint | null }),
+      () => ({ date: null as Date | null, block: null as bigint | null }),
     ),
   ]);
-  return { swarm, arkiv };
+  return { swarm, arkiv: arkiv.date, arkivBlock: arkiv.block };
 }
 
 /** The date everything stays available until: the earlier end, once every needed end is known. */
@@ -322,7 +328,7 @@ export type Problem =
   | { kind: 'no-batch'; unsupported: boolean }
   | { kind: 'short'; need: bigint }
   /** The batch, its depth or its price is no longer what the preview showed; nothing was sent. */
-  | { kind: 'changed'; reason: BatchChange }
+  | { kind: 'changed'; reason: BatchChange; approved: boolean }
   /** An earlier try was sent and the chain could not say whether it landed, so it was not sent again. */
   | { kind: 'unsettled' }
   | { kind: 'cancelled'; approved: boolean }
@@ -338,14 +344,19 @@ const firstLine = (s: string) => s.split('\n')[0]!.trim();
  */
 export function problemOf(err: unknown, flags: { approved: boolean; sent: boolean }): Problem {
   if (err instanceof WalletError && err.kind === 'no-wallet') return { kind: 'no-wallet' };
-  if (err instanceof BatchChangedError) return { kind: 'changed', reason: err.reason };
+  if (err instanceof BatchChangedError) return { kind: 'changed', reason: err.reason, approved: flags.approved };
   if (isUserRejection(err)) return { kind: 'cancelled', approved: flags.approved };
-  const e = err as { shortMessage?: string; message?: string };
-  const technical = err instanceof Error ? err.message : String(err);
+  // Both texts go through the shared helpers, which remove the Arkiv access key (viem puts the request
+  // URL, and on the Rabdi host the key, into its messages).
+  const readable =
+    err instanceof Error || typeof (err as { message?: unknown } | null)?.message !== 'string'
+      ? err
+      : Object.assign(new Error((err as { message: string }).message), { shortMessage: (err as { shortMessage?: unknown }).shortMessage });
+  const message = shortErrorText(readable).trim();
   return {
     kind: 'failed',
-    message: firstLine(e.shortMessage ?? e.message ?? 'Something went wrong'),
-    technical,
+    message: firstLine(message || 'Something went wrong'),
+    technical: errorText(readable),
     approved: flags.approved,
     sent: flags.sent,
   };

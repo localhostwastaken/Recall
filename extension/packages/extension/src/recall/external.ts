@@ -14,6 +14,7 @@ import { stampAddress } from './stamp';
 import { addBatches, parseBatchIds } from './pool';
 import { discardPending, markPublished, readPending, type EntitySummary } from './pending';
 import { ensureOffscreen } from './offscreen';
+import { clearDiscardedCapture } from './job';
 import type { OffscreenReadEntity } from './arkivRead';
 
 export type ExternalRequest =
@@ -77,8 +78,12 @@ export async function handleExternal(raw: unknown): Promise<Answer> {
     case 'recall.markPublished':
       return markPublished(msg.captureId, msg.entityKey, readEntity);
 
-    case 'recall.discardPending':
-      return discardPending(msg.captureId);
+    case 'recall.discardPending': {
+      const res = await discardPending(msg.captureId);
+      // The popup must not keep offering a capture that is gone (best effort).
+      if ('ok' in res) await clearDiscardedCapture(msg.captureId as string).catch(() => undefined);
+      return res;
+    }
 
     default:
       return { error: 'unknown request' };

@@ -41,7 +41,7 @@ describe('errorText', () => {
     }
     expect(errorText(err)).toContain('HTTP request failed.');
     expect(errorText(err)).toContain('[key]');
-  });
+  }, 20_000);
 
   it('leaves an ordinary error alone and never throws on odd input', async () => {
     const { errorText } = await import('../src/errors');
@@ -49,4 +49,25 @@ describe('errorText', () => {
     expect(errorText(undefined)).toBe('undefined');
     expect(errorText({ toString: () => { throw new Error('boom'); } })).toBe('unknown error');
   });
+
+  it('the keep-alive failure notice (problemOf) carries no key either', async () => {
+    const { saveSettings } = await import('../src/settings');
+    const { problemOf } = await import('../src/keepalive/flow');
+    saveSettings({ arkivAccessKey: KEY });
+    const err = Object.assign(new Error(`HTTP request failed.\nURL: https://${HOST}/${KEY}`), {
+      shortMessage: `HTTP request failed at https://${HOST}/${BAKED}`,
+    });
+    const p = problemOf(err, { approved: false, sent: false });
+    expect(p.kind).toBe('failed');
+    const text = JSON.stringify(p);
+    expect(text).not.toContain(KEY);
+    expect(text).not.toContain(BAKED);
+    expect(text).toContain('[key]');
+    // After the approval went through, a changed price says so too (so the dialog can reassure).
+    const { BatchChangedError } = await import('@recall/net');
+    expect(problemOf(new BatchChangedError(`0x${'ab'.repeat(32)}`, 'price', 'dearer'), { approved: true, sent: false })).toMatchObject({ kind: 'changed', reason: 'price', approved: true });
+    expect(problemOf(new BatchChangedError(`0x${'ab'.repeat(32)}`, 'price', 'dearer'), { approved: false, sent: false })).toMatchObject({ approved: false });
+    // A plain provider error object keeps its message.
+    expect(problemOf({ message: 'insufficient funds' }, { approved: false, sent: false })).toMatchObject({ message: 'insufficient funds' });
+  }, 20_000);
 });

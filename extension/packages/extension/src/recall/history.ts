@@ -95,14 +95,23 @@ export type LatestCapture = { entityKey: Hex; bodySha256: Hex; signedAt: bigint 
  * verifies is the newest verified capture; junk that claims a later time only costs a try.
  * A newer candidate whose evidence could not be downloaded might be a real newer version,
  * so it also gives null (fail-safe: the capture is uploaded, never wrongly confirmed).
+ *
+ * `before` is the signed time of the capture being published. A record claiming that time
+ * or later cannot be an earlier capture of the same page (a verified record's claimed time
+ * is its real one), so it is skipped without a download and without using up a try: one
+ * junk record with a future time and a dead evidence reference must not disable the
+ * confirmations of the page.
  */
 export async function latestVerifiedCapture(
   rows: readonly Listed[],
   deps: HistoryDeps,
   maxTries = LATEST_MAX_TRIES,
+  before?: bigint,
 ): Promise<LatestCapture | null> {
   if (deps.pinned.length === 0) return null;
-  const captures = newestFirst(rows.filter((r): r is CaptureRow => r.kind === 'capture'));
+  const captures = newestFirst(
+    rows.filter((r): r is CaptureRow => r.kind === 'capture' && (before === undefined || r.signedAt < before)),
+  );
   for (const row of captures.slice(0, maxTries)) {
     const c = await verifyCapture(row, deps);
     if (c.state === 'unavailable') return null;

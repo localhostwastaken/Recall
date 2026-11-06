@@ -296,7 +296,8 @@ function DiscardDialog({
   onClosed,
 }: {
   dialog: RefObject<HTMLDialogElement | null>;
-  kind: 'capture' | 'confirmation';
+  /** 'unknown': the extension could not be asked, so what is pending is not known. */
+  kind: 'capture' | 'confirmation' | 'unknown';
   discard: Discard;
   onConfirm: () => void;
   onClosed: () => void;
@@ -304,12 +305,14 @@ function DiscardDialog({
   return (
     <dialog ref={dialog} className="approve-dialog" aria-labelledby="discard-title" onClose={onClosed}>
       <h2 id="discard-title" className="section-title">
-        {kind === 'capture' ? 'Discard this capture?' : 'Discard this confirmation?'}
+        {kind === 'confirmation' ? 'Discard this confirmation?' : 'Discard this capture?'}
       </h2>
       <p>
         {kind === 'capture'
           ? "The uploaded evidence stays on Swarm but won't be listed."
-          : 'Nothing was uploaded for it, and nothing will be published.'}
+          : kind === 'confirmation'
+            ? 'Nothing was uploaded for it, and nothing will be published.'
+            : 'It is removed from the extension, and nothing will be published.'}
       </p>
       {discard.state === 'error' ? (
         <p className="field-error" role="alert">
@@ -401,7 +404,7 @@ export function Approve({ captureId }: { captureId: string | null }) {
       setDiscard({ state: 'error', reason: `${sentence(reasonOf(e))}. The capture is still pending.` });
     }
   }, [captureId, extensionId]);
-  const discardDialog = (kind: 'capture' | 'confirmation') => (
+  const discardDialog = (kind: 'capture' | 'confirmation' | 'unknown') => (
     <DiscardDialog
       dialog={dialog}
       kind={kind}
@@ -502,7 +505,19 @@ export function Approve({ captureId }: { captureId: string | null }) {
   );
 
   const isConfirmation = load.phase === 'ready' && load.pending.kind === 'confirmation';
-  const title = isConfirmation ? 'Publish this confirmation' : 'Publish this capture';
+  // What the heading and the discard dialog call it. Only a confirmation reads an earlier capture,
+  // so the offline view is always one; an unreachable extension says nothing about it.
+  const itemKind: 'capture' | 'confirmation' | 'unknown' =
+    load.phase === 'ready'
+      ? load.pending.kind
+      : load.phase === 'refused'
+        ? (load.kind ?? 'capture')
+        : load.phase === 'offline'
+          ? 'confirmation'
+          : load.phase === 'unreachable'
+            ? 'unknown'
+            : 'capture';
+  const title = itemKind === 'confirmation' ? 'Publish this confirmation' : 'Publish this capture';
 
   if (load.phase === 'none') {
     return (
@@ -524,10 +539,20 @@ export function Approve({ captureId }: { captureId: string | null }) {
       </>
     );
   }
+  if (discard.state === 'done') {
+    return (
+      <>
+        <h1 tabIndex={-1}>{title}</h1>
+        <Notice kind="info" title="Capture discarded" focus>
+          The capture was removed from the extension. Nothing was published.
+        </Notice>
+      </>
+    );
+  }
   if (load.phase === 'unreachable' || load.phase === 'offline') {
     return (
       <>
-        <h1 tabIndex={-1}>Publish this capture</h1>
+        <h1 tabIndex={-1}>{title}</h1>
         <Notice
           kind="error"
           title={load.phase === 'unreachable' ? "Couldn't reach the Recall extension" : "Couldn't reach Arkiv or Swarm"}
@@ -540,6 +565,7 @@ export function Approve({ captureId }: { captureId: string | null }) {
               <a className="btn btn-ghost" href="#/settings">
                 Check settings
               </a>
+              {captureId ? discardButton : null}
             </>
           }
         >
@@ -548,16 +574,7 @@ export function Approve({ captureId }: { captureId: string | null }) {
             : 'The earlier capture could not be read, so the confirmation was not checked yet. Your capture is still pending in the extension.'}
           <TechnicalDetails text={load.message} />
         </Notice>
-      </>
-    );
-  }
-  if (discard.state === 'done') {
-    return (
-      <>
-        <h1 tabIndex={-1}>Publish this capture</h1>
-        <Notice kind="info" title="Capture discarded" focus>
-          The capture was removed from the extension. Nothing was published.
-        </Notice>
+        {discardDialog(itemKind)}
       </>
     );
   }
@@ -565,12 +582,12 @@ export function Approve({ captureId }: { captureId: string | null }) {
     // Not a dead end: the reason, and a way to drop the pending capture.
     return (
       <>
-        <h1 tabIndex={-1}>Publish this capture</h1>
+        <h1 tabIndex={-1}>{title}</h1>
         <Notice kind="error" title="This capture can't be published" focus actions={captureId ? discardButton : undefined}>
           {load.reason} Nothing was published.
         </Notice>
         {load.report ? <CheckSummary report={load.report} /> : null}
-        {discardDialog(load.kind ?? 'capture')}
+        {discardDialog(itemKind)}
       </>
     );
   }

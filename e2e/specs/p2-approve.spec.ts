@@ -257,6 +257,14 @@ async function openPopup(page: string, opts: { later?: boolean } = {}): Promise<
 
 const pendingOf = (captureId: string) => api<Record<string, unknown>>({ type: 'recall.getPending', captureId });
 
+/** The popup's stored result (the capture job state), or undefined once it was cleared. */
+const jobState = () =>
+  sw().evaluate(async () => {
+    const s = (globalThis as unknown as { chrome: { storage: { session: { get(k: string): Promise<Record<string, unknown>> } } } })
+      .chrome.storage.session;
+    return (await s.get('recall.capture'))['recall.capture'] as { upload?: { captureId?: string } } | undefined;
+  });
+
 test.describe('@p2 approve', () => {
   test.describe.configure({ mode: 'serial', timeout: 300_000 });
 
@@ -459,6 +467,34 @@ test.describe('@p2 approve', () => {
     // Gone from the extension; nothing was written to Arkiv.
     expect(await pendingOf(c.captureId)).toEqual({ error: expect.any(String) });
     expect((await rows(PAGE)).length).toBe(before);
+    // The popup is idle again: it no longer offers the approval tab of a capture that is gone.
+    expect(await jobState()).toBeUndefined();
+    await page.close();
+  });
+
+  test('discard works from the offline view (the earlier capture cannot be read)', async () => {
+    const r = await capture(PAGE);
+    const c = r.upload as Extract<Upload, { status: 'confirmation' }>;
+    expect(c.status).toBe('confirmation');
+    expect((await jobState())?.upload?.captureId).toBe(c.captureId);
+    const before = (await rows(PAGE)).length;
+    const { page } = await approvalTab(c.captureId);
+    // Arkiv reads fail, so the page cannot check the earlier capture a confirmation names.
+    const arkivOrigin = new URL(LOCAL.arkiv.rpcUrl).origin;
+    await page.route((u) => u.origin === arkivOrigin, (route) => route.abort());
+    await page.reload();
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Publish this confirmation');
+    await expect(page.getByText("Couldn't reach Arkiv or Swarm")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByRole('button', { name: 'Try again' })).toBeVisible();
+    await page.getByRole('button', { name: 'Discard capture' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Discard this confirmation?' });
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole('button', { name: 'Discard', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Capture discarded' })).toBeVisible();
+    expect(await pendingOf(c.captureId)).toEqual({ error: expect.any(String) });
+    expect(await jobState()).toBeUndefined();
+    await page.unroute((u) => u.origin === arkivOrigin).catch(() => undefined);
+    expect((await rows(PAGE)).length).toBe(before);
     await page.close();
   });
 
@@ -595,6 +631,21 @@ test.describe('@p2 approve', () => {
       // And a capture runs through it (fixture v2: the same bytes as the newest verified
       // capture, so it ends as a confirmation and uses no storage).
       await setVersion(2);
+      // A junk record claiming a later time than this capture, with an evidence reference that
+      // leads nowhere, is skipped without a download: it must not turn the confirmation into an upload.
+      await retrying(() =>
+        writeCapture(devArkiv, {
+          urlHash: hashOf(PAGE),
+          bodySha256: v1Body,
+          serverName: NOTICE_HOST,
+          witness: DEVNET_WITNESS_ADDRESS as Address,
+          httpStatus: 200,
+          batchId: `0x${'cd'.repeat(32)}` as Hex,
+          canonicalUrl: canonicalUrl(PAGE),
+          signedAt: BigInt(Math.floor(Date.now() / 1000)) + 3_600n,
+          evidenceRef: generatePrivateKey(),
+        }),
+      );
       const r = await capture(PAGE);
       expect([r.checks.A.status, r.checks.B.status, r.checks.C.status]).toEqual(['pass', 'pass', 'pass']);
       expect(r.upload?.status).toBe('confirmation');

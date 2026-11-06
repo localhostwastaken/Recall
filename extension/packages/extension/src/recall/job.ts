@@ -267,7 +267,7 @@ export const INLINE_EVIDENCE_MAX = 128 * 1024;
 async function sameAsLatest(evidence: EvidenceFile, checks: CheckSummary): Promise<{ captureKey: Hex; since: string } | null> {
   const f = checks.facts;
   if (!f || encodeEvidence(evidence).length > INLINE_EVIDENCE_MAX) return null;
-  const latest = await latestVerifiedCapture(urlHash(f.canonicalUrl));
+  const latest = await latestVerifiedCapture(urlHash(f.canonicalUrl), BigInt(f.signedAt));
   if (!latest || latest.bodySha256.toLowerCase() !== f.bodySha256.toLowerCase()) return null;
   if (BigInt(latest.signedAt) >= BigInt(f.signedAt)) return null;
   return { captureKey: latest.entityKey, since: latest.signedAt };
@@ -480,6 +480,21 @@ export function cancelCapture(): Promise<void> {
 export function dismissCapture(): Promise<void> {
   return update(async () => {
     if (!isLive(await readCaptureState())) await area().remove(CAPTURE_STATE_KEY);
+  });
+}
+
+/**
+ * The approval tab discarded the pending capture `captureId`: if the popup's result is that
+ * capture (uploaded, or an unchanged-page confirmation), clear it, so the popup is idle again
+ * instead of offering an approval tab with nothing left to publish. Anything else stays.
+ */
+export function clearDiscardedCapture(captureId: string): Promise<void> {
+  return update(async () => {
+    const s = await readCaptureState();
+    const u = s?.status === 'done' ? s.upload : undefined;
+    if ((u?.status === 'uploaded' || u?.status === 'confirmation') && u.captureId === captureId) {
+      await area().remove(CAPTURE_STATE_KEY);
+    }
   });
 }
 

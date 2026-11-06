@@ -2,6 +2,7 @@ import { ConfirmationSchema, arkivPublic, readArkivExpiry } from '@recall/net';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { hexToBytes, type Address, type Hex } from 'viem';
 import { KeepAlive } from '../components/KeepAlive';
+import { errorText } from '../errors';
 import { formatDay, formatUtc } from '../format';
 import { getNetConfig } from '../net';
 import { MonoValue } from '../ui/MonoValue';
@@ -61,7 +62,7 @@ export function ConfirmationRecord({ entityKey, fallback }: { entityKey: Hex; fa
         if (!alive) return;
         const name = (err as { name?: string })?.name;
         if (name === 'SchemaMismatchError' || name === 'NoEntityFoundError') setLoad({ phase: 'other' });
-        else setLoad({ phase: 'error', message: err instanceof Error ? err.message : String(err) });
+        else setLoad({ phase: 'error', message: errorText(err) });
       }
     })();
     return () => {

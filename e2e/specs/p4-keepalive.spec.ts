@@ -541,10 +541,22 @@ test('@p4 keepalive a price above the preview sends nothing, even with an allowa
   await tweakProvider(page);
   await setTweaks(page, { priceMul: 3 }); // the wallet's reads see a tripled price from the start
   const [n0, b0, t0] = [await gnosisNonce(KEEPALIVE_WALLET_ADDRESS), await xbzzOf(KEEPALIVE_WALLET_ADDRESS), await swarmSeconds(c.batchId)];
+  // Price reads are slowed from here, so the re-pricing that follows the change can be seen.
+  const priceSelector = toFunctionSelector('lastPrice()').slice(2);
+  let slowPrice = true;
+  await page.route(/localhost:9545/, async (route) => {
+    if (slowPrice && (route.request().postData() ?? '').includes(priceSelector)) await new Promise((r) => setTimeout(r, 1_500));
+    await route.continue();
+  });
 
   await start(dialog).click();
   await expect(dialog.getByText('The storage price changed.')).toBeVisible({ timeout: 60_000 });
   await expect(dialog).toContainText('nothing was sent for the top-up');
+  // No approval was needed here (the allowance was in place), so no approval note.
+  await expect(dialog).not.toContainText('The xBZZ approval was already confirmed');
+  // While the new price is read, the dialog says why it is waiting.
+  await expect(dialog.getByText('Getting a new price…')).toBeVisible({ timeout: 10_000 });
+  slowPrice = false;
   expect(await gnosisNonce(KEEPALIVE_WALLET_ADDRESS)).toBe(n0);
   expect(await xbzzOf(KEEPALIVE_WALLET_ADDRESS)).toBe(b0);
   expect(await swarmSeconds(c.batchId)).toBeLessThanOrEqual(t0);
@@ -570,6 +582,8 @@ test('@p4 keepalive a price rise while the approval is mined is caught before th
 
   await start(dialog).click();
   await expect(dialog.getByText('The storage price changed.')).toBeVisible({ timeout: 90_000 });
+  // The approval was mined before the price moved: the dialog says it stays and moves no funds.
+  await expect(dialog).toContainText('The xBZZ approval was already confirmed and stays; it moves no funds.');
   expect(await gnosisNonce(KEEPALIVE_WALLET_ADDRESS)).toBe(n0 + 1); // the approval, and nothing else
   expect(await xbzzOf(KEEPALIVE_WALLET_ADDRESS)).toBe(b0); // an approval moves no xBZZ
   expect(await swarmSeconds(c.batchId)).toBeLessThanOrEqual(t0);
@@ -601,6 +615,35 @@ test('@p4 keepalive a top-up whose receipt wait failed is not paid twice on retr
   expect(gained).toBeGreaterThan(7 * DAY - 3600);
   expect(gained).toBeLessThan(7 * DAY + 600); // once, not twice
   await expect(dialog).toContainText('Storage extended to ');
+});
+
+test('@p4 keepalive a reload while the top-up is pending does not pay again', async ({ page }) => {
+  test.setTimeout(300_000);
+  const c = await rig.publish();
+  await withWallet(page);
+  await setAllowance(KEEPALIVE_WALLET_KEY, bzz(1)); // the top-up is the only transaction
+  const dialog = await openDialog(page, c.entityKey);
+  await tweakProvider(page);
+  await setTweaks(page, { failReceipts: true, sends: 0 });
+  const [n0, t0] = [await gnosisNonce(KEEPALIVE_WALLET_ADDRESS), await swarmSeconds(c.batchId)];
+  const kept = () => page.evaluate(() => Object.keys(sessionStorage).filter((k) => k.startsWith('recall.keepalive.topup.')));
+
+  await start(dialog).click();
+  await expect(dialog.getByText('Step 1 may have gone through.')).toBeVisible({ timeout: 90_000 });
+  await expect.poll(() => gnosisNonce(KEEPALIVE_WALLET_ADDRESS), { timeout: 30_000 }).toBe(n0 + 1);
+  expect(await kept()).toHaveLength(1);
+
+  // The page is reloaded before the retry: the dialog starts over, but what was sent is remembered.
+  await page.reload();
+  const again = await openDialog(page, c.entityKey);
+  await start(again).click();
+  // It asks the chain first, finds the top-up mined, and goes on to step 2 without paying again.
+  await expect(again.getByRole('button', { name: 'Continue: step 2 of 2' })).toBeVisible({ timeout: 90_000 });
+  expect(await gnosisNonce(KEEPALIVE_WALLET_ADDRESS)).toBe(n0 + 1);
+  const gained = (await swarmSeconds(c.batchId)) - t0;
+  expect(gained).toBeGreaterThan(7 * DAY - 3600);
+  expect(gained).toBeLessThan(7 * DAY + 600); // once, not twice
+  expect(await kept()).toHaveLength(0); // a definite outcome: forgotten
 });
 
 test('@p4 keepalive an extension whose receipt wait failed is not sent twice on retry', async ({ page }) => {

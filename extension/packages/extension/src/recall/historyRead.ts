@@ -14,7 +14,8 @@ export const DOWNLOAD_TIMEOUT_MS = 8_000;
 
 /**
  * Service worker -> offscreen: the history of `urlHash`, checked against `pinned`.
- * - want 'latest': the newest verified capture (for the same-page check).
+ * - want 'latest': the newest verified capture signed before `before` (for the same-page
+ *   check; `before` is the new capture's signed time, a decimal string).
  * - want 'summary': counts of verified versions and confirmations (for the popup).
  */
 export type OffscreenHistory = {
@@ -23,6 +24,7 @@ export type OffscreenHistory = {
   urlHash: Hex;
   pinned: Address[];
   want: 'latest' | 'summary';
+  before?: string;
 };
 
 /** JSON-safe answers (bigints as decimal strings). */
@@ -70,7 +72,8 @@ export async function readHistory(
         ).bytes,
     };
     if (req.want === 'latest') {
-      const latest = await latestVerifiedCapture(rows, deps);
+      const before = req.before !== undefined && /^\d+$/.test(req.before) ? BigInt(req.before) : undefined;
+      const latest = await latestVerifiedCapture(rows, deps, undefined, before);
       return {
         latest: latest ? { ...latest, signedAt: latest.signedAt.toString(10) } : null,
         truncated,

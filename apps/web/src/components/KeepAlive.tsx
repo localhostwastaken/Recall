@@ -23,7 +23,8 @@ import {
   type Quote,
   type SwarmBaseline,
 } from '../keepalive/flow';
-import { datePassed } from '../keepalive/settle';
+import { clearSentTopUp, loadSentTopUp, saveSentTopUp } from '../keepalive/sent';
+import { datePassed, recordMoved } from '../keepalive/settle';
 import { getNetConfig } from '../net';
 import { MonoValue } from '../ui/MonoValue';
 import { Notice } from '../ui/Notice';
@@ -86,7 +87,9 @@ export function KeepAlive({
   /** Set once step 1 is confirmed by a re-read; `ends` is the batch's re-read end date. */
   const [stepOne, setStepOne] = useState<{ ends: Date | null; moved: boolean | null } | null>(null);
   /** Set when the price or the batch changed after the preview: nothing was sent for the top-up. */
-  const [changed, setChanged] = useState<BatchChange | null>(null);
+  const [changed, setChanged] = useState<{ reason: BatchChange; approved: boolean } | null>(null);
+  /** The price is being read again because something changed or Try again was pressed: say so. */
+  const [requoting, setRequoting] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [quote, setQuote] = useState<QuoteState>({ state: 'loading' });
   const [quoteTry, setQuoteTry] = useState(0);
@@ -116,8 +119,16 @@ export function KeepAlive({
     let live = true;
     setQuote({ state: 'loading' });
     readQuote(cfg, target, days).then(
-      (q) => live && setQuote({ state: 'ready', quote: q }),
-      () => live && setQuote({ state: 'error' }),
+      (q) => {
+        if (!live) return;
+        setQuote({ state: 'ready', quote: q });
+        setRequoting(false);
+      },
+      () => {
+        if (!live) return;
+        setQuote({ state: 'error' });
+        setRequoting(false);
+      },
     );
     return () => {
       live = false;
@@ -125,13 +136,36 @@ export function KeepAlive({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, days, quoteTry, target.batchId, keys, stepOne]);
 
+  // What step 1 has sent is also kept in sessionStorage (under the batch id), so a reload while the
+  // top-up is pending runs the settle check on the next try instead of paying again. Cleared as soon as
+  // the chain has given a definite answer.
+  const rememberStep1 = (v: Sent1, batchId: Hex) => {
+    sent1.current = v;
+    saveSentTopUp({
+      batchId,
+      ...(v.hash ? { hash: v.hash } : {}),
+      baseNormalised: v.normalisedBalance,
+      baseEndsAt: v.endsAt ? v.endsAt.getTime() : null,
+    });
+  };
+  const forgetStep1 = () => {
+    sent1.current = null;
+    if (target.batchId) clearSentTopUp(target.batchId);
+  };
+
+  // "Try again" on the price: it is read again, and the line says so.
+  const retryQuote = () => {
+    setRequoting(true);
+    setQuoteTry((n) => n + 1);
+  };
+
   const openDialog = () => {
     // Reopening keeps a step in flight, a confirmed step 1 and a problem as they are, so step 2 can
     // run alone. Only a finished keep-alive starts over.
     if (view.kind === 'done') {
       setView({ kind: 'form' });
       setStepOne(null);
-      sent1.current = null;
+      forgetStep1();
       sent2.current = null;
     }
     setLeaving(false);
@@ -149,20 +183,23 @@ export function KeepAlive({
     // Only what the chain says now counts, never what the top-up meant to do.
     const ends = await readEnds(cfg, active);
     void onChanged();
-    sent1.current = null;
+    forgetStep1();
     if (!live()) return;
     setStepOne({ ends: ends.swarm, moved: datePassed(baseEnds, ends.swarm) });
     setView({ kind: 'between' });
   };
 
   const finishStepTwo = async (live: () => boolean, nothingSent: boolean) => {
-    const baseEnds = sent2.current?.endsAt ?? null;
+    const base = sent2.current;
     const ends = await readEnds(cfg, active);
     void onChanged();
     sent2.current = null;
     if (!live()) return;
+    // The record is judged by its exact expiry block (any increase counts, which also holds next to the
+    // chain's maximum lifetime, where it can gain little), not by dates that block-time estimates blur.
+    const moved = nothingSent ? true : base ? recordMoved(base.before, ends.arkivBlock, days) : null;
     setNoticeSeq((n) => n + 1);
-    setView({ kind: 'done', ends, nothingSent, moved: nothingSent ? true : datePassed(baseEnds, ends.arkiv) });
+    setView({ kind: 'done', ends, nothingSent, moved });
   };
 
   const unsettled = (which: Which, live: () => boolean) => {
@@ -183,20 +220,36 @@ export function KeepAlive({
         const plan = swarmQuote?.kind === 'ok' ? swarmQuote : null;
         const batchId = target.batchId;
         if (!plan || !batchId) {
-          setView({ kind: 'form' });
+          // No price to pay against (it is being read, or could not be): read it again, and say so.
+          if (live()) {
+            setRequoting(true);
+            setQuote({ state: 'loading' });
+            setQuoteTry((n) => n + 1);
+            setView({ kind: 'form' });
+          }
           return;
         }
         // An earlier try that was sent but never reported back may have gone through: ask the chain
-        // before paying again.
+        // before paying again. After a reload it is read back from sessionStorage.
+        if (!sent1.current) {
+          const kept = loadSentTopUp(batchId);
+          if (kept) {
+            sent1.current = {
+              normalisedBalance: kept.baseNormalised,
+              endsAt: kept.baseEndsAt === null ? null : new Date(kept.baseEndsAt),
+              ...(kept.hash ? { hash: kept.hash } : {}),
+            };
+          }
+        }
         if (sent1.current) {
           setView({ kind: 'busy', which, checking: true });
           const said = await settleTopUp(cfg, batchId, { hash: sent1.current.hash, baseNormalised: sent1.current.normalisedBalance });
           if (said === 'unknown') return unsettled(which, live);
           if (said === 'landed') return await finishStepOne(live);
-          sent1.current = null; // it did not land: this is a fresh payment
+          forgetStep1(); // it did not land: this is a fresh payment
           setView({ kind: 'busy', which });
         }
-        sent1.current = await readSwarmBaseline(cfg, batchId);
+        rememberStep1(await readSwarmBaseline(cfg, batchId), batchId);
         const r = await stepTopUp(
           cfg,
           { batchId, days, depth: plan.depth, maxTotal: plan.total },
@@ -206,12 +259,12 @@ export function KeepAlive({
             },
             onSent: (hash) => {
               flags.sent = true;
-              if (sent1.current) sent1.current.hash = hash;
+              if (sent1.current) rememberStep1({ ...sent1.current, hash }, batchId);
             },
           },
         );
         if (r.kind !== 'done') {
-          sent1.current = null;
+          forgetStep1();
           if (live()) {
             setNoticeSeq((n) => n + 1);
             setView({
@@ -245,12 +298,16 @@ export function KeepAlive({
       const problem = problemOf(err, flags);
       // Only an unexplained failure may have left a sent step behind; a refusal or a stop before the
       // send means nothing is outstanding.
-      if (problem.kind !== 'failed') (which === 'swarm' ? sent1 : sent2).current = null;
+      if (problem.kind !== 'failed') {
+        if (which === 'swarm') forgetStep1();
+        else sent2.current = null;
+      }
       if (problem.kind === 'failed') void onChanged();
       if (!live()) return;
       if (problem.kind === 'changed') {
         // Not what the preview showed: nothing was sent for the top-up. Price it again and ask again.
-        setChanged(problem.reason);
+        setChanged({ reason: problem.reason, approved: problem.approved });
+        setRequoting(true);
         setQuote({ state: 'loading' });
         setQuoteTry((n) => n + 1);
         setView({ kind: 'form' });
@@ -382,11 +439,13 @@ export function KeepAlive({
             {showQuote ? (
               <div className="ka-quote" aria-live="polite">
                 {quote.state === 'loading' ? (
-                  <span className="muted">Reading the price and the current end dates…</span>
+                  <span className="muted">
+                    {requoting ? 'Getting a new price…' : 'Reading the price and the current end dates…'}
+                  </span>
                 ) : quote.state === 'error' ? (
                   <span>
                     Couldn&apos;t read the price or the current end dates.{' '}
-                    <button type="button" className="link-btn" onClick={() => setQuoteTry((n) => n + 1)}>
+                    <button type="button" className="link-btn" onClick={retryQuote}>
                       Try again
                     </button>
                   </span>
@@ -395,7 +454,7 @@ export function KeepAlive({
                     {quote.quote.swarm?.kind === 'unreadable' ? (
                       <span className="ka-quote-line">
                         Couldn&apos;t read the storage price.{' '}
-                        <button type="button" className="link-btn" onClick={() => setQuoteTry((n) => n + 1)}>
+                        <button type="button" className="link-btn" onClick={retryQuote}>
                           Try again
                         </button>
                       </span>
@@ -426,8 +485,9 @@ export function KeepAlive({
             ) : null}
 
             {changed !== null && view.kind === 'form' ? (
-              <Notice kind="warn" title={CHANGED_TITLE[changed]} focus>
-                It changed after you saw the price, so nothing was sent for the top-up. The new price is shown above.
+              <Notice kind="warn" title={CHANGED_TITLE[changed.reason]} focus>
+                It changed after you saw the price, so nothing was sent for the top-up.
+                {changed.approved ? ' The xBZZ approval was already confirmed and stays; it moves no funds.' : ''} The new price is shown above.
               </Notice>
             ) : null}
 

@@ -163,8 +163,10 @@ export type LatestCapture = NonNullable<LatestAnswer['latest']>;
 /**
  * The newest verified capture of `h`, or null when there is none, the listing was cut short
  * (spam can hide records: R10), or it could not be read in time. Null means "upload".
+ * `before` (the new capture's signed time, Unix seconds) leaves out records claiming that
+ * time or later, so they cost no download.
  */
-export async function latestVerifiedCapture(h: Hex): Promise<LatestCapture | null> {
+export async function latestVerifiedCapture(h: Hex, before?: bigint): Promise<LatestCapture | null> {
   const s = await loadSettings();
   if (s.pinnedWitnesses.length === 0) return null;
   const msg: OffscreenHistory = {
@@ -173,6 +175,7 @@ export async function latestVerifiedCapture(h: Hex): Promise<LatestCapture | nul
     urlHash: h,
     pinned: s.pinnedWitnesses,
     want: 'latest',
+    ...(before !== undefined ? { before: before.toString(10) } : {}),
   };
   try {
     const res = await withTimeout(

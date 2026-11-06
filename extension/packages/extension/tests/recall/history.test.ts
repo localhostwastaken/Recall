@@ -204,6 +204,29 @@ describe('earlier captures', () => {
     expect(await latestVerifiedCapture(w.rows, w.deps, 5)).not.toBeNull();
   });
 
+  it('latest verified capture: records claiming a time at or after the new capture are skipped without a download', async () => {
+    const w = world();
+    const k1 = await w.capture(await evidence('<p>v1</p>', T0));
+    // A junk record claiming the future with a dead evidence ref used to make the check give up.
+    w.junk(bodyHash('<p>v1</p>'), T0 + 5_000n);
+    w.junk(bodyHash('<p>v1</p>'), T0 + 100n);
+    expect(await latestVerifiedCapture(w.rows, w.deps)).toBeNull();
+    w.downloads.length = 0;
+    const latest = await latestVerifiedCapture(w.rows, w.deps, undefined, T0 + 100n);
+    expect(latest?.entityKey).toBe(k1);
+    // Only the older, real record was downloaded: nothing at or after the new signedAt.
+    expect(w.downloads).toHaveLength(1);
+  });
+
+  it('records skipped for their claimed time do not use up the download tries', async () => {
+    const w = world();
+    const k1 = await w.capture(await evidence('<p>v1</p>', T0));
+    for (let i = 1; i <= 5; i++) w.junk(bodyHash('<p>v1</p>'), T0 + 1_000n + BigInt(i));
+    const latest = await latestVerifiedCapture(w.rows, w.deps, 2, T0 + 500n);
+    expect(latest?.entityKey).toBe(k1);
+    expect(w.downloads).toHaveLength(1);
+  });
+
   it('no candidates without a pinned witness (nothing could verify)', async () => {
     const w = world();
     await w.capture(await evidence('<p>v1</p>', T0));

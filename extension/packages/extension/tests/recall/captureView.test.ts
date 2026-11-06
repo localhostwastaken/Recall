@@ -232,16 +232,17 @@ describe('capture view copy', () => {
   });
 
   it('steps: the same-page check, the upload and the approval tab when they can happen', () => {
-    // Pinned witness, no storage: a confirmation can still follow.
+    // Pinned witness, no storage: the job ends "not uploaded" (or in a confirmation straight
+    // from the same-page check), so the approval tab is not listed.
     const pinned = jobSteps({ step: 2, lookupPlanned: true });
     expect(pinned.labels).toEqual([
       'Connecting to the witness',
       'Proving the page with the witness',
       'Checking the witness signature',
       'Looking for earlier captures',
-      'Opening the approval tab',
     ]);
     expect(pinned.current).toBe(1);
+    expect(jobSteps({ step: 3, lookupPlanned: true, lookup: true }).labels).not.toContain('Opening the approval tab');
     // During the same-page check the current step is the lookup, not the signature check.
     expect(jobSteps({ step: 3, lookupPlanned: true, lookup: true, uploadPlanned: true })).toEqual({
       labels: [

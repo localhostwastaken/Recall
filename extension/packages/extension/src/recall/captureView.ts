@@ -35,7 +35,7 @@ export const LOOKUP_STEP = 'Looking for earlier captures';
 /** Shown when the pool has a batch to upload with. */
 export const UPLOAD_STEP = 'Uploading evidence to Swarm';
 
-/** The last step whenever a record can follow (an upload or a confirmation). */
+/** The last step of a job that uploads (a record follows the upload). */
 export const APPROVE_STEP = 'Opening the approval tab';
 
 /** The popup's footer helper while a capture can start (design brief 4.1). */
@@ -67,14 +67,15 @@ export type StepPlan = {
 
 /**
  * The steps a job shows (design brief 4.1) and which one is current: the capture's three,
- * then the same-page check when witnesses are pinned, the upload when storage is there, and
- * opening the approval tab whenever a record can follow.
+ * then the same-page check when witnesses are pinned, then the upload and opening the
+ * approval tab when storage is there. With no upload planned the job ends "not uploaded"
+ * (or in a confirmation, straight from the same-page check), so the approval tab is never a
+ * step of its own and is not listed.
  */
 export function jobSteps(p: StepPlan): { labels: string[]; current: number } {
   const labels: string[] = [...CAPTURE_STEPS];
   if (p.lookupPlanned || p.lookup) labels.push(LOOKUP_STEP);
-  if (p.uploadPlanned || p.step > 3) labels.push(UPLOAD_STEP);
-  if (labels.length > CAPTURE_STEPS.length) labels.push(APPROVE_STEP);
+  if (p.uploadPlanned || p.step > 3) labels.push(UPLOAD_STEP, APPROVE_STEP);
   const label =
     p.step >= 4 ? UPLOAD_STEP : p.step === 3 && p.lookup ? LOOKUP_STEP : CAPTURE_STEPS[Math.max(0, p.step - 1)];
   return { labels, current: Math.max(0, labels.indexOf(label)) };

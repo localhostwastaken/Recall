@@ -248,11 +248,12 @@ test.describe('@p1 capture', () => {
       const button = popup.getByRole('button', { name: 'Capture this page' });
       await expect(button).toBeEnabled();
       await button.click();
-      // A pinned witness adds the same-page check and the approval tab to the steps.
-      await expect(popup.getByText('Step 2 of 5')).toBeVisible({ timeout: 30_000 });
+      // A pinned witness adds the same-page check to the steps; with no storage there is no
+      // upload, so no approval tab step either.
+      await expect(popup.getByText('Step 2 of 4')).toBeVisible({ timeout: 30_000 });
       await expect(popup.getByText('Proving the page with the witness')).toBeVisible();
       await expect(popup.getByText('Looking for earlier captures')).toBeVisible();
-      await expect(popup.getByText('Opening the approval tab')).toBeVisible();
+      await expect(popup.getByText('Opening the approval tab')).toHaveCount(0);
       await expect(popup.getByText(/elapsed · usually 15–30 s/)).toBeVisible();
 
       await expect(popup.getByRole('heading', { name: 'Checks passed' })).toBeVisible({ timeout: 120_000 });

@@ -1,3 +1,4 @@
+import { planExtension, type ArkivExpiry } from '@recall/net';
 import type { Hex } from 'viem';
 
 /**
@@ -63,8 +64,29 @@ export async function settle(io: SettleIo): Promise<Settled> {
   return io.hash ? 'unknown' : 'not-landed';
 }
 
-/** True when `after` is a real step later than `before` (an hour: a top-up or an extension adds at least a day). */
+/** A real top-up adds at least a day, so a smaller difference is only clock and block-time drift. */
+const MIN_GAIN_MS = 3_600_000;
+
+/**
+ * Whether the storage end date `after` is later than `before`: by more than an hour, since a real
+ * top-up adds days and two readings of the same date can differ by seconds (block-time estimates, the
+ * clock moving between reads, a node that keeps answering with the first balance it gave). null when
+ * either date is unknown. (The record's end is judged by its exact expiry block: see `recordMoved`.)
+ */
 export function datePassed(before: Date | null, after: Date | null): boolean | null {
   if (before === null || after === null) return null;
-  return after.getTime() > before.getTime() + 3_600_000;
+  return after.getTime() > before.getTime() + MIN_GAIN_MS;
+}
+
+/**
+ * Whether the viewed record's expiry block rose after step 2. Blocks are exact, so any increase counts,
+ * however small (next to the chain's maximum lifetime a real extension can gain little). A record that
+ * was already at, or within a day of, the maximum is left as it is and nothing was expected to move
+ * (true). null when the block could not be read.
+ */
+export function recordMoved(before: ArkivExpiry[], afterBlock: bigint | null | undefined, days: number): boolean | null {
+  const mine = before[0];
+  if (!mine || afterBlock === null || afterBlock === undefined) return null;
+  if (!planExtension({ ...mine, days }).extends) return true;
+  return afterBlock > mine.expiresAtBlock;
 }

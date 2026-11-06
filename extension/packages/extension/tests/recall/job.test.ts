@@ -30,7 +30,7 @@ const session = new Map<string, unknown>();
   remove: async (k: string) => void session.delete(k),
 };
 
-const { startCapture, captureForTest, readCaptureState } = await import('../../src/recall/job');
+const { startCapture, captureForTest, readCaptureState, clearDiscardedCapture } = await import('../../src/recall/job');
 const sendMessage = chrome.runtime.sendMessage as unknown as ReturnType<typeof vi.fn>;
 const offscreenCaptures = () =>
   sendMessage.mock.calls.filter(([m]) => (m as { type?: string })?.type === 'recall.offscreen.capture');
@@ -76,5 +76,44 @@ describe('starting a capture (fail closed on the witness)', () => {
     expect(offscreenCaptures()[0][0]).toMatchObject({ witnessUrl: 'https://tunnel.example' });
     // Witnesses are pinned, so the steps include the same-page check.
     expect(await readCaptureState()).toMatchObject({ status: 'running', step: 1, lookupPlanned: true });
+  });
+});
+
+describe('a capture discarded in the approval tab', () => {
+  const KEY = 'recall.capture';
+  const done = (upload: Record<string, unknown>) => ({
+    id: 'job1',
+    url: 'https://notice.recall.test/notice',
+    startedAt: 1,
+    status: 'done',
+    finishedAt: 2,
+    evidence: {},
+    checks: {},
+    upload,
+  });
+  const CID = 'a'.repeat(32);
+
+  it('clears the popup result of that capture, so the popup goes back to idle', async () => {
+    session.set(KEY, done({ status: 'uploaded', captureId: CID, evidenceRef: '0x01', batchId: '0x02' }));
+    await clearDiscardedCapture(CID);
+    expect(session.has(KEY)).toBe(false);
+    session.set(KEY, done({ status: 'confirmation', captureId: CID, captureKey: '0x03', since: '1' }));
+    await clearDiscardedCapture(CID);
+    expect(session.has(KEY)).toBe(false);
+  });
+
+  it('leaves any other result alone (another capture, a running job, a failure)', async () => {
+    const other = done({ status: 'uploaded', captureId: 'b'.repeat(32), evidenceRef: '0x01', batchId: '0x02' });
+    session.set(KEY, other);
+    await clearDiscardedCapture(CID);
+    expect(session.get(KEY)).toEqual(other);
+    const failed = done({ status: 'failed', error: 'x' });
+    session.set(KEY, failed);
+    await clearDiscardedCapture(CID);
+    expect(session.get(KEY)).toEqual(failed);
+    const running = { id: 'job2', url: 'u', startedAt: Date.now(), status: 'running', step: 1 };
+    session.set(KEY, running);
+    await clearDiscardedCapture(CID);
+    expect(session.get(KEY)).toEqual(running);
   });
 });
