@@ -143,17 +143,21 @@ export async function pickUsable(
 export function failureKind(err: unknown): 'bucket_full' | 'rejected' | 'transient' {
   const text = err instanceof Error ? err.message : String(err);
   if (/bucket is full/i.test(text)) return 'bucket_full';
-  const e = err as { status?: unknown; response?: { status?: unknown } } | null;
-  const status =
-    typeof e?.status === 'number'
-      ? e.status
-      : typeof e?.response?.status === 'number'
-        ? e.response.status
-        : undefined;
+  const status = httpStatus(err);
   if (status !== undefined && status >= 400 && status < 500 && status !== 408 && status !== 429) {
     return 'rejected';
   }
   return 'transient';
+}
+
+/** The HTTP status an upload error carries, if any. */
+export function httpStatus(err: unknown): number | undefined {
+  const e = err as { status?: unknown; response?: { status?: unknown } } | null;
+  return typeof e?.status === 'number'
+    ? e.status
+    : typeof e?.response?.status === 'number'
+      ? e.response.status
+      : undefined;
 }
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e)).split('\n')[0];
@@ -206,8 +210,12 @@ async function stampAndUpload(
   }
 }
 
-function defaultTtlReader(gnosisRpcUrl: string): (batchId: Hex) => Promise<bigint | null> {
-  const pub = createPublicClient({ transport: http(gnosisRpcUrl) }) as PublicClient;
+/**
+ * Reads a batch's lifetime on Gnosis through `pub`. `lastPrice` is read once and kept.
+ * Resolves null for a batch that has expired (the contract reverts) and rejects on any
+ * RPC error, which pickUsable counts as "could not be read", never as dead.
+ */
+export function ttlReader(pub: PublicClient): (batchId: Hex) => Promise<bigint | null> {
   let price: Promise<bigint> | undefined;
   return async (batchId) => {
     price ??= lastPrice(pub).catch((err) => {
@@ -218,13 +226,26 @@ function defaultTtlReader(gnosisRpcUrl: string): (batchId: Hex) => Promise<bigin
   };
 }
 
+const defaultTtlReader = (gnosisRpcUrl: string) =>
+  ttlReader(createPublicClient({ transport: http(gnosisRpcUrl) }) as PublicClient);
+
+/**
+ * In one attempt, at most this many batches may be tried after the node refused the
+ * upload (a 4xx). Chunk addresses depend only on the evidence, so every batch is stamped
+ * in the same buckets: a refusal that is not about the batch (wrong URL, 401, 403, 404,
+ * 413) would otherwise take a slot on every batch in the pool.
+ */
+const MAX_REJECTED_BATCHES = 2;
+
 /**
  * One upload attempt. Works through the candidates in queue order: re-checks each one's
  * lifetime on Gnosis, waits (up to `req.waitMs`) for a fresh one to become usable, then
- * stamps and uploads `encodeEvidence(req.evidence)`. A batch-tied failure (bucket full,
- * the node refusing the batch) falls through to the next candidate at once; a passing
- * failure ends the attempt and sends that batch to the back of the queue. Every batch
- * touched is reported in `updates`. Never throws.
+ * stamps and uploads `encodeEvidence(req.evidence)`. A full bucket falls through to the
+ * next candidate at once (that batch is dead). A node refusal (4xx) demotes the batch and
+ * tries one more; a second refusal ends the attempt, with the status when both were the
+ * same: that is the node, not the batches, and no batch is marked dead for it. A passing
+ * failure (network, 5xx, timeout) ends the attempt and sends that batch to the back of the
+ * queue. Every batch touched is reported in `updates`. Never throws.
  */
 export async function uploadEvidence(
   req: OffscreenUpload,
@@ -262,10 +283,11 @@ export async function uploadEvidence(
   const ttls: TtlCache = new Map();
   let queue = [...req.candidates];
   let lastError = '';
+  const refusals: number[] = [];
   while (queue.length > 0) {
     if (signal?.aborted) return fail('failed', 'upload cancelled');
     const { pick, dead, unreadable } = await pickUsable(queue, req.uploadUrl, d, ttls);
-    for (const x of dead) note({ batchId: x.batchId, dead: x.reason });
+    for (const x of dead) note({ batchId: x.batchId, dead: x.reason, deadReason: 'expired' });
     queue = queue.filter((c) => !dead.some((x) => x.batchId === c.batchId));
     if (!pick) {
       if (queue.length === 0) break;
@@ -298,11 +320,25 @@ export async function uploadEvidence(
     queue = queue.filter((c) => c.batchId !== pick.batchId);
     const kind = failureKind(r.error);
     if (kind === 'bucket_full') {
-      note({ batchId: pick.batchId, dead: 'a bucket of this batch is full' });
+      note({
+        batchId: pick.batchId,
+        dead: 'a bucket of this batch is full',
+        deadReason: 'bucket_full',
+      });
       continue;
     }
     note({ batchId: pick.batchId, demote: true });
-    if (kind === 'rejected') continue;
+    if (kind === 'rejected') {
+      refusals.push(httpStatus(r.error) ?? 0);
+      if (refusals.length < MAX_REJECTED_BATCHES) continue;
+      const [first, second] = refusals;
+      return fail(
+        'failed',
+        first === second
+          ? `the storage node refused the upload (status ${first})`
+          : `the storage node refused the upload (status ${first}, then ${second})`,
+      );
+    }
     return fail('failed', `the upload to Swarm failed: ${lastError}`);
   }
 

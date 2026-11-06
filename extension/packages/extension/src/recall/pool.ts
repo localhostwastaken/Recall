@@ -8,6 +8,7 @@ import { formatTtl, lastPrice, postageAbi, ttlSeconds } from './batchChain';
 import {
   MIN_BATCH_TTL_SECONDS,
   POOL_KEY,
+  deadReasonOf,
   mergeStamperStates,
   parsePool,
   poolView,
@@ -75,7 +76,9 @@ export function batchProblem(info: BatchInfo | null, stampAddress: Address): str
 
 /**
  * Reads a batch (null when it does not exist). The lifetime is read only for a batch
- * owned by `stampAddress`: others are refused on the owner alone.
+ * owned by `stampAddress`: others are refused on the owner alone. Throws on an RPC error
+ * (only a contract revert counts as "expired"), so a caller never mistakes a node that did
+ * not answer for an on-chain verdict.
  */
 export async function readBatch(
   pub: PublicClient,
@@ -136,11 +139,19 @@ const savePool = (pool: PoolBatch[], area: PoolArea) => area.set({ [POOL_KEY]: p
 
 export type AddResult = { pool: PoolView[]; rejected: { batchId: Hex; reason: string }[] };
 
+/** A dead batch that ran out of time may come back after a top-up; a full bucket never does. */
+const revivable = (b: PoolBatch): boolean =>
+  !!b.dead && !b.used && (b.deadReason ?? deadReasonOf(b.dead)) === 'expired';
+
 /**
  * Adds batches after checking each on Gnosis: it exists, its owner is the stamp key,
  * depth 17 or 18 with bucket depth 16, immutable, and paid for at least two more days.
- * Batches already in the pool are kept as they are. Not-yet-usable batches are accepted
- * (marked). Calls run one at a time; `lastPrice` is read at most once per call.
+ * Batches already in the pool are kept as they are, with one exception: a batch that died
+ * for lack of time (`expired`) is checked again and comes back if it has 2 days or more
+ * left (the user topped it up). It stays dead if it does not, or if the chain cannot be
+ * read, and is not reported as refused. A batch whose bucket is full never comes back.
+ * Not-yet-usable batches are accepted (marked). Calls run one at a time; `lastPrice` is
+ * read at most once per call.
  */
 export function addBatches(
   ids: Hex[],
@@ -149,17 +160,22 @@ export function addBatches(
   return oneAdd(async () => {
     const area = deps.area ?? defaultArea();
     const now = deps.now ?? Date.now();
-    const known = new Set((await loadPool(area)).map((b) => b.batchId));
-    const fresh = ids.filter((id) => !known.has(id));
+    const stored = new Map((await loadPool(area)).map((b) => [b.batchId, b]));
+    const fresh = ids.filter((id) => !stored.has(id));
+    const revive = ids.filter((id) => {
+      const b = stored.get(id);
+      return !!b && revivable(b);
+    });
     let pricePromise: Promise<bigint> | undefined;
     const price = () => (pricePromise ??= lastPrice(deps.pub));
     const checked = await Promise.all(
-      fresh.map(async (batchId) => {
+      [...fresh, ...revive].map(async (batchId) => {
         const hit = refused.get(batchId);
         if (hit && hit.until > now) return { batchId, info: null, problem: hit.reason };
         try {
           const info = await readBatch(deps.pub, batchId, deps.stampAddress, price);
           const problem = batchProblem(info, deps.stampAddress);
+          // Only an on-chain verdict is remembered, never a read error (caught below).
           if (problem && info)
             refused.set(batchId, { reason: problem, until: now + REFUSED_CACHE_MS });
           return { batchId, info, problem };
@@ -173,12 +189,23 @@ export function addBatches(
     return serial(async () => {
       const pool = await loadPool(area);
       const rejected: AddResult['rejected'] = [];
+      let changed = false;
       for (const c of checked) {
+        const known = pool.find((b) => b.batchId === c.batchId);
+        if (known) {
+          // Already in the pool: only a revival can change it, and a failed one is no refusal.
+          if (!c.problem && c.info && revivable(known)) {
+            delete known.dead;
+            delete known.deadReason;
+            known.usable = block >= c.info.startBlock + USABLE_AFTER_BLOCKS;
+            changed = true;
+          }
+          continue;
+        }
         if (c.problem || !c.info) {
           rejected.push({ batchId: c.batchId, reason: c.problem ?? 'unknown batch' });
           continue;
         }
-        if (pool.some((b) => b.batchId === c.batchId)) continue;
         pool.push({
           batchId: c.batchId,
           depth: c.info.depth,
@@ -187,8 +214,9 @@ export function addBatches(
           startBlock: c.info.startBlock.toString(10),
           addedAt: now,
         });
+        changed = true;
       }
-      if (checked.length > rejected.length) await savePool(pool, area);
+      if (changed) await savePool(pool, area);
       return { pool: poolView(pool), rejected };
     });
   });
@@ -216,6 +244,7 @@ export function applyBatchUpdates(
       }
       if (u.dead) {
         b.dead = u.dead;
+        b.deadReason = u.deadReason ?? deadReasonOf(u.dead);
         b.usable = false;
       }
       if (u.demote) b.queuedAt = now;

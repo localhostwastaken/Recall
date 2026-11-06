@@ -1,6 +1,12 @@
 // PostageStamp reads on Gnosis (viem only), shared by the service worker (adding batches)
 // and the offscreen document (re-checking a batch right before it takes an upload).
-import { parseAbi, type Hex, type PublicClient } from 'viem';
+import {
+  BaseError,
+  ContractFunctionRevertedError,
+  parseAbi,
+  type Hex,
+  type PublicClient,
+} from 'viem';
 import { POSTAGE_STAMP } from '@recall/net/postage';
 
 /** Gnosis block time in seconds (17280 blocks a day). */
@@ -19,21 +25,45 @@ export async function lastPrice(pub: PublicClient): Promise<bigint> {
   );
 }
 
-/** Seconds of storage the batch has left at `price`; null when expired, unknown or unpaid. */
+/**
+ * True only when the contract itself reverted (PostageStamp reverts for a batch that does
+ * not exist or has expired). Transport and node trouble (HTTP 429, timeouts, no network,
+ * an internal node error) is not a revert and says nothing about the batch. viem also files
+ * a bare -32603 "internal error" under reverts, so a revert needs its return data or its
+ * own word for it.
+ */
+export function isContractRevert(err: unknown): boolean {
+  if (!(err instanceof BaseError)) return false;
+  const hit = err.walk(
+    (e) => e instanceof ContractFunctionRevertedError,
+  ) as ContractFunctionRevertedError | null;
+  if (!hit) return false;
+  return (!!hit.raw && hit.raw !== '0x') || /revert/i.test(hit.reason ?? '');
+}
+
+/**
+ * Seconds of storage the batch has left at `price`; null when expired, unknown or unpaid.
+ * Throws on any RPC error: only a contract revert means "expired", so the caller can tell
+ * a dead batch from a node that did not answer.
+ */
 export async function ttlSeconds(
   pub: PublicClient,
   batchId: Hex,
   price: bigint,
 ): Promise<bigint | null> {
   // remainingBalance reverts for unknown and expired batches.
-  const remaining = await pub
-    .readContract({
+  let remaining: bigint;
+  try {
+    remaining = await pub.readContract({
       address: POSTAGE_STAMP,
       abi: postageAbi,
       functionName: 'remainingBalance',
       args: [batchId],
-    })
-    .catch(() => 0n);
+    });
+  } catch (err) {
+    if (!isContractRevert(err)) throw err;
+    remaining = 0n;
+  }
   if (remaining <= 0n || price <= 0n) return null;
   const ttl = (remaining / price) * BLOCK_SECONDS;
   return ttl > 0n ? ttl : null;

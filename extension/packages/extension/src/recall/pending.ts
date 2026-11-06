@@ -63,7 +63,13 @@ export async function savePending(
   area: PendingArea = defaultArea(),
 ): Promise<void> {
   await area.set({ [PENDING_PREFIX + rec.captureId]: JSON.stringify(rec) });
-  await prunePending(area, rec.createdAt);
+  // The record is saved. Tidying old ones is best effort: its failure must not make the
+  // caller think the new record was lost.
+  try {
+    await prunePending(area, rec.createdAt);
+  } catch (err) {
+    console.error('[recall] pruning old pending records failed', err);
+  }
 }
 
 /**

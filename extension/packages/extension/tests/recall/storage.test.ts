@@ -1,6 +1,17 @@
 // Stamp key, batch pool, pending records and the upload that follows a capture.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Address, Hex, PublicClient } from 'viem';
+import {
+  HttpRequestError,
+  RpcRequestError,
+  createPublicClient,
+  custom,
+  decodeFunctionData,
+  encodeErrorResult,
+  encodeFunctionResult,
+  type Address,
+  type Hex,
+  type PublicClient,
+} from 'viem';
 import { generatePrivateKey, privateKeyToAddress } from 'viem/accounts';
 import { encodeEvidence, type EvidenceFile } from '@recall/evidence';
 import { STAMP_KEY, stampAddress, stampKey, type KeyArea } from '../../src/recall/stamp';
@@ -35,7 +46,8 @@ import {
   type PendingRecord,
 } from '../../src/recall/pending';
 import { canonicalEvidence, uploadGate, type OffscreenUpload } from '../../src/recall/uploadParts';
-import { failureKind, pickUsable, uploadEvidence } from '../../src/recall/swarmUpload';
+import { postageAbi, ttlSeconds } from '../../src/recall/batchChain';
+import { failureKind, pickUsable, ttlReader, uploadEvidence } from '../../src/recall/swarmUpload';
 import {
   CAPTURE_HELPER,
   captureHelper,
@@ -317,6 +329,128 @@ describe('batch ids and checks', () => {
     expect((area.data[POOL_KEY] as PoolBatch[]).map((b) => b.batchId)).toEqual([id(1), id(2)]);
   });
 
+  it('does not remember a refusal that came from an RPC error, and never calls it expired', async () => {
+    const pub = fakeChain({ [id(1)]: [stamp, 17, 16, true] });
+    const read = pub.readContract.getMockImplementation()!;
+    let rpcDown = true;
+    pub.readContract.mockImplementation(async (a: { functionName: string; args?: Hex[] }) => {
+      if (rpcDown && a.functionName === 'remainingBalance') {
+        throw new HttpRequestError({ url: 'http://rpc', status: 429 });
+      }
+      return read(a);
+    });
+    const area = memArea();
+    const r = await addBatches([id(1)], { pub, stampAddress: stamp, area, now: 1_000 });
+    expect(r.pool).toEqual([]);
+    expect(r.rejected).toEqual([
+      { batchId: id(1), reason: expect.stringMatching(/could not read the batch on Gnosis/) },
+    ]);
+    expect(r.rejected[0].reason).not.toMatch(/expired/);
+    // The RPC is back a second later: the batch is read again (no 2-minute refusal) and joins.
+    rpcDown = false;
+    const again = await addBatches([id(1)], { pub, stampAddress: stamp, area, now: 2_000 });
+    expect(again.rejected).toEqual([]);
+    expect(again.pool.map((b) => b.batchId)).toEqual([id(1)]);
+  });
+
+  describe('a dead batch that is added again (R32)', () => {
+    const dead = (n: number, over: Partial<PoolBatch> = {}) =>
+      batch(n, { usable: false, dead: 'batch expired', deadReason: 'expired', ...over });
+
+    it('revives an expired batch once its lifetime is 2 days or more again', async () => {
+      const area = memArea({
+        [POOL_KEY]: [
+          dead(1),
+          // Stored by an older build: no deadReason, but the text says it ran out of time.
+          {
+            ...dead(2),
+            deadReason: undefined,
+            dead: 'only 1 d 0 h of storage left; needs at least 2 days',
+          },
+          dead(3, { used: true }),
+        ],
+      });
+      // Topped up: id(1) and id(2) have 5.8 days again (price 100 per block, 10_000_000).
+      const pub = fakeChain(
+        {
+          [id(1)]: [stamp, 17, 16, true],
+          [id(2)]: [stamp, 17, 16, true],
+          [id(3)]: [stamp, 17, 16, true],
+        },
+        500n,
+      );
+      const r = await addBatches([id(1), id(2), id(3)], { pub, stampAddress: stamp, area });
+      expect(r.rejected).toEqual([]);
+      const pool = area.data[POOL_KEY] as PoolBatch[];
+      expect(pool[0]).not.toHaveProperty('dead');
+      expect(pool[0]).not.toHaveProperty('deadReason');
+      expect(pool[0].usable).toBe(true); // 150 + 12 <= 500
+      expect(pool[1]).not.toHaveProperty('dead');
+      expect(pool[2]).toMatchObject({ used: true, dead: 'batch expired' }); // used: left alone
+      expect(unusedBatches(pool).map((b) => b.batchId)).toEqual([id(1), id(2)]);
+      expect(r.pool.map((b) => [b.batchId, b.dead])).toEqual([
+        [id(1), undefined],
+        [id(2), undefined],
+        [id(3), true],
+      ]);
+    });
+
+    it('keeps a batch dead while its lifetime is still short, without refusing it', async () => {
+      const area = memArea({ [POOL_KEY]: [dead(1)] });
+      const pub = fakeChain({ [id(1)]: [stamp, 17, 16, true, 1_000_000n] }); // 13 h
+      const r = await addBatches([id(1)], { pub, stampAddress: stamp, area });
+      expect(r.rejected).toEqual([]);
+      expect(r.pool).toEqual([{ batchId: id(1), used: false, usable: false, dead: true }]);
+      expect((area.data[POOL_KEY] as PoolBatch[])[0]).toMatchObject({ dead: 'batch expired' });
+    });
+
+    it('keeps it dead when the RPC fails, and never revives a full bucket', async () => {
+      const full = dead(2, { dead: 'a bucket of this batch is full', deadReason: 'bucket_full' });
+      // Stored by an older build: only the text says why.
+      const legacyFull = { ...full, batchId: id(3), deadReason: undefined };
+      const area = memArea({ [POOL_KEY]: [dead(1), full, legacyFull] });
+      const pub = fakeChain({
+        [id(1)]: [stamp, 17, 16, true],
+        [id(2)]: [stamp, 17, 16, true],
+        [id(3)]: [stamp, 17, 16, true],
+      });
+      const read = pub.readContract.getMockImplementation()!;
+      pub.readContract.mockImplementation(async (a: { functionName: string; args?: Hex[] }) => {
+        if (a.functionName === 'remainingBalance' && a.args![0] === id(1)) {
+          throw new HttpRequestError({ url: 'http://rpc', status: 503 });
+        }
+        return read(a);
+      });
+      const r = await addBatches([id(1), id(2), id(3)], { pub, stampAddress: stamp, area });
+      expect(r.rejected).toEqual([]);
+      expect(r.pool.map((b) => b.dead)).toEqual([true, true, true]);
+      const reads = pub.readContract.mock.calls.map(([a]) => (a as { args?: Hex[] }).args?.[0]);
+      expect(reads).not.toContain(id(2));
+      expect(reads).not.toContain(id(3));
+    });
+
+    it('records why an upload killed a batch, and reads old entries by their text', async () => {
+      const area = memArea({ [POOL_KEY]: [batch(1), batch(2)] });
+      await applyBatchUpdates(
+        [
+          { batchId: id(1), dead: 'batch expired', deadReason: 'expired' },
+          { batchId: id(2), dead: 'a bucket of this batch is full', deadReason: 'bucket_full' },
+        ],
+        area,
+      );
+      expect((area.data[POOL_KEY] as PoolBatch[]).map((b) => b.deadReason)).toEqual([
+        'expired',
+        'bucket_full',
+      ]);
+      const legacy = parsePool([
+        batch(3, { dead: 'batch expired' }),
+        batch(4, { dead: 'a bucket of this batch is full' }),
+        batch(5),
+      ]);
+      expect(legacy.map((b) => b.deadReason)).toEqual(['expired', 'bucket_full', undefined]);
+    });
+  });
+
   it('stores upload results: merged heights, used, dead, demoted', async () => {
     const area = memArea({
       [POOL_KEY]: [batch(1, { stamper: [[5, 2]] }), batch(2), batch(3)],
@@ -388,6 +522,23 @@ describe('pending records', () => {
     expect(Object.keys(back!.evidence.statement)).toEqual(Object.keys(evidence.statement));
     for (const wrong of [cid.toUpperCase(), cid.slice(1), `${cid}0`, newCaptureId(), 7, null]) {
       expect(await readPending(wrong, area)).toBeNull();
+    }
+  });
+
+  it('still saves the record when pruning old ones fails', async () => {
+    const area = memArea();
+    area.get.mockImplementation(async (k: string | null) => {
+      if (k === null) throw new Error('storage busy');
+      return k in area.data ? { [k]: area.data[k] } : {};
+    });
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const cid = newCaptureId();
+      await expect(savePending(rec(cid, 1), area)).resolves.toBeUndefined();
+      expect(await readPending(cid, area)).toEqual(rec(cid, 1));
+      expect(logged).toHaveBeenCalled();
+    } finally {
+      logged.mockRestore();
     }
   });
 
@@ -589,6 +740,116 @@ describe('offscreen upload', () => {
     expect(flaky).toEqual({ pick: null, dead: [], unreadable: 2 });
   });
 
+  describe('reading a lifetime from Gnosis (R32)', () => {
+    const revertData = encodeErrorResult({
+      abi: [{ type: 'error', name: 'Error', inputs: [{ type: 'string', name: 'message' }] }],
+      errorName: 'Error',
+      args: ['batch does not exist or expired'],
+    });
+    const rpcError = (code: number, message: string, data?: Hex) =>
+      new RpcRequestError({ body: {}, url: 'http://rpc', error: { code, message, data } });
+    /** What an RPC node answers when PostageStamp.remainingBalance reverts. */
+    const revert = () =>
+      rpcError(3, 'execution reverted: batch does not exist or expired', revertData);
+    /** A real viem client over a canned provider; `remaining` returns the balance or throws. */
+    const clientWith = (remaining: () => bigint) =>
+      createPublicClient({
+        transport: custom(
+          {
+            async request({ method, params }) {
+              if (method !== 'eth_call') throw new Error(method);
+              const { functionName } = decodeFunctionData({
+                abi: postageAbi,
+                data: (params as [{ data: Hex }])[0].data,
+              });
+              if (functionName === 'lastPrice') {
+                return encodeFunctionResult({ abi: postageAbi, functionName, result: 100n });
+              }
+              if (functionName === 'remainingBalance') {
+                return encodeFunctionResult({ abi: postageAbi, functionName, result: remaining() });
+              }
+              throw new Error(functionName);
+            },
+          },
+          { retryCount: 0 },
+        ),
+      }) as PublicClient;
+    const failing = (err: unknown) =>
+      clientWith(() => {
+        throw err;
+      });
+    /** Transport and node trouble: none of it says anything about the batch. */
+    const transportErrors: [string, unknown][] = [
+      ['rate limited', new HttpRequestError({ url: 'http://rpc', status: 429 })],
+      ['a server error', new HttpRequestError({ url: 'http://rpc', status: 503 })],
+      ['no network', new TypeError('fetch failed')],
+      ['a limit error', rpcError(-32005, 'rate limit exceeded')],
+      ['an internal error without data', rpcError(-32603, 'Internal error')],
+    ];
+
+    it('reads the lifetime, and maps only a contract revert to "no lifetime"', async () => {
+      expect(
+        await ttlSeconds(
+          clientWith(() => 1_000_000n),
+          id(1),
+          100n,
+        ),
+      ).toBe(10_000n * 5n);
+      expect(await ttlSeconds(failing(revert()), id(1), 100n)).toBeNull();
+      expect(
+        await ttlSeconds(
+          clientWith(() => 0n),
+          id(1),
+          100n,
+        ),
+      ).toBeNull();
+      for (const [name, err] of transportErrors) {
+        await expect(ttlSeconds(failing(err), id(1), 100n), name).rejects.toThrow();
+      }
+    });
+
+    it('kills a batch on a revert, but an RPC error is only "unreadable" (not dead)', async () => {
+      const at = (pub: PublicClient) =>
+        pickUsable(candidates, 'http://gw', {
+          fetch: hidden,
+          blockNumber: async () => 500n,
+          batchTtl: ttlReader(pub),
+        });
+      expect(await at(failing(revert()))).toEqual({
+        pick: null,
+        dead: [
+          { batchId: id(1), reason: 'batch expired' },
+          { batchId: id(2), reason: 'batch expired' },
+        ],
+        unreadable: 0,
+      });
+      for (const [name, err] of transportErrors) {
+        expect(await at(failing(err)), name).toEqual({ pick: null, dead: [], unreadable: 2 });
+      }
+      expect((await at(clientWith(() => 10_000_000n))).pick).toEqual(candidates[0]);
+    });
+
+    it('ends an attempt on RPC errors without marking any batch dead', async () => {
+      let t = 0;
+      const upload = vi.fn();
+      const r = await uploadEvidence(req, {
+        fetch: hidden,
+        blockNumber: async () => 500n,
+        batchTtl: ttlReader(failing(new HttpRequestError({ url: 'http://rpc', status: 429 }))),
+        upload,
+        sleep: async (ms) => void (t += ms),
+        now: () => t,
+      });
+      expect(r).toEqual({
+        ok: false,
+        code: 'failed',
+        error: expect.stringMatching(/could not be checked on Gnosis/),
+        updates: [],
+      });
+      expect(upload).not.toHaveBeenCalled();
+    });
+  });
+
   it('classifies failures by what they say about the batch', () => {
     expect(failureKind(new Error('Stamper#stamp bucket is full'))).toBe('bucket_full');
     expect(failureKind(Object.assign(new Error('Bad Request'), { status: 400 }))).toBe('rejected');
@@ -643,8 +904,8 @@ describe('offscreen upload', () => {
       code: 'no_storage',
       error: expect.any(String),
       updates: [
-        { batchId: id(1), dead: 'batch expired' },
-        { batchId: id(2), dead: 'batch expired' },
+        { batchId: id(1), dead: 'batch expired', deadReason: 'expired' },
+        { batchId: id(2), dead: 'batch expired', deadReason: 'expired' },
       ],
     });
   });
@@ -685,7 +946,12 @@ describe('offscreen upload', () => {
     );
     expect(r).toMatchObject({ ok: true, batchId: id(2) });
     expect(r.updates).toEqual([
-      { batchId: id(1), stamper: [[9, 2]], dead: 'a bucket of this batch is full' },
+      {
+        batchId: id(1),
+        stamper: [[9, 2]],
+        dead: 'a bucket of this batch is full',
+        deadReason: 'bucket_full',
+      },
       { batchId: id(2), stamper: [[9, 1]], used: true },
     ]);
     expect(upload).toHaveBeenCalledTimes(2);
@@ -709,6 +975,60 @@ describe('offscreen upload', () => {
     });
     expect(t.updates).toEqual([{ batchId: id(1), stamper: [], demote: true }]);
     expect(down).toHaveBeenCalledTimes(1); // the next batch waits for the next attempt
+  });
+
+  describe('a node that refuses the upload on every batch (R32)', () => {
+    const four = [1, 2, 3, 4].map((n) => ({ batchId: id(n), depth: 17, startBlock: '10' }));
+    /** Stamps the first chunk (taking a slot), then the node answers `statuses[call]`. */
+    const refusing = (...statuses: (number | 'ok')[]) => {
+      let call = 0;
+      return vi.fn(async (_b: Uint8Array, o: { stamper: { stamp(a: Uint8Array): unknown } }) => {
+        o.stamper.stamp(addrIn(9));
+        const status = statuses[Math.min(call++, statuses.length - 1)];
+        if (status === 'ok') return `0x${'ef'.repeat(32)}` as Hex;
+        throw Object.assign(new Error(`HTTP ${status}`), { status });
+      });
+    };
+
+    it('stops after two batches when both get the same status, and kills none', async () => {
+      const upload = refusing(403);
+      const r = await uploadEvidence({ ...req, candidates: four }, { ...ready, upload });
+      expect(r).toMatchObject({
+        ok: false,
+        code: 'failed',
+        error: expect.stringMatching(/storage node refused the upload \(status 403\)/i),
+      });
+      expect(upload).toHaveBeenCalledTimes(2);
+      expect(r.updates).toEqual([
+        { batchId: id(1), stamper: [[9, 1]], demote: true },
+        { batchId: id(2), stamper: [[9, 1]], demote: true },
+      ]);
+      expect(r.updates.some((u) => 'dead' in u)).toBe(false);
+    });
+
+    it('also stops after two batches when the statuses differ', async () => {
+      const upload = refusing(402, 413);
+      const r = await uploadEvidence({ ...req, candidates: four }, { ...ready, upload });
+      expect(r).toMatchObject({ ok: false, code: 'failed' });
+      expect(r.ok ? '' : r.error).toMatch(/402/);
+      expect(r.ok ? '' : r.error).toMatch(/413/);
+      expect(upload).toHaveBeenCalledTimes(2);
+      expect(r.updates.map((u) => [u.batchId, u.demote, 'dead' in u])).toEqual([
+        [id(1), true, false],
+        [id(2), true, false],
+      ]);
+    });
+
+    it('still succeeds on the second batch after one refusal', async () => {
+      const upload = refusing(402, 'ok');
+      const r = await uploadEvidence({ ...req, candidates: four }, { ...ready, upload });
+      expect(r).toMatchObject({ ok: true, batchId: id(2) });
+      expect(upload).toHaveBeenCalledTimes(2);
+      expect(r.updates).toEqual([
+        { batchId: id(1), stamper: [[9, 1]], demote: true },
+        { batchId: id(2), stamper: [[9, 1]], used: true },
+      ]);
+    });
   });
 
   describe('a timed-out upload', () => {

@@ -34,9 +34,21 @@ export type PoolBatch = {
   queuedAt?: number;
   /** Why the batch can no longer take uploads (expired, too little time left, bucket full). */
   dead?: string;
+  /** Why it is dead; only an `expired` batch can come back (see addBatches). */
+  deadReason?: DeadReason;
   /** Bucket heights after the last upload with this batch, if any. */
   stamper?: StamperState;
 };
+
+/**
+ * Why a batch is dead: `expired` (no time left, or less than MIN_BATCH_TTL_SECONDS; a
+ * top-up can bring it back) or `bucket_full` (a Stamper bucket ran out of slots; final).
+ */
+export type DeadReason = 'expired' | 'bucket_full';
+
+/** Entries stored before `deadReason` existed: the text says which kind of death it was. */
+export const deadReasonOf = (dead: string): DeadReason =>
+  /bucket/i.test(dead) ? 'bucket_full' : 'expired';
 
 /** What the app sees of the pool (JSON-safe). */
 export type PoolView = { batchId: Hex; used: boolean; usable: boolean; dead?: true };
@@ -72,6 +84,7 @@ export type BatchUpdate = {
   used?: true;
   /** The batch can take no more uploads, and why. */
   dead?: string;
+  deadReason?: DeadReason;
   /** A passing failure: try other batches first next time. */
   demote?: true;
 };
@@ -106,7 +119,15 @@ export function parsePool(stored: unknown): PoolBatch[] {
       startBlock: b.startBlock,
       addedAt: typeof b.addedAt === 'number' ? b.addedAt : 0,
       ...(typeof b.queuedAt === 'number' ? { queuedAt: b.queuedAt } : {}),
-      ...(typeof b.dead === 'string' && b.dead ? { dead: b.dead } : {}),
+      ...(typeof b.dead === 'string' && b.dead
+        ? {
+            dead: b.dead,
+            deadReason:
+              b.deadReason === 'expired' || b.deadReason === 'bucket_full'
+                ? b.deadReason
+                : deadReasonOf(b.dead),
+          }
+        : {}),
       ...(isState(b.stamper) ? { stamper: b.stamper } : {}),
     });
   }
