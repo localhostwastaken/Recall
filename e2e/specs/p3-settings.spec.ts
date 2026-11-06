@@ -532,12 +532,9 @@ test.describe('@p3 settings web', () => {
     await expect(page.getByRole('button', { name: 'Reset all', exact: true })).toBeDisabled();
     await expect(page.getByRole('button', { name: 'Add witness' })).toBeDisabled();
     await expect(page.getByLabel('Witness address (0x…)')).toBeDisabled();
-    // The theme is the one thing that still works there.
-    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
-    await page.getByRole('radio', { name: 'Light' }).check();
+    // The app is light only: the planted "dark" changes nothing, and there is no theme chooser.
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
-    const afterTheme = JSON.parse((await stored(page)) ?? '{}') as Record<string, unknown>;
-    expect(afterTheme).toEqual({ theme: 'light' }); // the planted values were written away
+    await expect(page.getByRole('radio', { name: 'Dark' })).toHaveCount(0);
 
     // The same evidence on the app's own address, with the witness really added by the person:
     // it passes, and says that the trust came from this browser (never worded like the built-in one).
@@ -652,14 +649,12 @@ test.describe('@p3 settings web', () => {
     await page.getByLabel('Witness address (0x…)').fill(OTHER.toLowerCase());
     await page.getByLabel('Label', { exact: true }).fill('Neighbour');
     await page.getByRole('button', { name: 'Add witness' }).click();
-    await page.getByRole('radio', { name: 'Dark' }).check();
-    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
     await saveButton(page).click();
     await expect(page.getByText('Settings saved')).toBeVisible();
 
     // Only what differs from the defaults is stored (and it is plain JSON in this browser only).
     const raw = JSON.parse((await stored(page))!) as Record<string, unknown>;
-    expect(Object.keys(raw).sort()).toEqual(['extensionId', 'gnosisRpcUrl', 'pinnedWitnesses', 'theme', 'uploadUrl']);
+    expect(Object.keys(raw).sort()).toEqual(['extensionId', 'gnosisRpcUrl', 'pinnedWitnesses', 'uploadUrl']);
     expect(raw.pinnedWitnesses).toEqual([
       { address: DEVNET_WITNESS_ADDRESS, label: 'Recall Witness' },
       { address: OTHER, label: 'Neighbour' },
@@ -674,10 +669,10 @@ test.describe('@p3 settings web', () => {
     const list = page.getByRole('list', { name: 'Trusted witnesses' });
     await expect(list).toContainText('Recall Witness (default)');
     await expect(list).toContainText('Neighbour');
-    await expect(page.getByRole('radio', { name: 'Dark' })).toBeChecked();
-    await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
-    // The header's theme menu follows the saved theme.
-    await expect(page.locator('.theme-menu select')).toHaveValue('dark');
+    // Light only: no theme chooser on the page or in the header.
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+    await expect(page.getByRole('radio', { name: 'Dark' })).toHaveCount(0);
+    await expect(page.locator('.theme-menu')).toHaveCount(0);
 
     // "Reset to default" on one field, then save: that field is no longer stored.
     await page.getByRole('button', { name: 'Reset to default for Gnosis RPC URL' }).click();
@@ -745,13 +740,12 @@ test.describe('@p3 settings web', () => {
     await expect(resetAll).toBeFocused();
     await expect(page.getByLabel('Gnosis RPC URL')).toHaveValue('https://gnosis.example.org');
 
-    // Confirming resets everything: values, theme and the stored copy.
+    // Confirming resets everything: the values and the stored copy.
     await resetAll.click();
     await dialog.getByRole('button', { name: 'Reset all' }).click();
     await expect(dialog).toBeHidden();
     await expect(page.getByLabel('Gnosis RPC URL')).toHaveValue(LOCAL.gnosis.rpcUrl);
-    await expect(page.getByRole('radio', { name: 'System' })).toBeChecked();
-    await expect(page.locator('html')).not.toHaveAttribute('data-theme', /.+/);
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
     expect(await stored(page)).toBeNull();
   });
 

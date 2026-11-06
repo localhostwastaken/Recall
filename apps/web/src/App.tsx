@@ -9,7 +9,6 @@ import { Home } from './routes/Home';
 import { Settings } from './routes/Settings';
 import { Storage } from './routes/Storage';
 import { Timeline } from './routes/Timeline';
-import { applyTheme, saveSettings, useSettings, type Theme } from './settings';
 import { ToastProvider } from './ui/Toast';
 
 function NotFound({ path }: { path: string }) {
@@ -46,26 +45,14 @@ function Page({ route }: { route: Route }) {
   }
 }
 
-function ThemeMenu() {
-  // Follows the saved theme, so picking it on the Settings page updates this menu too.
-  const { theme } = useSettings();
+/** The brand mark: a filed page with a citrus corner, in the accent colour. Decorative. */
+function ArchiveMark() {
   return (
-    <label className="theme-menu">
-      <span className="visually-hidden">Theme</span>
-      <select
-        className="input input-compact"
-        value={theme}
-        onChange={(e) => {
-          const next = e.target.value as Theme;
-          saveSettings({ theme: next });
-          applyTheme(next);
-        }}
-      >
-        <option value="system">System</option>
-        <option value="light">Light</option>
-        <option value="dark">Dark</option>
-      </select>
-    </label>
+    <svg className="archive-mark" viewBox="0 0 32 36" width="26" height="30" aria-hidden="true" fill="none">
+      <path d="M6 3h17l6 6v24H6V3Z" fill="var(--accent-soft)" stroke="currentColor" strokeWidth="2" />
+      <path d="M23 3v7h6" fill="var(--citrus)" />
+      <path d="M23 3v7h6M11 15h13M11 20h13M11 25h8M2 8v26" stroke="currentColor" strokeWidth="2" />
+    </svg>
   );
 }
 
@@ -106,6 +93,7 @@ export function App() {
       <header className="site-header">
         <div className="container header-row">
           <a className="brand" href="#/">
+            <ArchiveMark />
             Recall
           </a>
           <nav aria-label="Main" className="nav">
@@ -114,7 +102,6 @@ export function App() {
           </nav>
           <div className="header-tools">
             <WalletChip />
-            <ThemeMenu />
           </div>
         </div>
       </header>

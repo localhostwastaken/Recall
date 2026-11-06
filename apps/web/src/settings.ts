@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import type { Address } from 'viem';
 import { DEFAULT_WITNESS_LABEL, baseNetConfig, defaultWitnessAddress } from './defaults';
 
+/** Kept for settings saved by older versions; the app itself is light only (see applyTheme). */
 export type Theme = 'system' | 'light' | 'dark';
 export type PinnedWitness = { address: Address; label: string };
 
@@ -307,9 +308,11 @@ export function useSettings(): Settings {
   return s;
 }
 
-/** `data-theme` on <html>; "system" removes it so the media query decides. */
-export function applyTheme(theme: Theme): void {
-  const root = document.documentElement;
-  if (theme === 'system') root.removeAttribute('data-theme');
-  else root.setAttribute('data-theme', theme);
+/**
+ * The app is light only (the bright archive). A theme saved by an older version ("dark",
+ * "system") is still read and kept, so stored settings stay compatible, but it no longer
+ * changes the look: <html> always carries `data-theme="light"`.
+ */
+export function applyTheme(_theme?: Theme): void {
+  document.documentElement.setAttribute('data-theme', 'light');
 }

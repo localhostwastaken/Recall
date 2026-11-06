@@ -7,7 +7,6 @@ import {
   ADDRESS_ERROR,
   DUPLICATE_WITNESS_ERROR,
   MAX_LABEL,
-  applyTheme,
   cleanLabel,
   defaultSettings,
   fieldError,
@@ -22,12 +21,10 @@ import {
   type FieldKey,
   type PinnedWitness,
   type Settings as SettingsValues,
-  type Theme,
 } from '../settings';
 import { Field } from '../ui/Field';
 import { MonoValue } from '../ui/MonoValue';
 import { Notice } from '../ui/Notice';
-import { Segmented } from '../ui/Segmented';
 import { useToast } from '../ui/Toast';
 import { displayName } from '../witness';
 import './settings.css';
@@ -35,7 +32,7 @@ import './settings.css';
 // §4.8 Settings. Everything on the page is a draft until [Save settings]; "Saved in this browser
 // only." Every value the rest of the app uses (pins for check C, gateways, RPCs, the extension
 // ID) is read from the saved settings (net.ts, witness.ts, ext.ts), so a saved change applies on
-// the next page view. The theme is the exception: it applies and is saved as soon as it is picked.
+// the next page view.
 
 type Draft = {
   witnesses: PinnedWitness[];
@@ -287,7 +284,6 @@ export function Settings() {
   const doReset = () => {
     setConfirmReset(false);
     const s = resetSettings();
-    applyTheme(s.theme);
     setDraft(draftFrom(s));
     setErrors({});
     setNewAddress('');
@@ -296,11 +292,6 @@ export function Settings() {
     setNotStored(false);
     toast('Settings reset to the defaults');
     void checkExtension(s.extensionId);
-  };
-
-  const pickTheme = (theme: Theme) => {
-    saveSettingsChecked({ theme });
-    applyTheme(theme);
   };
 
   const label = displayName;
@@ -516,21 +507,6 @@ export function Settings() {
 
         </fieldset>
 
-        <section className="settings-section" aria-labelledby="appearance-heading">
-          <h2 id="appearance-heading" className="section-title">
-            Appearance
-          </h2>
-          <Segmented<Theme>
-            legend="Theme"
-            value={saved.theme}
-            options={[
-              { value: 'system', label: 'System' },
-              { value: 'light', label: 'Light' },
-              { value: 'dark', label: 'Dark' },
-            ]}
-            onChange={pickTheme}
-          />
-        </section>
       </div>
 
       {notStored ? (
