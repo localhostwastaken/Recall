@@ -2,7 +2,8 @@
 // chunk pushes in flight. Chunks are still stamped one at a time and in order (each just before
 // its push), so the stamp heights and the bucket accounting are exactly those of a serial upload;
 // only the network pushes overlap. Each chunk is stamped ONCE: a retry re-sends the same stamp,
-// so it never takes another slot of the batch. Mirrors the publish script's live push policy
+// so it never takes another slot of the batch (across attempts too: the stamper handed in by
+// swarmUpload.ts returns a chunk's earlier stamp, see stampCache.ts). Mirrors the publish script's live push policy
 // (packages/net/src/hosting.ts): Retry-After is a floor for the wait, and a 4xx before the first
 // accepted chunk is retried (a fresh batch the node does not know yet).
 import { ChunkSplitter, Utils } from '@ethersphere/bee-js';

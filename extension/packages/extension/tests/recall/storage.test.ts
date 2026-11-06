@@ -52,6 +52,8 @@ import {
 import { canonicalEvidence, uploadGate, type OffscreenUpload } from '../../src/recall/uploadParts';
 import { postageAbi, ttlSeconds } from '../../src/recall/batchChain';
 import { failureKind, pickUsable, ttlReader, uploadEvidence } from '../../src/recall/swarmUpload';
+import { Utils } from '@ethersphere/bee-js';
+import { resetStampCache } from '../../src/recall/stampCache';
 import {
   CAPTURE_HELPER,
   jobSteps,
@@ -702,6 +704,7 @@ describe('upload gate', () => {
 });
 
 describe('offscreen upload', () => {
+  beforeEach(() => resetStampCache());
   const candidates = [
     { batchId: id(1), depth: 17, startBlock: '100' },
     { batchId: id(2), depth: 17, startBlock: '90' },
@@ -1025,6 +1028,31 @@ describe('offscreen upload', () => {
       { batchId: id(2), stamper: [[9, 1]], used: true },
     ]);
     expect(upload).toHaveBeenCalledTimes(2);
+  });
+
+  it('a retried attempt re-sends the stamps of chunks it stamped before (each slot used once)', async () => {
+    // depth 17: bucket 9 holds 2 stamps. Attempt 1 stamps two chunks there, then the node fails.
+    const stamps: string[][] = [];
+    const run = (fail: boolean) =>
+      vi.fn(async (_b: Uint8Array, o: { stamper: { stamp(a: Uint8Array): unknown } }) => {
+        const got = [addrIn(9, 0), addrIn(9, 1)].map((a) =>
+          Utils.convertEnvelopeToMarshaledStamp(o.stamper.stamp(a) as never).toHex(),
+        );
+        stamps.push(got);
+        if (fail) throw new Error('fetch failed');
+        return `0x${'ab'.repeat(32)}` as Hex;
+      });
+    const one = await uploadEvidence({ ...req, candidates: [candidates[0]] }, { ...ready, upload: run(true) });
+    expect(one).toMatchObject({ ok: false, code: 'failed' });
+    expect(one.updates[0]).toMatchObject({ batchId: id(1), stamper: [[9, 2]] });
+    // Attempt 2 resumes from the stored state (bucket 9 full): the same chunks get the same stamps.
+    const two = await uploadEvidence(
+      { ...req, candidates: [{ ...candidates[0], stamper: [[9, 2]] }] },
+      { ...ready, upload: run(false) },
+    );
+    expect(two).toMatchObject({ ok: true, batchId: id(1) });
+    expect(two.updates).toEqual([{ batchId: id(1), stamper: [[9, 2]], used: true }]);
+    expect(stamps[1]).toEqual(stamps[0]);
   });
 
   it('falls through on a node refusal, but stops on a passing failure (both demoted)', async () => {

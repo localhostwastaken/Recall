@@ -15,6 +15,7 @@ import {
 } from './poolState';
 import { getAttachment } from './attachmentStore';
 import { uploadStampedConcurrent } from './chunkPush';
+import { cachingStamper } from './stampCache';
 import { sha256Hex } from './gitRepo';
 import {
   ATTACHMENT_UPLOAD_TIMEOUT_MS,
@@ -187,7 +188,8 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e)).spl
 /**
  * Stamps and uploads with one batch. The Stamper is wrapped so that once the attempt
  * has ended (timeout, cancel, failure), no further chunk is stamped: the heights it
- * returns are final, and a late chunk can never take a slot behind our back.
+ * returns are final, and a late chunk can never take a slot behind our back. A chunk the
+ * batch stamped in an earlier attempt gets that stamp again (stampCache.ts).
  */
 async function stampAndUpload(
   c: UploadCandidate,
@@ -209,10 +211,12 @@ async function stampAndUpload(
     return { ok: false, error, stamper: c.stamper ?? [] };
   }
   let stopped = false;
+  // A chunk this batch stamped in an earlier attempt re-sends that stamp (no new slot).
+  const cached = cachingStamper(c.batchId, real);
   const guard = {
     stamp(address: Uint8Array, timestampMs?: number) {
       if (stopped || signal?.aborted) throw new Error('upload stopped');
-      return real.stamp(address, timestampMs);
+      return cached.stamp(address, timestampMs);
     },
   } as unknown as Stamper;
   try {
