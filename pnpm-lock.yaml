@@ -29,6 +29,9 @@ importers:
       '@arkiv-network/sdk':
         specifier: 1.0.1
         version: 1.0.1(typescript@5.7.3)(viem@2.57.16(typescript@5.7.3)(zod@4.6.7))
+      '@recall/evidence':
+        specifier: workspace:*
+        version: link:../../packages/evidence
       '@recall/net':
         specifier: workspace:*
         version: link:../../packages/net

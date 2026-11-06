@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { WalletChip } from './components/WalletChip';
-import { useRoute, type Route } from './router';
+import { routeId, useRoute, type Route } from './router';
+import { Capture } from './routes/Capture';
+import { FileCheck } from './routes/FileCheck';
 import { Home } from './routes/Home';
 import { Settings } from './routes/Settings';
 import { Storage } from './routes/Storage';
@@ -18,10 +20,29 @@ function NotFound({ path }: { path: string }) {
   );
 }
 
+/** Placeholder until the timeline route lands; it still gives a real, linkable address. */
+function TimelinePlaceholder({ urlHash }: { urlHash: string }) {
+  return (
+    <>
+      <h1 tabIndex={-1}>Captures of this page</h1>
+      <p className="lede muted">
+        The timeline for <span className="mono">{urlHash}</span> is not available in this build yet.
+      </p>
+    </>
+  );
+}
+
 function Page({ route }: { route: Route }) {
   switch (route.name) {
     case 'home':
       return <Home />;
+    case 'url':
+      return <TimelinePlaceholder urlHash={route.urlHash} />;
+    case 'capture':
+      // Keyed by the record, so moving between two captures never carries state over.
+      return <Capture key={route.key} entityKey={route.key} />;
+    case 'file':
+      return <FileCheck />;
     case 'storage':
       return <Storage />;
     case 'settings':
@@ -67,7 +88,7 @@ export function App() {
     }
     document.querySelector<HTMLElement>('main h1')?.focus({ preventScroll: true });
     window.scrollTo(0, 0);
-  }, [route.name]);
+  }, [routeId(route)]);
 
   const link = (href: string, name: Route['name'], label: string) => (
     <a href={href} aria-current={route.name === name ? 'page' : undefined}>

@@ -6,8 +6,11 @@ export function middle(value: string, head = 6, tail = 4): string {
   return value.length <= head + tail + 1 ? value : `${value.slice(0, head)}…${value.slice(-tail)}`;
 }
 
-/** Hashes and addresses. `copy` adds a Copy button that confirms with the "Copied" toast. */
-export function MonoValue({ value, copy = true }: { value: string; copy?: boolean }) {
+/**
+ * Hashes and addresses. `copy` adds a Copy button that confirms with the "Copied" toast.
+ * `full` shows the whole value (wrapping) instead of the middle-truncated form, for URLs.
+ */
+export function MonoValue({ value, copy = true, full = false }: { value: string; copy?: boolean; full?: boolean }) {
   const toast = useToast();
   const onCopy = async () => {
     try {
@@ -19,8 +22,8 @@ export function MonoValue({ value, copy = true }: { value: string; copy?: boolea
   };
   return (
     <span className="mono-value-wrap">
-      <span className="mono mono-value" title={value} aria-label={value}>
-        {middle(value)}
+      <span className={`mono mono-value${full ? ' mono-value-full' : ''}`} title={value} aria-label={value}>
+        {full ? value : middle(value)}
       </span>
       {copy ? (
         <button type="button" className="icon-btn" aria-label={`Copy ${value}`} onClick={onCopy}>

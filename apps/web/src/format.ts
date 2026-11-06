@@ -33,3 +33,28 @@ export function formatTtl(seconds: bigint): string {
   if (h > 0) return `${h} h ${m} min`;
   return m > 0 ? `${m} min` : 'under 1 min';
 }
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const two = (n: number) => String(n).padStart(2, '0');
+
+/** "4 Nov 2026, 14:02 UTC" from Unix seconds (the witness's signed time is always shown in UTC). */
+export function formatUtc(seconds: bigint): string {
+  const d = new Date(Number(seconds) * 1000);
+  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}, ${two(d.getUTCHours())}:${two(d.getUTCMinutes())} UTC`;
+}
+
+/** The same instant in the viewer's own time zone, for a hover title. */
+export const formatLocal = (seconds: bigint): string => new Date(Number(seconds) * 1000).toLocaleString();
+
+/** "4 Nov 2026" (UTC) from a Date. */
+export function formatDay(d: Date): string {
+  return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+}
+
+const KB = 1024;
+/** "311 B", "18.2 KB", "1.4 MB" (the same format as the extension popup). */
+export function formatBytes(bytes: number): string {
+  if (bytes < KB) return `${bytes} B`;
+  if (bytes < KB * KB) return `${(bytes / KB).toFixed(1)} KB`;
+  return `${(bytes / (KB * KB)).toFixed(1)} MB`;
+}
