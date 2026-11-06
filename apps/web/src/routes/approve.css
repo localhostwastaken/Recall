@@ -3,14 +3,19 @@
   margin-top: var(--space-5);
 }
 
-.approve-proves {
+.approve-proves,
+.approve-save {
   display: grid;
   gap: var(--space-2);
   max-width: var(--measure);
-  padding: var(--space-4);
+  padding: var(--space-4) var(--space-5);
   border: 1px solid var(--border);
   border-radius: var(--radius-2);
   background: var(--surface);
+}
+
+.approve-save {
+  border-left: 4px solid var(--citrus);
 }
 
 .approve-witness {
@@ -23,7 +28,7 @@
 .approve-check-list {
   display: grid;
   gap: var(--space-2);
-  margin: var(--space-2) 0 0;
+  margin: 0;
   padding: 0;
   list-style: none;
   max-width: var(--measure);
@@ -54,10 +59,24 @@
   position: sticky;
   bottom: 0;
   display: grid;
-  gap: var(--space-1);
-  padding: var(--space-3) 0;
+  gap: var(--space-2);
+  max-width: var(--measure);
+  padding: var(--space-4) 0;
   border-top: 1px solid var(--border);
   background: var(--bg);
+}
+
+/* The other choices sit under the one primary action, visibly quieter. */
+.approve-more {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+@media (max-width: 599px) {
+  .approve-more .btn {
+    flex: 1 1 100%;
+  }
 }
 
 /* "Discard this capture?": a native modal dialog over the scrim. */

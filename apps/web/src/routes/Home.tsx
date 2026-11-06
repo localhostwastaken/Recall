@@ -37,7 +37,7 @@ function Search() {
     return ok;
   };
   return (
-    <section className="stack" aria-labelledby="search-title">
+    <section className="stack panel" aria-labelledby="search-title">
       <h2 className="section-title" id="search-title">
         Find captures of a page
       </h2>
@@ -240,11 +240,19 @@ export function Home() {
   useEffect(() => clearHandoff(), []);
   return (
     <>
-      <h1 tabIndex={-1}>Recall</h1>
-      <p className="lede muted">Prove what a web page said, even after it changes.</p>
-      <Search />
-      <VerifyEvidence />
-      <CompareFile />
+      <div className="home-hero">
+        <h1 tabIndex={-1}>Recall</h1>
+        <p className="lede">
+          Prove what a web page said, <mark className="hl">even after it changes.</mark>
+        </p>
+      </div>
+      <div className="home-grid">
+        <Search />
+        <div className="home-side panel">
+          <VerifyEvidence />
+          <CompareFile />
+        </div>
+      </div>
     </>
   );
 }

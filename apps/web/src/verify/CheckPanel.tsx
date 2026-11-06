@@ -1,14 +1,14 @@
 import type { CheckResult } from '@recall/evidence';
 import { isFreeBatch } from '@recall/net';
-import { CircleCheck, CircleDashed, CircleX, LoaderCircle, TriangleAlert, type LucideIcon } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { ChevronDown, CircleCheck, CircleDashed, CircleX, LoaderCircle, TriangleAlert, type LucideIcon } from 'lucide-react';
+import { useEffect, useId, useState, type ReactNode } from 'react';
 import { sha256, type Address } from 'viem';
 import { DEFAULT_WITNESS_LABEL } from '../defaults';
 import { formatBytes, formatTtl } from '../format';
 import { CheckRow } from '../ui/CheckRow';
 import { DropZone } from '../ui/DropZone';
 import { MonoValue, middle } from '../ui/MonoValue';
-import type { Status } from '../ui/StatusBadge';
+import { STATUS_WORD, type Status } from '../ui/StatusBadge';
 import { isDefaultWitness, trustedWitness } from '../witness';
 import type { GivenFile } from './handoff';
 import type { StorageInfo, StorageState } from './useVerifiedCapture';
@@ -262,16 +262,88 @@ export function CheckPanel({
     ],
     ['E', 'Storage', rowE(storage, batchId)],
   ];
+  return <ChecksDisclosure rows={rows} />;
+}
+
+const PILL_ICONS: Record<Status, LucideIcon> = {
+  pass: CircleCheck,
+  fail: CircleX,
+  warn: TriangleAlert,
+  unavailable: CircleDashed,
+  pending: LoaderCircle,
+};
+
+/**
+ * Progressive disclosure for check rows: a heading, one small mark per check, and the rows
+ * (`children`) behind "Show details". A failed or warning check opens the rows by itself (and
+ * opens them again if a later answer fails), so a problem is never hidden behind the toggle.
+ */
+export function ChecksCard({
+  title,
+  titleId,
+  checks,
+  className,
+  children,
+}: {
+  title: string;
+  titleId: string;
+  checks: { letter: string; status: Status }[];
+  className?: string;
+  children: ReactNode;
+}) {
+  const attention = checks.some((c) => c.status === 'fail' || c.status === 'warn');
+  const [chosen, setChosen] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (attention) setChosen(null);
+  }, [attention]);
+  const open = chosen ?? attention;
+  const bodyId = useId();
   return (
-    <section aria-labelledby="checks-title">
-      <h2 className="section-title" id="checks-title">
-        Checks
-      </h2>
+    <section aria-labelledby={titleId} className={`checks-panel${className ? ` ${className}` : ''}`}>
+      <div className="checks-summary-row">
+        <h2 className="section-title" id={titleId}>
+          {title}
+        </h2>
+        <ul className="check-pills" aria-label="Results">
+          {checks.map(({ letter, status }) => {
+            const Icon = PILL_ICONS[status];
+            return (
+              <li key={letter} className={`check-pill check-pill-${status}`} data-pill={letter}>
+                <Icon size={16} strokeWidth={2} aria-hidden="true" className={status === 'pending' ? 'spin' : undefined} />
+                <span aria-hidden="true">{letter}</span>
+                <span className="visually-hidden">
+                  Check {letter}: {STATUS_WORD[status]}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+        <button
+          type="button"
+          className="checks-toggle"
+          aria-expanded={open}
+          aria-controls={bodyId}
+          onClick={() => setChosen(!open)}
+        >
+          {open ? 'Hide details' : 'Show details'}
+          <ChevronDown size={16} strokeWidth={2} aria-hidden="true" />
+        </button>
+      </div>
+      <div className="checks-body" id={bodyId} hidden={!open}>
+        {children}
+      </div>
+    </section>
+  );
+}
+
+function ChecksDisclosure({ rows }: { rows: [string, string, RowModel, ReactNode?][] }) {
+  return (
+    <ChecksCard title="Checks" titleId="checks-title" checks={rows.map(([letter, , m]) => ({ letter, status: m.status }))}>
       <ol className="checks">
         {rows.map(([letter, title, model, extra]) => (
           <CheckRow key={letter} letter={letter} title={title} status={model.status} result={model.result} how={model.how} extra={extra} />
         ))}
       </ol>
-    </section>
+    </ChecksCard>
   );
 }

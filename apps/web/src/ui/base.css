@@ -35,6 +35,17 @@ p {
   margin: 0;
 }
 
+input[type='radio'],
+input[type='checkbox'],
+progress {
+  accent-color: var(--accent);
+}
+
+/* Components set their own display; the hidden attribute must still win. */
+[hidden] {
+  display: none !important;
+}
+
 :focus-visible {
   outline: 3px solid var(--focus);
   outline-offset: 2px;

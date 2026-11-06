@@ -258,6 +258,8 @@ test.describe('@p1 capture', () => {
 
       await expect(popup.getByRole('heading', { name: 'Checks passed' })).toBeVisible({ timeout: 120_000 });
       await expect(popup.getByText(`The witness saw these exact bytes from ${NOTICE_HOST}`)).toBeVisible();
+      // Passed checks sit behind one summary line; "Show details" opens the rows.
+      await popup.getByRole('button', { name: 'Show details' }).click();
       for (const title of [
         'Bytes match the signed hashes',
         'Request and response are well-formed',

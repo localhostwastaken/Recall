@@ -35,7 +35,7 @@
 }
 
 .ka-title {
-  font-family: var(--font-serif);
+  font-family: var(--font-display);
   font-size: var(--text-xl);
   line-height: var(--lh-xl);
   font-weight: 600;

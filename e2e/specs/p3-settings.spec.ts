@@ -715,7 +715,6 @@ test.describe('@p3 settings web', () => {
     await page.evaluate((k) => localStorage.removeItem(k), SETTINGS_KEY);
     await openSettings(page);
     await page.getByLabel('Gnosis RPC URL').fill('https://gnosis.example.org');
-    await page.getByRole('radio', { name: 'Light' }).check();
     await saveButton(page).click();
     await expect(page.getByText('Settings saved')).toBeVisible();
 

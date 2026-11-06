@@ -34,7 +34,7 @@ import { MonoValue } from '../ui/MonoValue';
 import { Notice } from '../ui/Notice';
 import { StatusBadge, type Status } from '../ui/StatusBadge';
 import { Steps, type StepState } from '../ui/Steps';
-import { TechnicalDetails, WhyWitness } from '../verify/CheckPanel';
+import { ChecksCard, TechnicalDetails, WhyWitness } from '../verify/CheckPanel';
 import { GATEWAY_COPY_MS, compareGatewayCopy, type GatewayCopy } from '../verify/gatewayCopy';
 import { verifyRecordEvidence } from '../verify/useVerifiedCapture';
 import { verdictOf } from '../verify/verify';
@@ -408,10 +408,12 @@ const CHECK_TITLES = {
 
 function CheckSummary({ report }: { report: CheckReport }) {
   return (
-    <section className="approve-checks" aria-labelledby="approve-checks-title">
-      <h2 id="approve-checks-title" className="section-title">
-        Checked in this browser
-      </h2>
+    <ChecksCard
+      className="approve-checks"
+      title="Checked in this browser"
+      titleId="approve-checks-title"
+      checks={(['A', 'B', 'C'] as const).map((k) => ({ letter: k, status: report[k].status as Status }))}
+    >
       <ul className="approve-check-list">
         {(['A', 'B', 'C'] as const).map((k) => (
           <li key={k} data-check={k}>
@@ -426,7 +428,7 @@ function CheckSummary({ report }: { report: CheckReport }) {
           </li>
         ))}
       </ul>
-    </section>
+    </ChecksCard>
   );
 }
 

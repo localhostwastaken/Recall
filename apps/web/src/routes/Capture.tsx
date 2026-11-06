@@ -119,9 +119,6 @@ export function Capture({ entityKey }: { entityKey: Hex }) {
           Loading the record from Arkiv…
         </p>
       ) : null}
-      {v.facts ? (
-        <ExhibitCard facts={v.facts} evidenceRef={v.record?.evidenceRef} unverified={v.report?.C.status !== 'pass'} />
-      ) : null}
       <VerdictLine verdict={verdict} />
       {v.report?.mismatch?.length ? (
         <Notice kind="error" title="Record does not match its evidence">
@@ -129,7 +126,9 @@ export function Capture({ entityKey }: { entityKey: Hex }) {
           evidence may belong to a different capture, so none of its details are shown here as this record's.
         </Notice>
       ) : null}
-      <WhyWitness />
+      {v.facts ? (
+        <ExhibitCard facts={v.facts} evidenceRef={v.record?.evidenceRef} unverified={v.report?.C.status !== 'pass'} />
+      ) : null}
       <CheckPanel
         report={v.report}
         storage={v.storage}
@@ -142,6 +141,7 @@ export function Capture({ entityKey }: { entityKey: Hex }) {
           setFileError(undefined);
         }}
       />
+      <WhyWitness />
       {v.facts ? (
         <Preview
           facts={v.facts}
@@ -159,7 +159,7 @@ export function Capture({ entityKey }: { entityKey: Hex }) {
           Download evidence file
         </button>
         {v.facts ? (
-          <a className="btn btn-secondary" href={`#/u/${v.facts.urlHash}`}>
+          <a className="btn btn-primary" href={`#/u/${v.facts.urlHash}`}>
             <History size={16} strokeWidth={1.75} aria-hidden="true" />
             View timeline
           </a>
@@ -170,7 +170,7 @@ export function Capture({ entityKey }: { entityKey: Hex }) {
             onChanged={v.refreshStorage}
           />
         ) : null}
-        <button type="button" className="btn btn-secondary" onClick={copyLink}>
+        <button type="button" className="btn btn-ghost" onClick={copyLink}>
           <Copy size={16} strokeWidth={1.75} aria-hidden="true" />
           Copy link
         </button>

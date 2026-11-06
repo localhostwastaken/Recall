@@ -40,14 +40,13 @@ a:hover {
   top: var(--space-2);
 }
 
-/* Header: sticky, hairline and --shadow-1 only. */
+/* Header: sticky on the cream paper, one hairline, no shadow. */
 .site-header {
   position: sticky;
   top: 0;
   z-index: var(--z-header);
-  background: var(--surface);
+  background: var(--bg);
   border-bottom: 1px solid var(--border);
-  box-shadow: var(--shadow-1);
 }
 
 .header-row {
@@ -55,17 +54,28 @@ a:hover {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2) var(--space-5);
+  min-height: 72px;
   padding-top: var(--space-2);
   padding-bottom: var(--space-2);
 }
 
 .brand {
-  font-family: var(--font-serif);
-  font-size: var(--text-xl);
-  line-height: var(--lh-xl);
-  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-h);
+  font-family: var(--font-display);
+  font-size: 28px;
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: -0.045em;
   color: var(--text);
   text-decoration: none;
+}
+
+.archive-mark {
+  flex: none;
+  color: var(--accent);
 }
 
 .brand:hover {
@@ -74,28 +84,31 @@ a:hover {
 
 .nav {
   display: flex;
-  gap: var(--space-4);
+  gap: var(--space-1);
 }
 
 .nav a {
   display: inline-flex;
   align-items: center;
+  gap: var(--space-2);
   min-height: var(--control-h);
-  color: var(--text);
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-1);
+  color: var(--text-muted);
   text-decoration: none;
-  font-size: var(--text-sm);
-  line-height: var(--lh-sm);
+  font-size: var(--text-md);
+  line-height: var(--lh-md);
+  font-weight: 600;
 }
 
 .nav a:hover {
-  text-decoration: underline;
+  color: var(--text);
+  background: var(--surface-sunken);
 }
 
 .nav a[aria-current='page'] {
-  font-weight: 600;
-  text-decoration: underline;
-  text-decoration-thickness: 2px;
-  text-underline-offset: 0.4em;
+  color: var(--accent);
+  background: var(--accent-soft);
 }
 
 .header-tools {
@@ -122,8 +135,8 @@ a:hover {
 
 /* Page. */
 .page {
-  padding-top: var(--space-6);
-  padding-bottom: var(--space-7);
+  padding-top: var(--space-7);
+  padding-bottom: var(--space-8);
   outline: none;
 }
 
@@ -132,28 +145,35 @@ a:hover {
 }
 
 h1 {
-  font-family: var(--font-serif);
+  font-family: var(--font-display);
   font-size: var(--text-3xl);
   line-height: var(--lh-3xl);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  overflow-wrap: anywhere;
 }
 
 h1:focus {
   outline: none;
 }
 
-h1:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
+/* A page heading takes focus on a route change only to move screen readers; it is not a control. */
+h1[tabindex='-1']:focus-visible {
+  outline: none;
 }
 
 .section-title {
-  font-family: var(--font-serif);
+  font-family: var(--font-display);
   font-size: var(--text-xl);
   line-height: var(--lh-xl);
+  font-weight: 600;
 }
 
 .lede {
   max-width: var(--measure);
+  font-size: var(--text-lg);
+  line-height: var(--lh-lg);
+  color: var(--text-muted);
 }
 
 .stack {
@@ -164,7 +184,7 @@ h1:focus-visible {
 
 .site-footer {
   border-top: 1px solid var(--border);
-  padding: var(--space-4) 0;
+  padding: var(--space-5) 0;
   font-size: var(--text-sm);
   line-height: var(--lh-sm);
 }
@@ -428,7 +448,7 @@ h1:focus-visible {
   gap: var(--space-3) var(--space-4);
   padding: var(--space-5) var(--space-4);
   background: var(--surface);
-  border: 1px solid var(--border-strong);
+  border: 1px dashed var(--border-strong);
   border-radius: var(--radius-2);
 }
 
@@ -479,6 +499,7 @@ h1:focus-visible {
   align-items: center;
   font-weight: 600;
   color: var(--accent);
+  border-radius: var(--radius-1);
 }
 
 .compare-details[open] > summary {
@@ -499,17 +520,16 @@ h1:focus-visible {
 /* Capture detail: exhibit card, verdict line, check extras, actions. */
 .exhibit {
   max-width: var(--measure);
-  padding: var(--space-4);
+  padding: var(--space-5);
   background: var(--surface);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border);
+  border-top: 4px solid var(--accent);
   border-radius: var(--radius-2);
 }
 
 .exhibit-title {
-  margin: 0 0 var(--space-3);
-  padding-bottom: var(--space-2);
-  border-bottom: 1px solid var(--border);
-  font-family: var(--font-serif);
+  margin: 0 0 var(--space-4);
+  font-family: var(--font-display);
   font-size: var(--text-xl);
   line-height: var(--lh-xl);
   font-weight: 600;
@@ -559,10 +579,10 @@ h1:focus-visible {
 .verdict {
   display: flex;
   align-items: flex-start;
-  gap: var(--space-2);
+  gap: var(--space-3);
   max-width: var(--measure);
   margin-bottom: 0;
-  padding: var(--space-3);
+  padding: var(--space-4);
   border: 1px solid currentColor;
   border-radius: var(--radius-2);
   font-weight: 600;
@@ -627,7 +647,7 @@ h1:focus-visible {
 .page-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-2) var(--space-3);
+  gap: var(--space-2);
 }
 
 /* Toast: one polite live region, copy confirmations only. */
@@ -644,6 +664,7 @@ h1:focus-visible {
   padding: var(--space-2) var(--space-4);
   background: var(--text);
   color: var(--bg);
+  font-weight: 600;
   border-radius: var(--radius-1);
   font-size: var(--text-sm);
   line-height: var(--lh-sm);
@@ -728,8 +749,8 @@ a.btn-secondary:hover {
 
 .timeline {
   list-style: none;
-  margin: var(--space-3) 0 0;
-  padding: 0 0 0 var(--space-4);
+  margin: var(--space-4) 0 0;
+  padding: 0 0 0 var(--space-5);
   border-left: 2px solid var(--border-strong);
   display: grid;
   gap: var(--space-3);
@@ -738,22 +759,27 @@ a.btn-secondary:hover {
 
 .tl-item {
   position: relative;
-  padding: var(--space-3);
+  padding: var(--space-3) var(--space-4);
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-2);
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+
+.tl-item:has(.tl-link:hover) {
+  border-color: var(--accent);
 }
 
 /* The dot on the rail. */
 .tl-item::before {
   content: '';
   position: absolute;
-  left: calc(-1 * var(--space-4) - 6px);
+  left: calc(-1 * var(--space-5) - 7px);
   top: var(--space-4);
   width: 10px;
   height: 10px;
-  background: var(--surface);
-  border: 2px solid var(--border-strong);
+  background: var(--citrus);
+  border: 2px solid var(--text);
   border-radius: 50%;
 }
 
@@ -772,6 +798,9 @@ a.btn-secondary:hover {
 }
 
 .tl-title {
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  line-height: var(--lh-lg);
   font-weight: 600;
   overflow-wrap: anywhere;
 }
@@ -989,4 +1018,108 @@ a.btn-secondary:hover {
 
 .tl-more {
   list-style: none;
+}
+
+/* Checks panel: a card with the one-line summary; the rows open under it. */
+.checks-panel {
+  max-width: var(--measure);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+}
+
+.checks-panel .section-title {
+  font-size: var(--text-lg);
+  line-height: var(--lh-lg);
+}
+
+.checks-panel .checks-body {
+  margin-top: var(--space-3);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+
+.checks-panel .checks {
+  margin-top: 0;
+}
+
+@media (max-width: 599px) {
+  .page {
+    padding-top: var(--space-5);
+  }
+}
+
+/* Home: a short hero, then the search card beside the evidence-file tools. */
+.home-hero {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4) 0 var(--space-2);
+}
+
+.home-hero h1 {
+  font-size: clamp(44px, 6vw, 64px);
+  line-height: 1.05;
+  letter-spacing: -0.045em;
+}
+
+.hl {
+  padding: 0 0.1em;
+  background: linear-gradient(transparent 62%, var(--citrus) 62%);
+  color: var(--text);
+}
+
+.home-grid {
+  display: grid;
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.home-side {
+  display: grid;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.panel {
+  padding: var(--space-5);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+}
+
+.home-grid .stack,
+.home-grid .compare-details {
+  max-width: none;
+}
+
+/* Inside the side card the "compare a file" tool is a plain disclosure, not a second card. */
+.home-side .compare-details {
+  padding: var(--space-2) 0 0;
+  background: none;
+  border: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+}
+
+@media (min-width: 900px) {
+  .home-grid {
+    grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+    gap: var(--space-6);
+  }
+}
+
+@media (max-width: 599px) {
+  .panel {
+    padding: var(--space-4);
+  }
+
+  .search-form .btn {
+    width: 100%;
+  }
+}
+
+/* Notices read as part of the text column, not as full-width banners. */
+.page .notice {
+  max-width: var(--measure);
 }

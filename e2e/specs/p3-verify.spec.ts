@@ -213,8 +213,8 @@ test('@p3 verify dropped tampered evidence shows A failed in red', async ({ page
   await expect(page).toHaveURL(/#\/file$/);
   await expect(status(page, 'A')).toHaveAttribute('data-status', 'fail');
   await expect(check(page, 'A')).toContainText('The evidence was changed after signing.');
-  // Failed means red: the badge uses the --fail colour (#b3261e in the light theme).
-  await expect(status(page, 'A')).toHaveCSS('color', 'rgb(179, 38, 30)');
+  // Failed means red: the badge uses the --fail colour (#ae2a37).
+  await expect(status(page, 'A')).toHaveCSS('color', 'rgb(174, 42, 55)');
   await expect(verdict(page)).toHaveAttribute('data-verdict', 'fail');
   await expect(verdict(page)).toHaveText("A check failed. Don't rely on this capture.");
   // Nothing about the tampered capture is presented as fact, and nothing is green about its bytes.
