@@ -19,6 +19,13 @@ describe('pageTitle', () => {
     expect(t.endsWith('…')).toBe(true);
   });
 
+  it('drops bidi controls and never cuts a character in half', () => {
+    expect(pageTitle(enc('<title>a\u202Eevil\u2066b\u2069</title>'), 'text/html')).toBe('aevilb');
+    const t = pageTitle(enc(`<title>${'😀'.repeat(200)}</title>`), 'text/html')!;
+    expect(Array.from(t)).toHaveLength(121);
+    expect(t.endsWith('😀…')).toBe(true);
+  });
+
   it('is null for an empty title or a body that is not HTML', () => {
     expect(pageTitle(enc('<title>   </title>'), 'text/html')).toBeNull();
     expect(pageTitle(enc('<p>no title</p>'), 'text/html')).toBeNull();

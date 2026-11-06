@@ -213,6 +213,73 @@ describe('library store', () => {
     expect(store.getSnapshot().check.get(uh(1))).toBe('unverified');
   });
 
+  it('leaving the library stops running checks (no fallback download) and the card is not left on Checking…', async () => {
+    const signals: AbortSignal[] = [];
+    const check = vi.fn(
+      (_row: ListedCapture, signal: AbortSignal) =>
+        new Promise<Checked>((resolve) => {
+          signals.push(signal);
+          // As a real download does: an abort ends it as "couldn't be downloaded".
+          signal.addEventListener('abort', () => resolve({ state: 'unverified', reason: "Evidence couldn't be downloaded", status: 'unavailable' }));
+        }),
+    );
+    const rows = [{ ...cap(1), entityKey: k(51), signedAt: 9n }, cap(1)];
+    const store = createLibraryStore(deps({ check, load: async () => ({ captures: rows, attachments: [], truncated: false, timing: null }) }));
+    const off = store.subscribe(() => undefined);
+    await flush();
+    store.requestCheck(uh(1));
+    await flush();
+    expect(store.getSnapshot().check.get(uh(1))).toBe('checking');
+    off();
+    expect(signals[0]!.aborted).toBe(true);
+    for (let i = 0; i < 5; i++) await flush();
+    expect(check).toHaveBeenCalledTimes(1); // the older record was not downloaded while nobody looked
+    expect(store.getSnapshot().check.get(uh(1))).toBeUndefined();
+
+    // Seen again: it is checked again, with a fresh signal.
+    store.subscribe(() => undefined);
+    store.requestCheck(uh(1));
+    await flush();
+    expect(check).toHaveBeenCalledTimes(2);
+    expect(signals[1]!.aborted).toBe(false);
+    expect(store.getSnapshot().check.get(uh(1))).toBe('checking');
+  });
+
+  it('a verified card is a Repo only when its evidence proves a GitHub branch, whatever the attachments say', async () => {
+    const att = {
+      entityKey: k(900),
+      owner: A,
+      creator: A,
+      expiresAtBlock: 1n,
+      parentCaptureKey: k(1),
+      urlHash: k(901),
+      sha256: k(902),
+      kind: 'git',
+      commitSha: 'a'.repeat(40),
+      treeSha: 'b'.repeat(40),
+      proofLevel: 1,
+      evidenceRef: k(903),
+      batchId: k(904),
+      size: 1n,
+      contentType: 'application/gzip',
+    };
+    const store = createLibraryStore(
+      deps({
+        check: async () => verified('A page', 'https://site1.example/p'),
+        load: async () => ({ captures: [cap(1)], attachments: [att], truncated: false, timing: null }),
+      }),
+    );
+    store.subscribe(() => undefined);
+    await flush();
+    expect(store.getSnapshot().entries[0]!.kind).toBe('repo'); // the unchecked attachment's claim
+    store.requestCheck(uh(1));
+    await flush();
+    await flush();
+    expect(store.getSnapshot().check.get(uh(1))).toBe('verified');
+    expect(store.getSnapshot().entries[0]!.kind).toBe('page');
+    expect(store.getSnapshot().titles.get(uh(1))).toBe('A page');
+  });
+
   it('refreshDays re-reads the newest record and updates its days', async () => {
     const store = createLibraryStore(deps());
     store.subscribe(() => undefined);

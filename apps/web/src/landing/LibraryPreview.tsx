@@ -30,7 +30,7 @@ export function useLibraryCounts(): { captures: number; sites: number; repos: nu
  */
 export function LibraryPreview({ id = 'library-preview' }: { id?: string }) {
   const lib = useKeepAliveLibrary(useLibrary());
-  const observe = useCheckOnView(lib.requestCheck);
+  const observe = useCheckOnView(lib.requestCheck, lib.entries);
   const titleId = useId();
   const listed = lib.entries.filter((e) => lib.check.get(e.urlHash) !== 'unverified');
   const top = filterSort(listed, { q: '', type: 'all', sort: 'time' }, lib.titles, lib.days).slice(0, PREVIEW_CARDS);

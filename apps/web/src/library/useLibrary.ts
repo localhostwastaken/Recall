@@ -100,8 +100,9 @@ export function createLibraryStore(deps: LibraryDeps) {
   const queue = createVerifyQueue(3);
   /** urlHash -> the fingerprint of the row whose check was started. */
   const started = new Map<Hex, string>();
-  /** urlHash -> what the verified evidence says (address, repo), shown instead of the row's claims. */
-  const proven = new Map<Hex, { address: string; repo?: string }>();
+  /** urlHash -> what the verified evidence says (address, kind, repo), shown instead of the row's claims. */
+  type Proven = { address: string; kind: 'page' | 'repo'; repo?: string };
+  const proven = new Map<Hex, Proven>();
   /** urlHash -> how many of its records failed their check in this read. */
   const tries = new Map<Hex, number>();
   let timing: Timing | null = null;
@@ -158,6 +159,7 @@ export function createLibraryStore(deps: LibraryDeps) {
           const p = proven.get(e.urlHash);
           if (p) {
             e.address = p.address;
+            e.kind = p.kind;
             if (p.repo) e.repo = p.repo;
           }
         }
@@ -181,14 +183,21 @@ export function createLibraryStore(deps: LibraryDeps) {
     queue
       .run(() => deps.check(entry.newest, signal))
       .then((result) => {
-        if (started.get(urlHash) !== key || signal.aborted) return;
+        if (started.get(urlHash) !== key) return;
+        if (signal.aborted) {
+          // Stopped because nobody is looking (or a fresh read): not checked, asked again when seen.
+          started.delete(urlHash);
+          set({ check: update(state.check, urlHash, undefined) });
+          return;
+        }
         if (result.state !== 'verified') {
           const now = state.entries.find((e) => e.urlHash === urlHash);
           const next = now?.older?.[0];
           const n = (tries.get(urlHash) ?? 0) + 1;
           tries.set(urlHash, n);
           if (now && next && n < MAX_TRIES) {
-            // Try the page's next newest record instead (the card stays "Checking…").
+            // Try the page's next newest record instead (the card stays "Checking…"), but only
+            // while someone is looking; otherwise it is tried when the card is seen again.
             started.delete(urlHash);
             const moved: PageEntry = { ...now, newest: next, older: now.older!.slice(1), signedAt: next.signedAt };
             state = {
@@ -196,7 +205,8 @@ export function createLibraryStore(deps: LibraryDeps) {
               entries: state.entries.map((e) => (e.urlHash === urlHash ? moved : e)),
               days: update(state.days, urlHash, timing ? daysLeft(next.expiresAtBlock, timing.currentBlock, timing.blockSeconds) : null),
             };
-            requestCheck(urlHash);
+            if (listeners.size > 0) requestCheck(urlHash);
+            else set({ check: update(state.check, urlHash, undefined) });
             return;
           }
           set({ check: update(state.check, urlHash, 'unverified') });
@@ -204,12 +214,11 @@ export function createLibraryStore(deps: LibraryDeps) {
         }
         // From here on the card shows what the verified evidence says, never the row's claims.
         const facts = result.facts;
-        const shown: { address: string; repo?: string } = { address: hostPath(facts.canonicalUrl, facts.serverName) };
+        // Repo or page by what the evidence proves (a GitHub branch), not by an attachment record.
+        const b = repoOf(facts);
+        const shown: Proven = { address: hostPath(facts.canonicalUrl, facts.serverName), kind: b ? 'repo' : 'page' };
         let title: string | null = null;
-        if (entry.kind === 'repo') {
-          const b = repoOf(facts);
-          if (b) title = shown.repo = `${b.owner}/${b.repo}`;
-        }
+        if (b) title = shown.repo = `${b.owner}/${b.repo}`;
         title ??= pageTitle(facts.body, facts.contentType);
         proven.set(urlHash, shown);
         set({
@@ -252,8 +261,19 @@ export function createLibraryStore(deps: LibraryDeps) {
       }
       return () => {
         listeners.delete(listener);
-        // Nobody is looking: drop the checks still waiting (they are asked again when seen).
-        if (listeners.size === 0) queue.cancelAll();
+        if (listeners.size > 0) return;
+        // Nobody is looking: stop every check, waiting or running (downloads included). Their
+        // cards go back to "not checked" and are asked again when seen.
+        queue.cancelAll();
+        ac.abort();
+        ac = new AbortController();
+        const check = new Map(state.check);
+        for (const [h, c] of state.check) {
+          if (c !== 'checking') continue;
+          started.delete(h);
+          check.delete(h);
+        }
+        state = { ...state, check };
       };
     },
     getSnapshot: (): LibraryState => state,

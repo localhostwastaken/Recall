@@ -6,7 +6,7 @@ import { CaptureCard, type CardStatus } from '../components/CaptureCard';
 import { filterSort, shortAddress, type PageEntry } from '../library/model';
 import { LibraryKeepAlive, useKeepAliveLibrary } from '../library/LibraryKeepAlive';
 import { useLibrary, type LibraryData } from '../library/useLibrary';
-import { libraryHash, type LibrarySort, type LibraryType, type LibraryView } from '../router';
+import { libraryHash, parseHash, type LibrarySort, type LibraryType, type LibraryView } from '../router';
 import { goToSection } from '../sectionNav';
 import { Notice } from '../ui/Notice';
 import { Segmented } from '../ui/Segmented';
@@ -39,12 +39,14 @@ export function keepAliveSlot(entry: PageEntry, verified: boolean, _hintId: stri
 
 /**
  * Asks for a card's check when it comes within 200 px of the screen (only cards in view are
- * verified). Without IntersectionObserver every card asks at once (the queue still runs three).
+ * verified), and again for the cards in view whenever `entries` changes (a fresh read may reset a
+ * card). Without IntersectionObserver every card asks (the queue still runs three at a time).
  */
-export function useCheckOnView(requestCheck: (urlHash: Hex) => void) {
+export function useCheckOnView(requestCheck: (urlHash: Hex) => void, entries?: readonly unknown[]) {
   const req = useRef(requestCheck);
   req.current = requestCheck;
   const els = useRef(new Set<HTMLElement>());
+  const visible = useRef(new Set<Element>());
   const observer = useRef<IntersectionObserver | null>(null);
   const ask = (el: Element) => {
     const h = (el as HTMLElement).dataset.urlHash;
@@ -57,7 +59,12 @@ export function useCheckOnView(requestCheck: (urlHash: Hex) => void) {
     }
     const o = new IntersectionObserver(
       (items) => {
-        for (const it of items) if (it.isIntersecting) ask(it.target);
+        for (const it of items) {
+          if (it.isIntersecting) {
+            visible.current.add(it.target);
+            ask(it.target);
+          } else visible.current.delete(it.target);
+        }
       },
       { rootMargin: '200px' },
     );
@@ -66,8 +73,13 @@ export function useCheckOnView(requestCheck: (urlHash: Hex) => void) {
     return () => {
       o.disconnect();
       observer.current = null;
+      visible.current.clear();
     };
   }, []);
+  useEffect(() => {
+    if (typeof IntersectionObserver === 'undefined') els.current.forEach(ask);
+    else visible.current.forEach((el) => (els.current.has(el as HTMLElement) ? ask(el) : visible.current.delete(el)));
+  }, [entries]);
   return useCallback((el: HTMLElement | null) => {
     if (!el) return;
     els.current.add(el);
@@ -75,6 +87,7 @@ export function useCheckOnView(requestCheck: (urlHash: Hex) => void) {
     else if (typeof IntersectionObserver === 'undefined') ask(el);
     return () => {
       els.current.delete(el);
+      visible.current.delete(el);
       observer.current?.unobserve(el);
     };
   }, []);
@@ -206,10 +219,31 @@ export function Library({ q = '', type = 'all', sort = 'time' }: Partial<Library
   const [kind, setKind] = useState<LibraryType>(type);
   const [order, setOrder] = useState<LibrarySort>(sort);
   const [showUnverified, setShowUnverified] = useState(false);
-  const observe = useCheckOnView(lib.requestCheck);
+  const observe = useCheckOnView(lib.requestCheck, lib.entries);
   const searchId = useId();
   const sortId = useId();
   const unverifiedTitleId = useId();
+
+  // The address can change under the page (Back, the header's Library link, a pasted link):
+  // follow it. Typing does not fire this (the view is written with replaceState).
+  useEffect(() => {
+    setText(q);
+    setQuery(q);
+  }, [q]);
+  useEffect(() => setKind(type), [type]);
+  useEffect(() => setOrder(sort), [sort]);
+  useEffect(() => {
+    const follow = () => {
+      const r = parseHash(window.location.hash);
+      if (r.name !== 'library') return;
+      setText(r.q);
+      setQuery(r.q);
+      setKind(r.type);
+      setOrder(r.sort);
+    };
+    window.addEventListener('hashchange', follow);
+    return () => window.removeEventListener('hashchange', follow);
+  }, []);
 
   useEffect(() => {
     if (text === query) return;

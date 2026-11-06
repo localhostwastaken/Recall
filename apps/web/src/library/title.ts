@@ -1,5 +1,8 @@
 import { contentKind, decodeBody } from '../timeline/content';
 
+/** Bidirectional embedding, override and isolate controls: a title could use them to reorder the card's text. */
+export const BIDI_CONTROLS = /[\u202A-\u202E\u2066-\u2069]/g;
+
 /** The longest title a card shows; longer ones are cut with an ellipsis. */
 export const MAX_TITLE = 120;
 
@@ -18,7 +21,9 @@ export function pageTitle(body: Uint8Array, contentType?: string): string | null
   } catch {
     return null;
   }
-  text = text.replace(/\s+/g, ' ').trim();
+  text = text.replace(BIDI_CONTROLS, '').replace(/\s+/g, ' ').trim();
   if (!text) return null;
-  return text.length > MAX_TITLE ? `${text.slice(0, MAX_TITLE)}…` : text;
+  // By code point, so a cut never splits a surrogate pair.
+  const chars = Array.from(text);
+  return chars.length > MAX_TITLE ? `${chars.slice(0, MAX_TITLE).join('')}…` : text;
 }

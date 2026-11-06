@@ -41,7 +41,7 @@ export function hostPath(canonicalUrl: string, fallback: string): string {
   } catch {
     /* not a URL: the server name it claims */
   }
-  out = out.replace(/\s+/g, ' ').trim() || 'unknown address';
+  out = out.replace(/[\u202A-\u202E\u2066-\u2069]/g, '').replace(/\s+/g, ' ').trim() || 'unknown address';
   return out.length > MAX_ADDRESS ? `${out.slice(0, MAX_ADDRESS - 1)}…` : out;
 }
 
