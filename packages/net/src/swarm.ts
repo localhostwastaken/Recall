@@ -39,6 +39,8 @@ export async function swarmRootOf(bytes: Uint8Array): Promise<string> {
 
 /** Largest response `downloadBytes` accepts by default. Evidence files are far smaller (a capture is at most 64 KB of page). */
 export const DEFAULT_MAX_DOWNLOAD_BYTES = 2 * 1024 * 1024;
+/** The `maxBytes` callers pass for attachments (a repository tarball, R46). */
+export const ATTACHMENT_MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024;
 
 export type DownloadOptions = {
   /** Abandons the download (and every later gateway) when aborted. */

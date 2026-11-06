@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
-import { DEFAULT_MAX_DOWNLOAD_BYTES, downloadBytes, swarmRootOf } from '../src/index';
+import { ATTACHMENT_MAX_DOWNLOAD_BYTES, DEFAULT_MAX_DOWNLOAD_BYTES, downloadBytes, swarmRootOf } from '../src/index';
 
 // downloadBytes against throwaway local HTTP servers (no devnet needed): the size cap, the
 // abort signal and the root-hash check that must keep working next to them.
@@ -42,6 +42,16 @@ describe('downloadBytes limits', () => {
 
   it('defaults to a 2 MB cap', () => {
     expect(DEFAULT_MAX_DOWNLOAD_BYTES).toBe(2 * 1024 * 1024);
+  });
+
+  it('an attachment-sized file (over 2 MB) needs the larger cap callers pass for attachments', async () => {
+    const data = new Uint8Array(randomBytes(3 * 1024 * 1024));
+    const ref = await refOf(data);
+    const url = await serve((_q, res) => res.writeHead(200, { 'content-length': data.length }).end(Buffer.from(data)));
+    await expect(downloadBytes(ref, [url])).rejects.toThrow(/limit/);
+    const got = await downloadBytes(ref, [url], { maxBytes: ATTACHMENT_MAX_DOWNLOAD_BYTES });
+    expect(got.bytes.length).toBe(data.length);
+    expect(got.rootVerified).toBe(true);
   });
 
   it('refuses a response whose stated length is over the cap, without reading it', async () => {
