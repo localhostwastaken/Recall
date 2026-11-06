@@ -546,7 +546,14 @@ export function Storage() {
         </section>
 
         <div className="stack-tight">
-          <Segmented legend="Storage for" value={size} options={SIZE_OPTIONS} onChange={setSize} disabled={locked} />
+          <Segmented
+            legend="Storage for"
+            className="segmented-stack"
+            value={size}
+            options={SIZE_OPTIONS}
+            onChange={setSize}
+            disabled={locked}
+          />
           <p className="field-helper">
             Buy once. Every capture after that needs one MetaMask confirmation until the storage runs out.
           </p>
@@ -605,7 +612,9 @@ export function Storage() {
           </button>
           <p className="field-helper">
             {blocker ??
-              'Storage is paid in xBZZ and network fees in xDAI, both on Gnosis. MetaMask asks for two confirmations per batch.'}
+              `Storage is paid in xBZZ and network fees in xDAI, both on Gnosis. MetaMask asks for two confirmations per batch${
+                extLink.kind === 'connected' ? ', then to switch to Arkiv for your captures' : ''
+              }.`}
           </p>
         </div>
       </form>

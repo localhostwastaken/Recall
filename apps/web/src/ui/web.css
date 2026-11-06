@@ -261,6 +261,23 @@ h1[tabindex='-1']:focus-visible {
   cursor: inherit;
 }
 
+/* Long labels (Storage for): stacked on a phone instead of wrapping mid-label. */
+@media (max-width: 599px) {
+  .segmented-stack .segmented-options {
+    display: grid;
+    width: 100%;
+  }
+
+  .segmented-stack .segmented-option {
+    justify-content: flex-start;
+  }
+
+  .segmented-stack .segmented-option + .segmented-option {
+    border-left: 0;
+    border-top: 1px solid var(--border-strong);
+  }
+}
+
 /* The selected option is a state, not an action: neutral ink, never orange (spec 4.2). */
 .segmented-option:has(input:checked) {
   background: var(--text);

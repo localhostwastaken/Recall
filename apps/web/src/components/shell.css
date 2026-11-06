@@ -76,7 +76,8 @@ html {
 }
 
 /* The current page: darker, bolder and underlined (not colour alone). */
-.site-header .nav a[aria-current='page'] {
+.site-header .nav a[aria-current='page'],
+.site-header .menu-link[aria-current='page'] {
   color: var(--text);
   font-weight: 700;
   text-decoration: underline;

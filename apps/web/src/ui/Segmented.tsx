@@ -7,16 +7,19 @@ export function Segmented<T extends string | number>({
   options,
   onChange,
   disabled,
+  className,
 }: {
   legend: string;
   value: T;
   options: { value: T; label: string }[];
   onChange: (value: T) => void;
   disabled?: boolean;
+  /** Extra class, e.g. `segmented-stack` (options stacked on a phone, for long labels). */
+  className?: string;
 }) {
   const name = useId();
   return (
-    <fieldset className="segmented" disabled={disabled}>
+    <fieldset className={className ? `segmented ${className}` : 'segmented'} disabled={disabled}>
       <legend className="field-label">{legend}</legend>
       <div className="segmented-options">
         {options.map((o) => (
