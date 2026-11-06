@@ -74,6 +74,36 @@ describe('gitTreeFromTarGz', () => {
     expect(gitTreeFromTarGz(gnu).treeSha).toBe(want);
   });
 
+  it('keeps a leading UTF-8 BOM in a name, prefix, link name or GNU long name (a system tar does)', () => {
+    const treeOrError = (b: Uint8Array): string => {
+      try {
+        return gitTreeFromTarGz(b).treeSha;
+      } catch (e) {
+        return String(e);
+      }
+    };
+    const BOM = '﻿';
+    const honest = gitTreeFromTarGz(tgz([dir('x/'), dir('x/src/'), file('x/src/main.ts', 'ok\n')])).treeSha;
+    // name field "EF BB BF main.ts" under the prefix "x/src"
+    const inName = tgz([dir('x/'), dir('x/src/'), { name: `${BOM}main.ts`, prefix: 'x/src', data: 'ok\n' }]);
+    expect(treeOrError(inName)).not.toBe(honest);
+    // the same file, its prefix field starting with a BOM
+    const inPrefix = tgz([dir('x/'), dir('x/src/'), { name: 'main.ts', prefix: `${BOM}x/src`, data: 'ok\n' }]);
+    expect(treeOrError(inPrefix)).not.toBe(honest);
+    // a GNU long name starting with a BOM
+    const inLong = tgz([
+      dir('x/'),
+      dir('x/src/'),
+      { name: '././@LongLink', type: 'L', data: `${BOM}x/src/main.ts\0`, magic: 'gnu' },
+      { ...file('x/src/other', 'ok\n'), magic: 'gnu' },
+    ]);
+    expect(treeOrError(inLong)).not.toBe(honest);
+    // a symlink target starting with a BOM is a different blob
+    const link = (target: string) =>
+      gitTreeFromTarGz(tgz([dir('x/'), { name: 'x/l', type: '2', linkname: target, mode: 0o777 }])).treeSha;
+    expect(link(`${BOM}main.ts`)).not.toBe(link('main.ts'));
+  });
+
   it('works without an explicit top-level directory entry and skips pax global headers', () => {
     const t = tgz([
       { name: 'pax_global_header', type: 'g', data: paxData({ comment: 'f'.repeat(40) }) },

@@ -7,6 +7,8 @@ export type TarEntry = {
   mode?: number;
   data?: Uint8Array | string;
   linkname?: string;
+  /** ustar prefix field (bytes 345..499), joined to the name with "/". */
+  prefix?: string;
   /** ustar (default), GNU magic (whose prefix field is not a path prefix), or none (old v7 tar). */
   magic?: 'ustar' | 'gnu' | 'none';
   /** Overrides the stored checksum (to test a corrupt header). */
@@ -36,6 +38,7 @@ export function header(e: TarEntry, size: number): Uint8Array {
   h.fill(0x20, 148, 156);
   h[156] = (e.type ?? '0').charCodeAt(0);
   if (e.linkname) put(h, 157, 100, e.linkname);
+  if (e.prefix) put(h, 345, 155, e.prefix);
   if (e.magic === 'gnu') put(h, 257, 8, 'ustar  \0');
   else if (e.magic !== 'none') put(h, 257, 8, 'ustar\x0000');
   let sum = 0;

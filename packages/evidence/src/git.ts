@@ -31,7 +31,9 @@ export const GIT_TAR_LIMITS: Readonly<GitTarLimits> = Object.freeze({
 
 const SHA_RE = /^[0-9a-f]{40}$/;
 const utf8 = new TextEncoder();
-const strictUtf8 = new TextDecoder('utf-8', { fatal: true });
+// ignoreBOM: keep a leading U+FEFF in a name. By default TextDecoder drops it, so a name field
+// "EF BB BF main.ts" would hash as "main.ts" while a system tar extracts a different file name.
+const strictUtf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 
 const hex = (b: Uint8Array): string => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
 
