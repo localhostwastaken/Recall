@@ -56,7 +56,7 @@ function ratio(theme: Map<string, string>, fg: string, bg: string): number {
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
 }
 
-const SURFACES = ['bg', 'surface', 'surface-sunken'];
+const SURFACES = ['bg', 'surface', 'surface-sunken', 'bg-alt', 'surface-2'];
 const TEXTS = ['text', 'text-muted', 'accent-text', 'pass', 'warn', 'fail', 'life', 'info'];
 const STATUS_PAIRS: [string, string][] = [
   ['pass', 'pass-bg'],
@@ -84,13 +84,6 @@ describe.each(Object.entries(THEMES))('contrast, %s theme', (_name, theme) => {
     });
   }
 
-  it('text and muted text also read on the alternating section and the well', () => {
-    for (const bg of ['bg-alt', 'surface-2']) {
-      expect(ratio(theme, 'text', bg)).toBeGreaterThanOrEqual(4.5);
-      expect(ratio(theme, 'text-muted', bg)).toBeGreaterThanOrEqual(4.5);
-    }
-  });
-
   it('--border-strong on --surface and --bg is at least 3:1 (inputs, outline buttons)', () => {
     expect(ratio(theme, 'border-strong', 'surface')).toBeGreaterThanOrEqual(3);
     expect(ratio(theme, 'border-strong', 'bg')).toBeGreaterThanOrEqual(3);
@@ -98,6 +91,10 @@ describe.each(Object.entries(THEMES))('contrast, %s theme', (_name, theme) => {
 
   it('--on-accent on --accent is at least 4.5:1', () => {
     expect(ratio(theme, 'on-accent', 'accent')).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('--on-accent on --accent-hover is at least 4.5:1 (hover and pressed buttons)', () => {
+    expect(ratio(theme, 'on-accent', 'accent-hover')).toBeGreaterThanOrEqual(4.5);
   });
 
   it('--on-danger on --danger is at least 4.5:1', () => {

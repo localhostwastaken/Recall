@@ -11,14 +11,21 @@ export type Theme = 'light' | 'dark';
 const KEY = 'recall.theme';
 const EVENT = 'recall-theme';
 const DARK_QUERY = '(prefers-color-scheme: dark)';
+// The browser-chrome colour of each theme (the value of --bg); index.html uses the same two.
+const CHROME: Record<Theme, string> = { light: '#f4f5f2', dark: '#000000' };
+
+// The choice made in this page view. It backs up localStorage: when storage is blocked (private
+// mode) the choice still holds for the whole page view, and a system change does not override it.
+let session: Theme | null = null;
 
 export function getStoredTheme(): Theme | null {
   try {
     const v = localStorage.getItem(KEY);
-    return v === 'light' || v === 'dark' ? v : null;
+    if (v === 'light' || v === 'dark') return v;
   } catch {
-    return null;
+    // Blocked storage: fall through to this page view's own choice.
   }
+  return session;
 }
 
 export function systemTheme(): Theme {
@@ -35,14 +42,18 @@ export function currentTheme(): Theme {
 
 function apply(theme: Theme): void {
   document.documentElement.dataset.theme = theme;
+  // Keep the browser chrome (address bar) in step with an explicit choice, whatever the media
+  // attribute of each meta says.
+  for (const m of document.querySelectorAll('meta[name="theme-color"]')) m.setAttribute('content', CHROME[theme]);
 }
 
 /** Remember an explicit choice, apply it and tell every listener (the toggle, other hooks). */
 export function setTheme(theme: Theme): void {
+  session = theme;
   try {
     localStorage.setItem(KEY, theme);
   } catch {
-    // Private mode or blocked storage: the choice still applies for this page view.
+    // Private mode or blocked storage: the choice still holds for this page view (see `session`).
   }
   apply(theme);
   window.dispatchEvent(new CustomEvent<Theme>(EVENT, { detail: theme }));

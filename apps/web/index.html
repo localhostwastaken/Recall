@@ -26,6 +26,10 @@
           }
         }
         document.documentElement.setAttribute('data-theme', t);
+        // The browser chrome follows the theme in effect, including an explicit choice.
+        var c = t === 'dark' ? '#000000' : '#f4f5f2';
+        var metas = document.querySelectorAll('meta[name="theme-color"]');
+        for (var i = 0; i < metas.length; i++) metas[i].setAttribute('content', c);
       })();
     </script>
   </head>
