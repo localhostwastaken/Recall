@@ -6,6 +6,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { expect, test } from '@playwright/test';
 import {
   arkivPublic,
+  arkivRpcUrl,
   arkivWallet,
   downloadBytes,
   listByUrl,
@@ -31,7 +32,7 @@ test.describe('@live p0', () => {
     const cfg = liveConfig(env());
     const account = privateKeyToAccount(normalizeKey(env().TREASURY_PRIVATE_KEY));
     console.log('treasury', account.address);
-    const w = arkivWallet(cfg, http(cfg.arkiv.rpcUrl), account);
+    const w = arkivWallet(cfg, http(arkivRpcUrl(cfg)), account);
     const pub = arkivPublic(cfg);
     const urlHash = keccak256(stringToBytes(`https://notice.recall.test/p0-live?run=${Date.now()}`));
     const row: CaptureRow = {

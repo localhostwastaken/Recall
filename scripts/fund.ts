@@ -39,7 +39,7 @@ import {
 import { privateKeyToAccount, type PrivateKeyAccount } from 'viem/accounts';
 import { gnosis } from 'viem/chains';
 import { BEE_COMPOSE_FAUCET_KEY, DEV_PRIVATE_KEY } from '../e2e/fixtures/keys';
-import { LOCAL, POSTAGE_STAMP, XBZZ, arkivPublic, liveConfig, normalizeKey, type NetConfig } from '../packages/net/src/index';
+import { LOCAL, POSTAGE_STAMP, XBZZ, arkivPublic, arkivRpcUrl, liveConfig, normalizeKey, type NetConfig } from '../packages/net/src/index';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const XBZZ_DECIMALS = 16;
@@ -231,7 +231,7 @@ async function main() {
     cfg = LOCAL;
     tglmFunder = xdaiFunder = privateKeyToAccount(DEV_PRIVATE_KEY);
     xbzzFunder = privateKeyToAccount(BEE_COMPOSE_FAUCET_KEY);
-    arkiv = side('Arkiv', arkivPublic(cfg).chain as Chain, http(cfg.arkiv.rpcUrl));
+    arkiv = side('Arkiv', arkivPublic(cfg).chain as Chain, http(arkivRpcUrl(cfg)));
   }
   const gnosisChain: Chain = { ...gnosis, rpcUrls: { default: { http: [cfg.gnosis.rpcUrl] } } };
   const chainGnosis = side('Gnosis', gnosisChain, http(cfg.gnosis.rpcUrl), live ? 'https://gnosisscan.io' : undefined);

@@ -12,7 +12,7 @@ DEV_CA="$ROOT/fixtures/notice/.certs/ca.der"
 
 # The release build bakes the public Arkiv access key in as the default (R30). It comes from the
 # environment, else from the git-ignored repo-root .env.local; it is read here without printing
-# anything and only handed to the build.
+# anything and only handed to the build command.
 read_env_value() { # <file> <NAME>: the last NAME=value line, quotes removed, nothing echoed
   local line v
   line="$(grep -E "^[[:space:]]*(export[[:space:]]+)?$2=" "$1" 2>/dev/null | tail -n 1 || true)"
@@ -23,19 +23,38 @@ read_env_value() { # <file> <NAME>: the last NAME=value line, quotes removed, no
   printf '%s' "$v"
 }
 ENV_FILE="${RECALL_ENV_FILE:-$ROOT/.env.local}"
-if [ -z "${ARKIV_ACCESS_KEY:-}" ] && [ -f "$ENV_FILE" ]; then
-  if key="$(read_env_value "$ENV_FILE" ARKIV_ACCESS_KEY)"; then export ARKIV_ACCESS_KEY="$key"; fi
+# Tracing (bash -x) is switched off while the key is handled, so it never shows in a trace log;
+# it is switched back on afterwards if it was on. The key lives in a plain shell variable (not
+# exported), so `npm install` below never sees it; only the build command gets it.
+xtrace_was_on=0
+case "$-" in *x*) xtrace_was_on=1;; esac
+{ set +x; } 2>/dev/null
+ARKIV_KEY=""
+if [ -n "${ARKIV_ACCESS_KEY:-}" ]; then
+  ARKIV_KEY="$ARKIV_ACCESS_KEY"
+  unset ARKIV_ACCESS_KEY
+elif [ -f "$ENV_FILE" ]; then
+  if key="$(read_env_value "$ENV_FILE" ARKIV_ACCESS_KEY)"; then ARKIV_KEY="$key"; fi
   unset key
 fi
-if [ -z "${ARKIV_ACCESS_KEY:-}" ]; then
+if [ -z "$ARKIV_KEY" ]; then
   echo "WARNING: release build has NO built-in Arkiv key (ARKIV_ACCESS_KEY is neither in the environment nor in .env.local)." >&2
   echo "         Reads then use the rate-limited public Arkiv endpoint unless the person sets a key in Settings." >&2
 fi
+if [ "$xtrace_was_on" = 1 ]; then set -x; fi
 
 cd "$EXT"
-[ -d node_modules ] || npm install
-# Dev flags must never leak in from the caller's shell.
-env -u RECALL_DEV_CA_DER_B64 -u RECALL_DEV RECALL_BUILD_DIR=build-release npm run build
+# The key is not in the environment here (see above), even when the caller's shell exports it.
+[ -d node_modules ] || env -u ARKIV_ACCESS_KEY npm install
+# Dev flags must never leak in from the caller's shell. The key goes to the build command only,
+# as an environment variable (not an argument, which `ps` would show), with tracing off.
+{ set +x; } 2>/dev/null
+if [ -n "$ARKIV_KEY" ]; then
+  ARKIV_ACCESS_KEY="$ARKIV_KEY" env -u RECALL_DEV_CA_DER_B64 -u RECALL_DEV RECALL_BUILD_DIR=build-release npm run build
+else
+  env -u ARKIV_ACCESS_KEY -u RECALL_DEV_CA_DER_B64 -u RECALL_DEV RECALL_BUILD_DIR=build-release npm run build
+fi
+if [ "$xtrace_was_on" = 1 ]; then set -x; fi
 
 fail() { echo "release build check FAILED: $*" >&2; exit 1; }
 
