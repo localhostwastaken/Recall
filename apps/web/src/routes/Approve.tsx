@@ -1574,7 +1574,7 @@ export function Approve({ captureId }: { captureId: string | null }) {
         </Notice>
       ) : null}
       {connected && !onArkiv && atPublish && !published && !busy ? (
-        <Notice kind="info" title="Wrong network">
+        <Notice kind="warn" title="Wrong network">
           MetaMask is on {wallet.chainId !== null ? (CHAIN_NAMES[wallet.chainId as ChainId] ?? `network ${wallet.chainId}`) : 'another network'}. Records are
           published on {arkivName}.
         </Notice>
