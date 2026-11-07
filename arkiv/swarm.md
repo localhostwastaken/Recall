@@ -158,9 +158,11 @@ links to the evidence.
 
 ## In the demo video
 
-<!-- DEMO-VIDEO-SWARM: timestamp to be filled in after recording -->
-_Timestamp to be added after recording:_ the capture's upload to Swarm in the popup, and the verify
-view downloading the evidence from a different gateway and checking its root.
+[Demo video](https://drive.google.com/file/d/1ZxGArPliJmzQaDDs9xogtd27HKMYTKiz/view) (3 minutes). Swarm is used in
+two places: the **publish step** (about 1:20 to 1:40), where the bitchat evidence file and its code
+archive are uploaded to Swarm with the batch bought in advance; and the **record page** right after,
+where the app downloads the evidence and the code back from Swarm, recomputes their Swarm hashes and
+shows the code as Hash-anchored.
 
 ## What got in our way with Swarm
 
