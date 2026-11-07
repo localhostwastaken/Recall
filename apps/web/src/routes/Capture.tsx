@@ -1,4 +1,4 @@
-import { Copy, Download, History } from 'lucide-react';
+import { Download, History } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import type { Hex } from 'viem';
 import { repoOf } from '../attachments/git';
@@ -11,8 +11,8 @@ import { RepoSnapshot } from '../components/RepoSnapshot';
 import { evidenceFileName, saveBytes } from '../download';
 import { recordLinks } from '../explorers';
 import { getNetConfig } from '../net';
+import { CopyLinkButton } from '../ui/CopyLinkButton';
 import { Notice } from '../ui/Notice';
-import { useToast } from '../ui/Toast';
 import { captureTitle } from '../verify/captureTitle';
 import { CheckPanel, TechnicalDetails, VerdictLine, WhyWitness } from '../verify/CheckPanel';
 import { readFile, peekComparisonFile, type GivenFile } from '../verify/handoff';
@@ -32,7 +32,6 @@ function downloadEvidence(v: VerifiedCapture): void {
 
 /** The detail page of one capture record: facts, verdict, checks A to E, actions. */
 export function Capture({ entityKey }: { entityKey: Hex }) {
-  const toast = useToast();
   // A file given on the home page ("compare a file with captures") arrives here for check D.
   const [file, setFile] = useState<GivenFile | null>(() => peekComparisonFile(entityKey));
   const [fileError, setFileError] = useState<string | undefined>();
@@ -58,15 +57,6 @@ export function Capture({ entityKey }: { entityKey: Hex }) {
       setFileError(undefined);
     } catch (e) {
       setFileError(e instanceof Error ? e.message : 'That file could not be read.');
-    }
-  };
-
-  const copyLink = async () => {
-    try {
-      await navigator.clipboard.writeText(window.location.href);
-      toast('Copied');
-    } catch {
-      toast('Copy is blocked in this browser. Select the address bar instead.');
     }
   };
 
@@ -204,10 +194,7 @@ export function Capture({ entityKey }: { entityKey: Hex }) {
                 onChanged={v.refreshStorage}
               />
             ) : null}
-            <button type="button" className="btn btn-ghost" onClick={copyLink}>
-              <Copy size={16} strokeWidth={1.75} aria-hidden="true" />
-              Copy link
-            </button>
+            <CopyLinkButton />
           </div>
           {v.report && !isVerifiedReport(v.report) ? (
             <p className="ka-hint">Keep-alive is offered only for captures whose checks A to C passed.</p>
