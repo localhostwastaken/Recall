@@ -504,3 +504,9 @@
 .lib-cell .ccard-title {
   overflow-wrap: anywhere;
 }
+
+/* A page change moves the focus to the list (so the keyboard carries on from the new cards); the
+   list itself draws no ring, the cards and their links do. */
+.lib-grid[tabindex='-1']:focus {
+  outline: none;
+}

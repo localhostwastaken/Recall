@@ -10,7 +10,7 @@ export type Route =
   | { name: 'storage' }
   | { name: 'settings' }
   | { name: 'approve'; captureId: string | null }
-  | { name: 'library'; q: string; type: LibraryType; sort: LibrarySort }
+  | { name: 'library'; q: string; type: LibraryType; sort: LibrarySort; page: number }
   | { name: 'not-found'; path: string };
 
 export type LibraryType = 'all' | 'page' | 'repo';
@@ -22,12 +22,26 @@ const LIBRARY_SORTS: readonly LibrarySort[] = ['time', 'newest', 'ending'];
 const oneOf = <T extends string>(v: string | null, allowed: readonly T[], fallback: T): T =>
   allowed.includes(v as T) ? (v as T) : fallback;
 
-/** `#/library?q=&type=&sort=`: the library view in the address, so a view can be shared. Defaults are left out. */
-export function libraryHash(p: Partial<LibraryView>): string {
+/** The highest page number the address may ask for (the library reads at most 1,000 captures). */
+const MAX_LIBRARY_PAGE = 10_000;
+
+/** A page number from the address: a whole number from 1 up, anything else is page 1. */
+function pageNumber(v: string | null): number {
+  if (v === null || !/^\d{1,5}$/.test(v)) return 1;
+  const n = Number(v);
+  return n >= 1 && n <= MAX_LIBRARY_PAGE ? n : 1;
+}
+
+/**
+ * `#/library?q=&type=&sort=&page=`: the library view in the address, so a view (and the page of
+ * results) can be shared. Defaults are left out.
+ */
+export function libraryHash(p: Partial<LibraryView> & { page?: number }): string {
   const params = new URLSearchParams();
   if (p.q) params.set('q', p.q);
   if (p.type && p.type !== 'all') params.set('type', p.type);
   if (p.sort && p.sort !== 'time') params.set('sort', p.sort);
+  if (p.page && p.page > 1) params.set('page', String(p.page));
   const qs = params.toString();
   return qs ? `#/library?${qs}` : '#/library';
 }
@@ -54,6 +68,7 @@ export function parseHash(hash: string): Route {
         q: params.get('q') ?? '',
         type: oneOf(params.get('type'), LIBRARY_TYPES, 'all'),
         sort: oneOf(params.get('sort'), LIBRARY_SORTS, 'time'),
+        page: pageNumber(params.get('page')),
       };
     }
   }

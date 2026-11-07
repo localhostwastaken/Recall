@@ -52,6 +52,9 @@ export function LibraryKeepAlive({
 
 type Days = ReadonlyMap<Hex, number | null>;
 
+/** Called when a kept-alive card's new rank took it off the grid on screen (to another page), with its old and new days. */
+export type LeftGrid = (urlHash: Hex, from: number, to: number) => void;
+
 const whole = (d: number | null | undefined): number | null =>
   d === null || d === undefined || !Number.isFinite(d) ? null : Math.max(0, Math.floor(d));
 
@@ -106,7 +109,10 @@ function whenNoDialogOpen(root: HTMLElement, fn: () => void): Stop {
 export function useKeepAliveRerank(
   live: Days,
   refreshDays: (urlHash: Hex) => Promise<void>,
+  onLeftGrid?: LeftGrid,
 ): { days: Days; onExtended: (urlHash: Hex) => Promise<void> } {
+  const leftRef = useRef(onLeftGrid);
+  leftRef.current = onLeftGrid;
   const [held, setHeld] = useState<Days>(() => new Map());
   const [settled, setSettled] = useState(0);
 
@@ -206,6 +212,11 @@ export function useKeepAliveRerank(
         const reducedMotion = prefersReducedMotion();
         const fromBar = barPercent(card);
         track(flipRerank(grid, mutate, { reducedMotion }));
+        // Its new rank is on another page of the library: the page follows it there.
+        if (!slotFor(urlHash)) {
+          leftRef.current?.(urlHash, from, to);
+          return;
+        }
         if (!reducedMotion && card) track(celebrateCard(card, from, to, fromBar));
       };
       track(whenNoDialogOpen(slot.closest<HTMLElement>('[data-library-grid]') ?? slot, play));
@@ -219,7 +230,7 @@ export function useKeepAliveRerank(
  * The library data a page renders with when its cards offer keep-alive: `days` holds a card's old
  * value until its keep-alive is played, and `refreshDays` re-reads the days and then plays it.
  */
-export function useKeepAliveLibrary(lib: LibraryData): LibraryData {
-  const { days, onExtended } = useKeepAliveRerank(lib.days, lib.refreshDays);
+export function useKeepAliveLibrary(lib: LibraryData, onLeftGrid?: LeftGrid): LibraryData {
+  const { days, onExtended } = useKeepAliveRerank(lib.days, lib.refreshDays, onLeftGrid);
   return { ...lib, days, refreshDays: onExtended };
 }

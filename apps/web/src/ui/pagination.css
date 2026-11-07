@@ -1,0 +1,113 @@
+/* The pager under a list of results: Previous, the page numbers, Next, centred, 24 px below the
+   cards (one step more than the 16 px between cards, so it reads as its own group). Every target
+   is 44 px tall; numbers are 44 px squares 4 px apart. Tokens only. `nav.pager` outranks the
+   page's own 16 px rhythm (`.page > * + *`). */
+nav.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+}
+
+.pager-step {
+  gap: var(--space-2);
+  min-height: 44px;
+}
+
+.pager-step:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.pager-pages {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pager-num {
+  display: inline-grid;
+  place-items: center;
+  min-width: 44px;
+  height: 44px;
+  padding: 0 var(--space-2);
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid transparent;
+  border-radius: var(--radius-1);
+  font: inherit;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.pager-num:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.pager-num:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* The page you are on: neutral ink, bold (a state, never orange; same as a selected segment). */
+.pager-num[aria-current='page'] {
+  background: var(--text);
+  color: var(--bg);
+  font-weight: 700;
+  cursor: default;
+}
+
+.pager-gap {
+  min-width: 24px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+/* "Page 2 of 5" replaces the numbers on a phone only. */
+.pager-where {
+  display: none;
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: var(--lh-sm);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Phone: Previous, "Page 2 of 5", Next on one row, 8 px apart, with slimmer button padding so the
+   row fits a 375 px screen (it wraps rather than pushing the page sideways on a narrower one). */
+@media (max-width: 599px) {
+  nav.pager {
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  .pager-step.btn {
+    padding-left: var(--space-4);
+    padding-right: var(--space-4);
+  }
+
+  .pager-pages {
+    display: none;
+  }
+
+  .pager-where {
+    display: block;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pager-num {
+    transition: none;
+  }
+}
