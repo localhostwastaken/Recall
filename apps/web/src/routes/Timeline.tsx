@@ -1,4 +1,4 @@
-import { CircleCheck, Copy, LoaderCircle } from 'lucide-react';
+import { CircleCheck, LoaderCircle } from 'lucide-react';
 import { useMemo, useState, type ReactNode } from 'react';
 import type { Hex } from 'viem';
 import { Diff } from '../components/Diff';
@@ -6,11 +6,11 @@ import { formatBytes, formatLocal, formatUtc, safeDate } from '../format';
 import { pageSize } from '../limits';
 import { buildTimeline, type Pending, type Unverified, type Version } from '../timeline/model';
 import { useTimeline } from '../timeline/useTimeline';
+import { CopyLinkButton } from '../ui/CopyLinkButton';
 import { MonoValue, middle } from '../ui/MonoValue';
 import { Notice } from '../ui/Notice';
 import { StatusBadge } from '../ui/StatusBadge';
 import { Switch } from '../ui/Switch';
-import { useToast } from '../ui/Toast';
 import { TechnicalDetails } from '../verify/CheckPanel';
 import { witnessLabel } from '../witness';
 
@@ -129,20 +129,10 @@ function Loading() {
  * behind "Show unverified (n)". Nothing here claims completeness: R10's `truncated` is shown.
  */
 export function Timeline({ urlHash }: { urlHash: Hex }) {
-  const toast = useToast();
   const t = useTimeline(urlHash);
   const [showUnverified, setShowUnverified] = useState(false);
   // `t.checked` is updated in place; `t.version` says when it changed.
   const tl = useMemo(() => buildTimeline(t.rows, t.checked, t.notStarted), [t.rows, t.version, t.notStarted]);  // eslint-disable-line react-hooks/exhaustive-deps
-
-  const copyLink = async () => {
-    try {
-      await navigator.clipboard.writeText(window.location.href);
-      toast('Copied');
-    } catch {
-      toast('Copy is blocked in this browser. Select the address bar instead.');
-    }
-  };
 
   if (t.phase === 'error') {
     return (
@@ -283,10 +273,7 @@ export function Timeline({ urlHash }: { urlHash: Hex }) {
             </p>
           ) : null}
           <div className="page-actions">
-            <button type="button" className="btn btn-secondary" onClick={copyLink}>
-              <Copy size={16} strokeWidth={1.75} aria-hidden="true" />
-              Copy link
-            </button>
+            <CopyLinkButton />
           </div>
         </div>
       </aside>
