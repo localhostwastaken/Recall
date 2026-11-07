@@ -614,8 +614,17 @@ function hexToBytesSafe(v: Hex | Uint8Array): Uint8Array {
   return out;
 }
 
-/** A capture record as listed by `listAllCaptures`: the indexed claims plus who wrote it and when it expires. */
-export type ListedCapture = CaptureRow & { entityKey: Hex; owner: Address; creator: Address; expiresAtBlock: bigint };
+/**
+ * A capture record as listed by `listAllCaptures`: the indexed claims plus who wrote it, the block
+ * it was created in (when the node sends it) and when it expires.
+ */
+export type ListedCapture = CaptureRow & {
+  entityKey: Hex;
+  owner: Address;
+  creator: Address;
+  createdAtBlock?: bigint;
+  expiresAtBlock: bigint;
+};
 
 /**
  * Every capture record on Arkiv, whoever wrote it (the public library). Anyone can write rows
@@ -640,6 +649,7 @@ export async function listAllCaptures(
       entityKey: e.$key,
       owner: e.$owner as Address,
       creator: e.$creator as Address,
+      ...(e.$createdAt !== undefined ? { createdAtBlock: e.$createdAt } : {}),
       expiresAtBlock: e.$expiresAt,
       urlHash: e.urlHash.value,
       bodySha256: e.bodySha256.value,

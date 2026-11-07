@@ -111,6 +111,14 @@ describe('listAllCaptures (stubbed node)', () => {
     });
   });
 
+  it('passes on the block each record was created in, and leaves it out when the node does not send it', async () => {
+    const sent = { ...capture(1), $createdAt: 77n };
+    const { pub } = stub([sent, capture(2)]);
+    const { rows } = await listAllCaptures(pub);
+    expect(rows[0]!.createdAtBlock).toBe(77n);
+    expect(rows[1]).not.toHaveProperty('createdAtBlock');
+  });
+
   it('reads in ascending $key order on every page (SDK 1.0.1 sorts by one key only, and $createdAt is not queryable)', async () => {
     const { pub, calls } = stub([1, 2, 3, 4, 5].map(capture));
     await listAllCaptures(pub, { pageSize: 2 });
