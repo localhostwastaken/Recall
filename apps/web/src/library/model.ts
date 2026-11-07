@@ -61,14 +61,15 @@ export function shortAddress(address: string, max = 36): string {
 }
 
 const lower = (h: string) => h.toLowerCase();
-const newer = (a: ListedCapture, b: ListedCapture): boolean =>
-  a.signedAt !== b.signedAt ? a.signedAt > b.signedAt : BigInt(a.entityKey) > BigInt(b.entityKey);
+/** True when `a` stands for the page before `b` (see `groupByPage` for the order and why). */
+const newer = (a: ListedCapture, b: ListedCapture): boolean => {
+  if (a.signedAt !== b.signedAt) return a.signedAt > b.signedAt;
+  const x = a.createdAtBlock;
+  const y = b.createdAtBlock;
+  if (x !== undefined && y !== undefined && x !== y) return x < y;
+  return BigInt(a.entityKey) > BigInt(b.entityKey);
+};
 
-/**
- * One entry per page (`urlHash`, any case). The newest record is the one with the latest signed
- * time (a tie goes to the larger record key); a page is a repo when any of its captures is named
- * by a git attachment.
- */
 /** True when the record's address, canonicalised as a capture does it, hashes to its `urlHash`. */
 export function addressMatchesHash(r: Pick<ListedCapture, 'canonicalUrl' | 'urlHash'>): boolean {
   try {
@@ -78,6 +79,16 @@ export function addressMatchesHash(r: Pick<ListedCapture, 'canonicalUrl' | 'urlH
   }
 }
 
+/**
+ * One entry per page (`urlHash`, any case). The newest record is the one with the latest signed
+ * time. On a tie the record written first on Arkiv wins (earlier block), and when the node did not
+ * say, the larger record key. Why first-written: anyone can copy a real evidence file into a new
+ * record that names their own Swarm batch. The copy checks out (same signed evidence, same signed
+ * time), and if it became the card's record, Keep alive would top up the copier's batch while the
+ * batch that really stores the evidence runs out. The copier finds the evidence through the
+ * original record, so the copy is written later and the original wins. A page is a repo when any
+ * of its captures is named by a git attachment.
+ */
 export function groupByPage(rows: readonly ListedCapture[], attachments: readonly ListedAttachment[]): PageEntry[] {
   const gitParents = new Set(attachments.filter((a) => a.kind === 'git').map((a) => lower(a.parentCaptureKey)));
   const pages = new Map<string, { rows: ListedCapture[]; newest: ListedCapture; repo: boolean }>();

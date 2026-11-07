@@ -63,6 +63,35 @@ describe('groupByPage', () => {
     expect(e!.newest.entityKey).toBe(k(7));
   });
 
+  it('breaks a signed-time tie with the record written first, so a later copy cannot take over the card', () => {
+    const first = cap(3, { signedAt: 5n, createdAtBlock: 100n, batchId: k(301) });
+    const copy = cap(7, { signedAt: 5n, createdAtBlock: 200n, batchId: k(302) });
+    for (const rows of [[first, copy], [copy, first]]) {
+      const [e] = groupByPage(rows, []);
+      expect(e!.newest.entityKey).toBe(k(3));
+      expect(e!.newest.batchId).toBe(k(301));
+      expect(e!.older!.map((r) => r.entityKey)).toEqual([k(7)]);
+    }
+    const third = cap(5, { signedAt: 5n, createdAtBlock: 150n });
+    const [e] = groupByPage([copy, third, first], []);
+    expect([e!.newest, ...e!.older!].map((r) => r.entityKey)).toEqual([k(3), k(5), k(7)]);
+  });
+
+  it('falls back to the larger record key on a signed-time tie when either record has no creation block', () => {
+    const [a] = groupByPage([cap(3, { signedAt: 5n, createdAtBlock: 100n }), cap(7, { signedAt: 5n })], []);
+    expect(a!.newest.entityKey).toBe(k(7));
+    const [b] = groupByPage([cap(3, { signedAt: 5n }), cap(7, { signedAt: 5n, createdAtBlock: 200n })], []);
+    expect(b!.newest.entityKey).toBe(k(7));
+    const [c] = groupByPage([cap(3, { signedAt: 5n, createdAtBlock: 100n }), cap(7, { signedAt: 5n, createdAtBlock: 100n })], []);
+    expect(c!.newest.entityKey).toBe(k(7));
+  });
+
+  it('ignores the creation block when the signed times differ', () => {
+    const [e] = groupByPage([cap(3, { signedAt: 5n, createdAtBlock: 100n }), cap(7, { signedAt: 9n, createdAtBlock: 200n })], []);
+    expect(e!.newest.entityKey).toBe(k(7));
+    expect(e!.older!.map((r) => r.entityKey)).toEqual([k(3)]);
+  });
+
   it('groups urlHash case-insensitively and keeps pages apart', () => {
     const upper = uh('https://gov.example/notice').toUpperCase().replace('0X', '0x') as Hex;
     const entries = groupByPage([cap(1), cap(2, { urlHash: upper }), cap(3, { canonicalUrl: 'https://other.example/' })], []);

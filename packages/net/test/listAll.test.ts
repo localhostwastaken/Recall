@@ -81,6 +81,8 @@ describe('listAllCaptures / listAllAttachments (devnet)', () => {
     expect(found.map((r) => r.canonicalUrl)).toEqual(written.map((r) => r.canonicalUrl));
     for (const r of found) {
       expect(r.expiresAtBlock > 0n).toBe(true);
+      // The library breaks a signed-time tie with the record written first, so the node must send it.
+      expect(r.createdAtBlock !== undefined && r.createdAtBlock > 0n && r.createdAtBlock <= r.expiresAtBlock).toBe(true);
       expect(r.creator.toLowerCase()).toBe(writer.address.toLowerCase());
     }
 
