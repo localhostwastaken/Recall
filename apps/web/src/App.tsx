@@ -32,7 +32,7 @@ function Page({ route }: { route: Route }) {
     case 'home':
       return <Home />;
     case 'library':
-      return <Library key={routeId(route)} q={route.q} type={route.type} sort={route.sort} />;
+      return <Library key={routeId(route)} q={route.q} type={route.type} sort={route.sort} page={route.page} />;
     case 'url':
       // Keyed by the address, so moving between two timelines never carries state over.
       return <Timeline key={route.urlHash} urlHash={route.urlHash} />;

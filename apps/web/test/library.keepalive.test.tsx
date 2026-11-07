@@ -385,3 +385,45 @@ describe('the library page wires keep-alive to its grid', () => {
     expect(fromSpy).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('a kept-alive card that ranks onto another page', () => {
+  it('turns the library to the page it moved to and gives its link the focus', async () => {
+    // Ten pages: p1 (100 days) … p9 (20 days) fill page 1; p10 (1 day) is alone on page 2.
+    const entries = Array.from({ length: 10 }, (_, i) => page(`p${i + 1}`, i + 1));
+    const last = entries[9]!;
+    const store = fakeStore(
+      entries.map((e, i) => [e, i === 9 ? 1 : 100 - i * 10] as [PageEntry, number]),
+      async (h) => (h === last.urlHash ? 500 : null),
+    );
+    pageLib.use = (): LibraryData => {
+      const days = useSyncExternalStore(store.subscribe, store.getSnapshot);
+      return {
+        status: 'ready',
+        entries,
+        captureCount: entries.length,
+        truncated: false,
+        check: new Map(entries.map((e) => [e.urlHash, 'verified'] as const)),
+        titles: new Map(),
+        days,
+        requestCheck: () => {},
+        retry: () => {},
+        refreshDays: store.refreshDays,
+      };
+    };
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+    act(() => root!.render(<Library page={2} />));
+    const grid = host.querySelector<HTMLElement>('[data-library-grid]')!;
+    expect(order(grid)).toEqual(['p10.example/notice']);
+
+    await keepAlive(grid, 'p10');
+
+    const now = host.querySelector<HTMLElement>('[data-library-grid]')!;
+    expect(order(now)).toHaveLength(9);
+    expect(order(now)[0]).toBe('p10.example/notice');
+    expect(rankOf(now, 'p10')).toBe('#1');
+    expect(host.querySelector('[aria-current="page"]')?.textContent).toBe('1');
+    expect(document.activeElement).toBe(cardOf(now, 'p10').querySelector('a'));
+  });
+});

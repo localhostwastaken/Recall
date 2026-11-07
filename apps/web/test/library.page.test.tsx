@@ -191,7 +191,7 @@ describe('Library page', () => {
   it('skeleton cards have the card rows and no letter tile', () => {
     current = data({ status: 'loading', entries: [] });
     render();
-    expect(host.querySelectorAll('.lib-skel')).toHaveLength(6);
+    expect(host.querySelectorAll('.lib-skel')).toHaveLength(9); // one page of cards
     expect(host.querySelector('.lib-skel-fav')).toBeNull();
     expect(host.querySelector('.lib-skel .btn')).toBeNull();
     expect(host.querySelector('.lib-skel-line.action')).not.toBeNull();
@@ -201,5 +201,85 @@ describe('Library page', () => {
     current = data({ truncated: true });
     render();
     expect(text()).toContain('Showing 1,000 captures. Arkiv has more than this page reads.');
+  });
+});
+
+/** `count` pages, page n with n days left (so "most time left" ranks the highest n first). */
+function many(count: number, over: Partial<LibraryData> = {}): LibraryData {
+  const rows = Array.from({ length: count }, (_, i) => cap(i + 1, `https://site${i + 1}.example/p`));
+  const entries = groupByPage(rows, []);
+  return data({
+    entries,
+    captureCount: rows.length,
+    days: new Map(rows.map((r, i) => [r.urlHash.toLowerCase() as Hex, i + 1])),
+    ...over,
+  });
+}
+const pager = () => host.querySelector<HTMLElement>('nav[aria-label="Library pages"]');
+const pagerButton = (name: string) =>
+  [...(pager()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === name || b.getAttribute('aria-label') === name)!;
+
+describe('Library pages of nine', () => {
+  it('shows nine cards and a pager when there are more', () => {
+    current = many(20);
+    render();
+    expect(cards()).toHaveLength(9);
+    expect(pager()).not.toBeNull();
+    expect(pagerButton('Previous').disabled).toBe(true);
+    expect(pagerButton('Page 1').getAttribute('aria-current')).toBe('page');
+    expect(host.querySelector('[role="status"]')?.textContent).toBe('Showing 1–9 of 20 pages · ranked by time left');
+    // Only the cards on this page are asked to be checked.
+    expect(new Set(vi.mocked(current.requestCheck).mock.calls.map(([h]) => h)).size).toBe(9);
+  });
+
+  it('Next shows the next nine, the ranks carry on, and the page goes in the address', () => {
+    current = many(20);
+    render();
+    act(() => pagerButton('Next').click());
+    expect(cards()).toHaveLength(9);
+    expect(cards()[0]!.textContent).toContain('#10');
+    expect(cards()[0]!.textContent).toContain('site11.example');
+    expect(pagerButton('Page 2').getAttribute('aria-current')).toBe('page');
+    expect(window.location.hash).toBe('#/library?page=2');
+    expect(document.activeElement).toBe(host.querySelector('[data-library-grid]'));
+    act(() => pagerButton('Page 3').click());
+    expect(cards()).toHaveLength(2);
+    expect(pagerButton('Next').disabled).toBe(true);
+    expect(host.querySelector('[role="status"]')?.textContent).toBe('Showing 19–20 of 20 pages · ranked by time left');
+  });
+
+  it('opens on the page in the address, and a page past the end shows the last one', () => {
+    current = many(20);
+    render({ page: 2 });
+    expect(cards()[0]!.textContent).toContain('#10');
+    render({ page: 9 });
+    expect(cards()).toHaveLength(2);
+    expect(window.location.hash).toBe('#/library?page=3');
+  });
+
+  it('keeps the asked-for page in the address while the library is still read', () => {
+    current = many(20, { status: 'loading', entries: [] });
+    render({ page: 3 });
+    expect(window.location.hash).toBe('#/library?page=3');
+    current = many(20);
+    render({ page: 3 });
+    expect(cards()).toHaveLength(2);
+  });
+
+  it('a new search, filter or order starts again on page 1', () => {
+    current = many(20);
+    render();
+    act(() => pagerButton('Next').click());
+    expect(window.location.hash).toBe('#/library?page=2');
+    render({ sort: 'newest' });
+    expect(cards()[0]!.textContent).toContain('site20.example');
+    expect(window.location.hash).toBe('#/library?sort=newest');
+  });
+
+  it('no pager for nine or fewer', () => {
+    current = many(9);
+    render();
+    expect(cards()).toHaveLength(9);
+    expect(pager()).toBeNull();
   });
 });

@@ -6,10 +6,13 @@ import { CaptureCard, type CardStatus } from '../components/CaptureCard';
 import { filterSort, isTestAddress, shortAddress, type PageEntry } from '../library/model';
 import { getNetConfig } from '../net';
 import { LibraryKeepAlive, useKeepAliveLibrary } from '../library/LibraryKeepAlive';
+import { PAGE_SIZE, pageOf, paginate } from '../library/paginate';
+import { celebrateCard, prefersReducedMotion, type Stop } from '../library/rerank';
 import { useLibrary, type LibraryData } from '../library/useLibrary';
 import { libraryHash, parseHash, type LibrarySort, type LibraryType, type LibraryView } from '../router';
 import { goToSection } from '../sectionNav';
 import { Notice } from '../ui/Notice';
+import { Pagination } from '../ui/Pagination';
 import { Segmented } from '../ui/Segmented';
 import { Switch } from '../ui/Switch';
 import './library.css';
@@ -27,7 +30,8 @@ const SORTS: { value: LibrarySort; label: string }[] = [
   { value: 'ending', label: 'Ending soon' },
 ];
 const SEARCH_DEBOUNCE_MS = 200;
-const SKELETON_CARDS = 6;
+/** Placeholder cards while the library is read: one page of them, so the grid keeps its height. */
+const SKELETON_CARDS = 9;
 
 /**
  * The card's one action: keep-alive for the page's newest capture, in place. A card not verified
@@ -256,19 +260,46 @@ function NoResults({ query, kind, onClear }: { query: string | null; kind: Libra
 
 const plural = (n: number, one: string, many: string) => `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
 
+/** A view's identity: a new search, filter or order starts again on page 1. */
+const viewKey = (q: string, type: LibraryType, sort: LibrarySort) => `${type}|${sort}|${q.trim().toLowerCase()}`;
+
+/** Brings the top of the results into view after a page change (smoothly, unless motion is reduced). */
+function scrollToResults(el: HTMLElement | null) {
+  el?.scrollIntoView?.({ block: 'start', behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
+}
+
 /**
  * The public library (spec 6.3): every capture on Arkiv, one card per page, searchable and
- * sortable, with the view kept in the address. A card says "Verified" only after this browser
- * checked the page's newest capture; cards in view are checked, three at a time.
+ * sortable, nine cards a page, with the view and the page kept in the address. A card says
+ * "Verified" only after this browser checked the page's newest capture; cards in view are checked,
+ * three at a time.
  */
-export function Library({ q = '', type = 'all', sort = 'time' }: Partial<LibraryView>) {
-  const lib = useKeepAliveLibrary(useLibrary());
+export function Library({ q = '', type = 'all', sort = 'time', page = 1 }: Partial<LibraryView> & { page?: number }) {
+  // A card kept alive whose new rank is on another page: the library turns to that page and the
+  // card counts up there (see the effect below).
+  const [arrival, setArrival] = useState<{ urlHash: Hex; from: number; to: number } | null>(null);
+  const shownRef = useRef<PageEntry[]>([]);
+  const currentKeyRef = useRef('');
+  const lib = useKeepAliveLibrary(useLibrary(), (urlHash, from, to) => {
+    const i = shownRef.current.findIndex((e) => e.urlHash === urlHash);
+    if (i < 0) return;
+    setPaged({ key: currentKeyRef.current, n: pageOf(i) });
+    setArrival({ urlHash, from, to });
+  });
   const [text, setText] = useState(q);
   const [query, setQuery] = useState(q);
   const [kind, setKind] = useState<LibraryType>(type);
   const [order, setOrder] = useState<LibrarySort>(sort);
   const [showUnverified, setShowUnverified] = useState(false);
   const [showTests, setShowTests] = useState(false);
+  // The page asked for, tied to the view it was asked for in: any other view shows page 1.
+  const [paged, setPaged] = useState({ key: viewKey(q, type, sort), n: page });
+  const [failedPage, setFailedPage] = useState(1);
+  /** Set by a page change, so the effect below brings the new cards into view once they render. */
+  const [turned, setTurned] = useState<'main' | 'failed' | null>(null);
+  const toolsRef = useRef<HTMLDivElement>(null);
+  const gridRef = useRef<HTMLUListElement>(null);
+  const failedRef = useRef<HTMLElement>(null);
   const observe = useCheckOnView(lib.requestCheck, lib.entries);
   const searchId = useId();
   const sortId = useId();
@@ -282,6 +313,7 @@ export function Library({ q = '', type = 'all', sort = 'time' }: Partial<Library
   }, [q]);
   useEffect(() => setKind(type), [type]);
   useEffect(() => setOrder(sort), [sort]);
+  useEffect(() => setPaged({ key: viewKey(q, type, sort), n: page }), [q, type, sort, page]);
   useEffect(() => {
     const follow = () => {
       const r = parseHash(window.location.hash);
@@ -290,6 +322,7 @@ export function Library({ q = '', type = 'all', sort = 'time' }: Partial<Library
       setQuery(r.q);
       setKind(r.type);
       setOrder(r.sort);
+      setPaged({ key: viewKey(r.q, r.type, r.sort), n: r.page });
     };
     window.addEventListener('hashchange', follow);
     return () => window.removeEventListener('hashchange', follow);
@@ -301,18 +334,6 @@ export function Library({ q = '', type = 'all', sort = 'time' }: Partial<Library
     return () => clearTimeout(t);
   }, [text, query]);
 
-  // The view lives in the address (shareable). replaceState: typing makes no history entries
-  // and no route change (focus stays in the search box).
-  useEffect(() => {
-    const next = libraryHash({ q: query, type: kind, sort: order });
-    if (window.location.hash === next) return;
-    try {
-      window.history.replaceState(window.history.state, '', next);
-    } catch {
-      /* the address just keeps the old view */
-    }
-  }, [query, kind, order]);
-
   const view: LibraryView = { q: query, type: kind, sort: order };
   // On the live network our own test pages (the fictional notice) are hidden unless asked for.
   const hidesTests = getNetConfig().arkiv.chain === 'rabdi';
@@ -323,6 +344,65 @@ export function Library({ q = '', type = 'all', sort = 'time' }: Partial<Library
   const shown = filterSort(listed, view, lib.titles, lib.days);
   const shownFailed = filterSort(failed, view, lib.titles, lib.days);
   const filtering = query.trim() !== '' || kind !== 'all';
+  shownRef.current = shown;
+  const key = viewKey(query, kind, order);
+  currentKeyRef.current = key;
+  const asked = paged.key === key ? paged.n : 1;
+  const slice = paginate(shown, asked);
+  const failedSlice = paginate(shownFailed, failedPage);
+  const ready = lib.status === 'ready';
+
+  // The view lives in the address (shareable). replaceState: typing makes no history entries
+  // and no route change (focus stays in the search box). Until the library is read, the page
+  // asked for stays in the address (it can't be checked against the count yet).
+  const pageInAddress = ready ? slice.page : asked;
+  useEffect(() => {
+    const next = libraryHash({ q: query, type: kind, sort: order, page: pageInAddress });
+    if (window.location.hash === next) return;
+    try {
+      window.history.replaceState(window.history.state, '', next);
+    } catch {
+      /* the address just keeps the old view */
+    }
+  }, [query, kind, order, pageInAddress]);
+
+  const turnTo = (n: number) => {
+    setPaged({ key, n });
+    setTurned('main');
+  };
+  const turnFailedTo = (n: number) => {
+    setFailedPage(n);
+    setTurned('failed');
+  };
+  // After a page change: the top of the results comes into view and the list takes the focus
+  // (the button pressed may now be disabled, or far below), so the keyboard carries on from there.
+  useEffect(() => {
+    if (!turned) return;
+    setTurned(null);
+    const list = turned === 'main' ? gridRef.current : failedRef.current?.querySelector<HTMLElement>('.lib-grid') ?? null;
+    scrollToResults(turned === 'main' ? toolsRef.current : failedRef.current);
+    list?.focus({ preventScroll: true });
+  }, [turned]);
+
+  // A kept-alive card that moved to another page: show it there, count its days up, and give it
+  // the focus its Keep alive button had. The count-up is stopped only if the page goes away.
+  const arrivalStop = useRef<Stop | null>(null);
+  useEffect(() => () => arrivalStop.current?.(), []);
+  useEffect(() => {
+    if (!arrival) return;
+    setArrival(null);
+    let slot: HTMLElement | null = null;
+    for (const el of document.querySelectorAll<HTMLElement>('.lib-ka[data-ka-for]')) {
+      if (el.dataset.kaFor === arrival.urlHash) slot = el;
+    }
+    const card = slot?.closest<HTMLElement>('.ccard') ?? null;
+    if (!card) return;
+    card.scrollIntoView?.({ block: 'center', behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
+    card.querySelector<HTMLElement>('a')?.focus({ preventScroll: true });
+    if (prefersReducedMotion()) return;
+    arrivalStop.current?.();
+    arrivalStop.current = celebrateCard(card, arrival.from, arrival.to, null);
+  }, [arrival]);
 
   const searchRef = useRef<HTMLInputElement>(null);
   const clear = () => {
@@ -335,7 +415,14 @@ export function Library({ q = '', type = 'all', sort = 'time' }: Partial<Library
   let status = '';
   if (lib.status === 'loading') status = 'Reading the library from Arkiv…';
   else if (lib.status === 'ready' && lib.entries.length > 0) {
-    status = filtering ? `Showing ${shown.length} of ${plural(listed.length, 'page', 'pages')}` : plural(listed.length, 'page', 'pages');
+    if (slice.pages > 1) {
+      const range = `${slice.first.toLocaleString('en-US')}–${slice.last.toLocaleString('en-US')}`;
+      status = filtering
+        ? `Showing ${range} of ${plural(shown.length, 'matching page', 'matching pages')}`
+        : `Showing ${range} of ${plural(listed.length, 'page', 'pages')}`;
+    } else {
+      status = filtering ? `Showing ${shown.length} of ${plural(listed.length, 'page', 'pages')}` : plural(listed.length, 'page', 'pages');
+    }
     if (order === 'time' && shown.length > 1) status += ' · ranked by time left';
   }
   const showTestSwitch = lib.status === 'ready' && tests.length > 0;
@@ -353,7 +440,7 @@ export function Library({ q = '', type = 'all', sort = 'time' }: Partial<Library
         </p>
       </header>
 
-      <div className="lib-tools" role="search">
+      <div className="lib-tools" role="search" ref={toolsRef}>
         <div className="lib-search">
           <label htmlFor={searchId} className="visually-hidden">
             Search the library
@@ -412,11 +499,26 @@ export function Library({ q = '', type = 'all', sort = 'time' }: Partial<Library
       ) : null}
 
       {lib.status === 'ready' && shown.length > 0 ? (
-        <ul className="lib-grid" data-library-grid aria-label="Captures">
-          {shown.map((e, i) => (
-            <LibraryCardItem key={e.urlHash} entry={e} lib={lib} rank={order === 'time' ? i + 1 : undefined} observe={observe} />
-          ))}
-        </ul>
+        <>
+          <ul
+            ref={gridRef}
+            className="lib-grid"
+            data-library-grid
+            tabIndex={-1}
+            aria-label={slice.pages > 1 ? `Captures, page ${slice.page} of ${slice.pages}` : 'Captures'}
+          >
+            {slice.items.map((e, i) => (
+              <LibraryCardItem
+                key={e.urlHash}
+                entry={e}
+                lib={lib}
+                rank={order === 'time' ? (slice.page - 1) * PAGE_SIZE + i + 1 : undefined}
+                observe={observe}
+              />
+            ))}
+          </ul>
+          <Pagination page={slice.page} pages={slice.pages} onChange={turnTo} label="Library pages" />
+        </>
       ) : null}
 
       {showFoot ? (
@@ -428,7 +530,7 @@ export function Library({ q = '', type = 'all', sort = 'time' }: Partial<Library
             </div>
           ) : null}
           {shownFailed.length > 0 && showUnverified ? (
-            <section className="lib-unverified" aria-labelledby={unverifiedTitleId}>
+            <section className="lib-unverified" aria-labelledby={unverifiedTitleId} ref={failedRef}>
               <h2 className="section-title" id={unverifiedTitleId}>
                 Unverified
               </h2>
@@ -436,11 +538,12 @@ export function Library({ q = '', type = 'all', sort = 'time' }: Partial<Library
                 These captures didn't pass their checks in this browser: the evidence is missing or doesn't match, or a witness you
                 don't trust signed it. Open one to see why.
               </p>
-              <ul className="lib-grid" aria-label="Unverified captures">
-                {shownFailed.map((e) => (
+              <ul className="lib-grid" tabIndex={-1} aria-label="Unverified captures">
+                {failedSlice.items.map((e) => (
                   <LibraryCardItem key={e.urlHash} entry={e} lib={lib} observe={observe} />
                 ))}
               </ul>
+              <Pagination page={failedSlice.page} pages={failedSlice.pages} onChange={turnFailedTo} label="Unverified pages" />
             </section>
           ) : null}
         </div>
