@@ -1,225 +1,199 @@
 # Recall
 
-**Proof of what a public web page or GitHub repo said, and a copy of it that can't be taken down.**
+**Preserve what the web served. Verify it for yourself.**
 
-Recall captures a public HTTPS page or GitHub repository through a TLSNotary witness, stores the
-signed evidence (and the code) on **Swarm**, and indexes it on **Arkiv**. Anyone can check a capture
-in their own browser, even offline, without trusting the person who made it or us.
+Recall is an open-source archive for public HTTPS responses and GitHub repository snapshots. A TLSNotary witness attests to the captured HTTPS exchange and signs a statement about it. Swarm stores the evidence and repository snapshots, while Arkiv indexes the records. Readers can retrieve the evidence and verify it in a browser against a witness they trust.
 
-Built from scratch at **ETHGlobal Mumbai 2026**.
+Built at **ETHGlobal Mumbai 2026** · **Ethereum Foundation – Best CROPS App: Censorship Resistant, Open Source, Private, Secure, 2nd place** · Arkiv Build on Arkiv (from scratch) · Arkiv + Swarm bonus
 
-| | |
-|---|---|
-| **Demo video (3 min)** | <https://drive.google.com/file/d/1ZxGArPliJmzQaDDs9xogtd27HKMYTKiz/view> |
-| **Web app** | <https://localhostwastaken.github.io/Recall/app/> |
-| **Web app on Swarm** | <https://recallapp.eth.limo> · <https://recallapp.bzz.link> |
-| **Extension** | `recall-extension.zip` in the [v0.1.0-mumbai release](https://github.com/localhostwastaken/Recall/releases/tag/v0.1.0-mumbai) |
-| **Prize tracks** | EF **Best CROPS App** · Arkiv **Build on Arkiv (from scratch)** · **Arkiv + Swarm bonus** |
+[Open the app](https://localhostwastaken.github.io/Recall/app/) · [Watch the demo](https://drive.google.com/file/d/1ZxGArPliJmzQaDDs9xogtd27HKMYTKiz/view) · [Source code](https://github.com/localhostwastaken/Recall) · [Extension release](https://github.com/localhostwastaken/Recall/releases/tag/v0.1.0-mumbai) · [ETHGlobal showcase](https://ethglobal.com/showcase/recall-7r8ye)
 
----
+Also hosted on Swarm: [eth.limo](https://recallapp.eth.limo) · [bzz.link](https://recallapp.bzz.link). Built with [TLSNotary](https://tlsnotary.org), [Swarm](https://www.ethswarm.org), [Arkiv](https://arkiv.network), and [MetaMask](https://metamask.io).
 
-## Why
+## Recognition and awards
 
-In July 2026 the Indian government ordered GitHub to block the
-[bitchat](https://github.com/permissionlesstech/bitchat) repositories within three hours. bitchat is an
-open-source messaging app that works over Bluetooth, with no internet. The stated reason: people could
-use it during internet shutdowns, and it is hard to intercept. That is censorship: a tool blocked
-because it keeps people connected when the state cuts them off.
+At [ETHGlobal Mumbai 2026](https://ethglobal.com/showcase/recall-7r8ye), Recall received:
 
-Once code or a page is blocked, people can't get it, and nobody can prove what it was. Screenshots can
-be faked, and archives ask you to trust them. Recall fixes both: it keeps **verifiable proof** of
-exactly what was served, and keeps the **content itself** reachable on Swarm.
-Sources: [CyberInsider](https://cyberinsider.com/github-ordered-to-remove-decentralized-messaging-app-bitchat-in-india/),
-[The Cyber Sec Guru](https://thecybersecguru.com/news/india-github-bitchat-repository-takedown/).
+- **Ethereum Foundation:** Best CROPS App: Censorship Resistant, Open Source, Private, Secure — 2nd place.
+- **Arkiv:** Build on Arkiv (from scratch).
+- **Arkiv + Swarm:** bonus.
 
-## Try it in one minute (no install, no wallet)
+## Product preview
 
-Our live capture of the bitchat repository:
+Try the [public library](https://localhostwastaken.github.io/Recall/app/#/library) or open the [bitchat capture](https://localhostwastaken.github.io/Recall/app/#/c/0xf1abb5b79f48ed9fcb54c1981ac9e81f87e26b09f93f65516ad8609e5cce5caf) to inspect its checks. These examples depend on the availability of their testnet records and stored evidence. The [demo video](https://drive.google.com/file/d/1ZxGArPliJmzQaDDs9xogtd27HKMYTKiz/view) shows the workflow.
 
-- **In the app** (checks run in your browser):
-  <https://localhostwastaken.github.io/Recall/app/#/c/0xf1abb5b79f48ed9fcb54c1981ac9e81f87e26b09f93f65516ad8609e5cce5caf>
-- **The same record in Arkiv's own explorer:**
-  <https://rabdi.explorer.arkiv.network/entity/0xf1abb5b79f48ed9fcb54c1981ac9e81f87e26b09f93f65516ad8609e5cce5caf>
-- **The evidence file from Swarm's public gateway** (drop it on the app's home page; it verifies offline):
-  <https://download.gateway.ethswarm.org/bytes/2bdf1df434d449aa4c35bf84709467dab0c1057a229564e5bb2b6cf2b67f0fcc>
-- **The public library** of every capture, ranked by time kept alive:
-  <https://localhostwastaken.github.io/Recall/app/#/library>
+## The problem
 
-## How it works
+Public information and open-source code can become inaccessible through takedowns, censorship, or changes to the original service. In July 2026, Indian authorities directed GitHub to disable access to repositories associated with [bitchat](https://github.com/permissionlesstech/bitchat), a Bluetooth mesh messaging application. Reports describe a three-hour deadline and cite the authorities' concerns about interception and communication during internet shutdowns ([CyberInsider](https://cyberinsider.com/github-ordered-to-remove-decentralized-messaging-app-bitchat-in-india/), [The Cyber Sec Guru](https://thecybersecguru.com/news/india-github-bitchat-repository-takedown/)).
 
-1. **Capture.** The Recall browser extension fetches the page over TLS together with a **witness**
-   (TLSNotary MPC-TLS). The witness signs (EIP-712) hashes of exactly what the server sent. Requests
-   carry no cookies or login. For a GitHub repo, Recall also downloads the code and checks its git tree
-   hash against the commit GitHub reported.
-2. **Store.** The signed evidence file and the code go to **Swarm**, stamped in your browser with a
-   postage batch you bought.
-3. **Index.** A small read-only record (page, body hash, witness, time, Swarm reference) goes to
-   **Arkiv**, written from your own MetaMask. Buy storage once, then each capture is one confirmation.
-4. **Verify.** The web app finds every capture of a URL on Arkiv, downloads the evidence from any Swarm
-   gateway, recomputes the Swarm hash and re-runs every check itself:
-   **A** bytes match the signed hashes, **B** request and response are well-formed,
-   **C** signed by a witness you trust. Versions show as a timeline with a diff.
-5. **Keep alive.** Anyone, not only the capturer, can pay to extend a capture's Swarm storage and
-   Arkiv record.
+A screenshot or ordinary archive can preserve a copy, but a reader must decide whether to trust its creator or operator about what the server returned. Recall pairs a stored copy with a witness-signed account of the HTTPS exchange. This helps readers check the evidence against a witness they trust; it does not establish that the server's content was truthful or guarantee that a copy remains available.
+
+## How Recall works
+
+1. **Capture:** The extension requests a supported public HTTPS response through a TLSNotary MPC-TLS session with a witness. For a GitHub repository, it captures GitHub's branch response and downloads a snapshot of the indicated commit.
+2. **Attest:** The witness verifies the session and signs an EIP-712 statement about the revealed transcript. The evidence file contains the statement, signature, and transcript.
+3. **Store:** Evidence and any repository snapshot are uploaded to Swarm, using a postage batch or the free gateway option.
+4. **Index:** The user approves an Arkiv record through MetaMask. The record points to the evidence and includes searchable capture metadata.
+5. **Retrieve and verify:** A reader finds a record on Arkiv, retrieves evidence from Swarm, and checks it in the browser. A downloaded evidence file can be verified offline after loading the verification client and its required dependencies. Verification checks the transcript against the witness-signed statement; it does not independently recreate or verify the original TLS session.
+6. **Keep alive:** Anyone can pay to extend an eligible postage batch and Arkiv record. Free gateway storage cannot be extended this way.
+
+## Architecture
 
 ```mermaid
 flowchart LR
-  EXT["Recall extension"] <-->|MPC-TLS| SITE["Public HTTPS page"]
-  EXT <-->|signed statement| W["Witness"]
-  EXT -->|evidence + code| SW[("Swarm")]
-  EXT --> APP["Recall web app"]
-  APP -->|MetaMask: read-only record| AR[("Arkiv Rabdi")]
-  APP -->|MetaMask: postage batch| GN[("Gnosis")]
-  READER["Anyone: app, CLI or offline file"] --> AR
-  READER --> SW
+  subgraph CAP["1. Capture and attestation"]
+    EXT["Browser extension"]
+    W["TLSNotary witness"]
+    SRC["Public HTTPS source / GitHub"]
+    EXT <-->|"MPC-TLS session"| W
+    EXT <-->|"HTTPS via witness relay"| SRC
+    W -->|"EIP-712 statement"| EXT
+  end
+  subgraph STORE["2. Persistence"]
+    SW[("Swarm")]
+    AR[("Arkiv Rabdi")]
+    GN[("Gnosis")]
+    MM["MetaMask"]
+    MM -.->|"Create or extend records"| AR
+    MM -.->|"Buy or extend postage"| GN
+  end
+  subgraph CHECK["3. Independent verification"]
+    APP["Recall web app"]
+    R["Independent reader"]
+    R --> APP
+  end
+  EXT -->|"Evidence and snapshot"| SW
+  EXT -->|"Publish handoff"| APP
+  APP -.->|"Transaction approval"| MM
+  APP -->|"Query records"| AR
+  APP -->|"Retrieve evidence and snapshots"| SW
+  APP -->|"Local checks"| R
 ```
 
-## Prize eligibility
+Solid arrows show data or verification flow; dotted arrows show wallet approvals and transactions.
 
-### EF: Best CROPS App
+**Trust model:** A reader can check saved evidence without the capturer or Recall's hosted app, using a trusted verification client and its loaded dependencies. The reader must trust the chosen witness to have checked the TLSNotary session and protected its signing key: the browser checks the signed statement and transcript, not the original session. Online discovery and retrieval depend on Arkiv and Swarm; RPCs and gateways can withhold data. For stamped uploads, content addressing checks the Swarm reference; signature checks and comparisons with the record provide additional integrity checks, subject to the cryptographic and software assumptions.
 
-| Requirement | Where |
-|---|---|
-| Public repo, free and open-source licence | MIT, [LICENSE](LICENSE) |
-| README a judge can run it from | [Run it](#run-it) |
-| A section titled CROPS, one or two lines per letter | [CROPS](#crops) |
-| Demo video, 3 minutes max, lead property end to end | [Demo video](https://drive.google.com/file/d/1ZxGArPliJmzQaDDs9xogtd27HKMYTKiz/view) |
-| No third-party trackers or analytics in the client | None: no analytics, no trackers |
-| Keys and personal data stay on the user's device | MetaMask and the extension's stamp key stay local; see [CROPS](#crops) |
+## Technical implementation
 
-### Arkiv: Build on Arkiv (from scratch)
+### TLSNotary capture and witness verification
 
-| Requirement | Where |
-|---|---|
-| Built from scratch at ETHGlobal Mumbai | Yes (vendored TLSNotary code is noted under [Credits](#licence-and-credits)) |
-| Writes to Arkiv's current testnet with `@arkiv-network/sdk`, and a feature users see reads it | Writes: [`packages/net/src/arkiv.ts`](packages/net/src/arkiv.ts). Reads: the library, timeline and capture pages |
-| Writer wallet address(es) and one query we can run | [Writer wallets](#writer-wallets) |
-| `arkiv/schema.md` and `arkiv/friction.md` | [schema](arkiv/schema.md), [friction](arkiv/friction.md) |
-| One file per judging criterion | [reach](arkiv/reach.md), [why Arkiv](arkiv/why-arkiv.md), [how we use Arkiv](arkiv/how-you-use-arkiv.md) |
-| Open-source licence, and how we used AI | [LICENSE](LICENSE), [AI use](#ai-use) |
+The extension and witness use TLSNotary MPC-TLS. The witness requires a proven server identity and a fully revealed transcript, rejects proxy mode and partial reveals, and applies HTTP and request-header gates before signing. Captures use a public GET without cookies or authorization. See [witness configuration and gates](witness/README.md) and [capture code](extension/packages/extension/src/recall/capture.ts).
 
-### Arkiv + Swarm bonus
+### Cryptographic evidence and integrity checks
 
-Everything the bonus asks for is in [arkiv/swarm.md](arkiv/swarm.md): what lives on Swarm and on Arkiv,
-the entity field holding the Swarm reference (`evidenceRef`), an entity key with its Swarm reference,
-the postage batch and the wallet that bought it, the upload and read code, and steps to run one upload
-and one read. In the demo video, Swarm is used at the publish step (evidence and code uploaded) and when
-the record is checked.
+The witness signs a typed EIP-712 `Capture` statement containing transcript lengths and SHA-256 hashes. The reader checks **A**: transcript lengths and hashes; **B**: request, response, server name, and framing; **C**: signature and the reader's pinned witness; and optionally **D**: a local file's hash against the captured response body. An unknown but valid signer produces a warning. See [checks](packages/evidence/src/checks.ts) and [statement](packages/evidence/src/statement.ts).
+
+### GitHub repository integrity verification
+
+For a repository, Recall witnesses GitHub's branch API response, which identifies a commit and root tree. It downloads the commit archive and recomputes its Git tree ID from the files, modes, and paths, comparing it with the witnessed tree ID. This ties the snapshot to GitHub's response under Git's SHA-1 tree construction; the archive download itself is not the witnessed TLS transcript. See [Git verification](packages/evidence/src/git.ts).
+
+### Swarm storage and content addressing
+
+Evidence and repository archives are stored separately on Swarm. For stamped uploads, the client recomputes the Swarm root of downloaded content. Free gateway uploads skip that root check; evidence signatures and repository integrity checks still apply. The free option has different availability and extension properties. See [Swarm integration](packages/net/src/swarm.ts) and [storage details](arkiv/swarm.md).
+
+### Arkiv entities and indexing
+
+The shared [schema](packages/net/src/arkiv.ts) defines capture, confirmation, attachment, and witness entities. Capture records include a canonical URL hash, witness, body hash, time, batch ID, and evidence reference. Confirmations represent repeated captures with the same body. New entities are created read-only and permissionlessly extendable; their owners can still delete or transfer them. Older records may lack the read-only flag. See [schema and example records](arkiv/schema.md).
+
+### Browser-side evidence verification
+
+The static web app re-runs the evidence checks and compares verified facts with the Arkiv record, including URL hash, body hash, witness, and signing time. It can display a timeline and text diffs, compare a supplied file, and verify a repository snapshot. A mismatch or unavailable check is shown rather than silently treated as success. See [verification code](apps/web/src/verify/verify.ts).
+
+### Permissionless storage extension
+
+Keep alive lets a reader pay to extend a qualifying Swarm postage batch on Gnosis and an Arkiv entity. The batch ID in a record is not cryptographically bound to its evidence; the client checks that the batch exists and has Recall's expected shape. Extending either service is subject to its own transaction and limits. See [keep-alive flow](apps/web/src/keepalive/flow.ts).
 
 ## CROPS
 
-Recall's lead property is **censorship resistance**: once a page or repo is captured, nothing we run is
-needed to find it, fetch it or check it.
+- **C: censorship resistance.** Existing evidence can be retrieved and checked without Recall's witness or hosted app while the relevant data and a reader remain available. Anyone can run a witness for new captures; storage and records still expire without funding.
+- **O: open source.** The extension, witness, app, packages, and local devnet are in this repository under the licences described below.
+- **P: privacy.** The client has no analytics or trackers and capture requests omit cookies and login credentials. The witness sees the captured page and your IP; Arkiv RPCs, Swarm gateways, and Gnosis RPCs can see your IP and requests. Records are public and identify the writing wallet; use a fresh wallet if that matters. This is not anonymity.
+- **S: security.** MetaMask keys and the extension's stamp key remain on the user's device. Readers check content and signatures locally, but must choose which witness keys to trust. TLSNotary alpha.15 and Recall's signing patch are unaudited.
 
-- **C: censorship resistant.** We run the witness (needed only for new captures; anyone can run their
-  own from [`witness/`](witness/), and readers choose which witness keys to trust) and the GitHub Pages
-  copy of the app. If either disappears, existing captures still load and verify from Arkiv, Swarm, the
-  copy of the app hosted on Swarm, or a downloaded evidence file, for as long as their storage is paid.
-- **O: open source.** MIT. The extension, witness, web app, scripts and a full local devnet all build
-  and run from this repo alone.
-- **P: private.** No analytics or trackers. Captures send no cookies or login. The witness sees the
-  captured page and your IP; the Arkiv RPC, Swarm gateways and Gnosis RPC see your IP and what you
-  request. A record is public and names the wallet that wrote it, so use a fresh wallet if that matters.
-- **S: secure.** Keys stay on your device (MetaMask, and the extension's stamp key). Gateways and RPCs
-  can withhold data but not forge it: every view recomputes the Swarm hash and re-runs the checks in
-  the browser. Trust assumptions: the witness you pin; TLSNotary alpha.15 is unaudited.
+## Try a live capture
 
-## Writer wallets
+| Requirement | Purpose |
+| --- | --- |
+| MetaMask | Approve transactions |
+| tGLM on Arkiv Rabdi | Pay to publish Arkiv records ([faucet](https://hub.arkiv.network/faucet)) |
+| xBZZ on Gnosis | Buy paid Swarm postage |
+| xDAI on Gnosis | Pay Gnosis transaction fees for paid postage |
 
-All entities were written on **Arkiv Rabdi** (chain ID 7794095):
+1. Download `recall-extension.zip` from the [release](https://github.com/localhostwastaken/Recall/releases/tag/v0.1.0-mumbai), unzip it, and use **Load unpacked** in `chrome://extensions` with Developer mode enabled. The release extension ID is `mgpclfpdgpinofgpgfeodcbmlfaglmnp`.
+2. Open the [web app](https://localhostwastaken.github.io/Recall/app/). For paid storage, buy a batch under **Storage**; alternatively, choose the free gateway option when publishing.
+3. Open a supported public page or GitHub repository and select the appropriate capture action in the extension.
+4. In the publish tab, choose storage, select **Upload and publish**, and confirm the Arkiv transaction in MetaMask. The free storage option uses a gateway and cannot be extended.
 
-| Wallet | Role | Writes |
-|---|---|---|
-| `0xd46480d1Ec02B8ce92aE383914026efD5F73f835` | Our capturer wallet in live runs (MetaMask) | `recall.v1.capture` and `recall.v1.attachment` records |
-| `0xC9319e18e86cd7EB653c0Ed0693c0cf5B63db37D` | The Recall witness | `recall.v1.witness` profile; also signs every capture (EIP-712) |
-
-In the product, anyone who captures writes records from their own wallet. Records are created
-**read-only** and **permissionlessly extendable**.
-
-**Query the bitchat capture** (public endpoint, no key needed):
-
-```bash
-curl -s https://rpc.rabdi.db-chain.testnet.arkiv.network -H 'content-type: application/json' --data '{"jsonrpc":"2.0","id":1,"method":"arkiv_query","params":["arkiv.schema = str('"'"'recall.v1.capture'"'"') AND urlHash = key(0x4859353fd58b4c32f71b336b8a28b80a4b4375500f0e45dc4444aab70881b0af)",{"select":{"key":true,"owner":true,"creator":true,"expiresAt":true,"creationFlags":true,"attributes":{"evidenceRef":true,"batchId":true,"signedAt":true}},"limit":"0x5"}]}'
-```
-
-It returns entity `0xf1abb5b7…5cae` with `"readonly":true` and its Swarm `evidenceRef`.
-
-**Or query and verify with our CLI:** `pnpm install && pnpm arkiv:query` lists a page's captures from
-Arkiv, downloads each evidence file from Swarm and re-runs checks A to C.
+On Brave, select **Extensions (no fallback)** as the default Ethereum wallet in `brave://settings/web3`. Fees and network availability can change.
 
 ## Run it
 
-**Needs:** Node 22, pnpm 10 (`corepack enable`), Docker, Chrome or Chromium. For live captures:
-MetaMask, a little tGLM on Arkiv Rabdi ([faucet](https://hub.arkiv.network/faucet)), and xBZZ plus a
-little xDAI on Gnosis.
+### Getting started: local development
 
-**Use the live extension**
-
-1. Download `recall-extension.zip` from the
-   [release](https://github.com/localhostwastaken/Recall/releases/tag/v0.1.0-mumbai), unzip it, open
-   `chrome://extensions`, turn on Developer mode, click **Load unpacked** and pick the folder. Nothing
-   to configure: the release always has the ID `mgpclfpdgpinofgpgfeodcbmlfaglmnp`.
-2. In the [web app](https://localhostwastaken.github.io/Recall/app/), open **Storage** and buy one or
-   more batches (about 0.32 xBZZ each for 7 days).
-3. Open a public page or GitHub repo, click the Recall icon, then **Capture this page** (or
-   **Capture this repository**).
-4. In the tab that opens, click **Upload and publish** and confirm once in MetaMask.
-
-No xBZZ? Pick **Use free storage instead** on the publish page (the Swarm gateway stores it, but nobody
-can extend it). On Brave, set `brave://settings/web3` > Default Ethereum wallet to "Extensions (no
-fallback)".
-
-**Run everything locally**
+**Prerequisites:** Node.js 22, pnpm 10 (the repository pins 10.20.0; enable Corepack), Docker with Compose, Bash and standard Unix tools, and Chrome or Chromium for extension tests. The devnet's first start builds images and can take several minutes; it uses local ports including 443. See [devnet/README.md](devnet/README.md) for services and requirements.
 
 ```bash
+corepack enable
 pnpm install
-pnpm devnet:up         # local Arkiv node, Gnosis fork, 3 Bee nodes, a test site and a witness
-pnpm test              # unit tests
-pnpm test:e2e          # Playwright: extension + app end to end (mock MetaMask)
-pnpm --filter web dev  # the web app against the devnet
+pnpm devnet:up
+pnpm test
+pnpm test:e2e
+pnpm --filter web dev
+```
+
+Run the web server in a separate terminal as needed; it defaults to the local devnet. The local end-to-end suite uses Playwright and a mock wallet. Stop the devnet when finished:
+
+```bash
 pnpm devnet:down
 ```
 
-More: [devnet/README.md](devnet/README.md). Run your own witness: [witness/README.md](witness/README.md).
+The devnet includes an Arkiv node, Gnosis fork, three Bee nodes, HTTPS fixture, and witness with a public test key. Do not use that key for live captures. For network selection and endpoints, see [web defaults](apps/web/src/defaults.ts) and [devnet documentation](devnet/README.md).
+
+**Environment:** Local devnet defaults do not require live credentials. For live scripts, [.env.example](.env.example) lists the optional or required values; use a gitignored `.env.local` as documented by the relevant script. `WITNESS_PRIVATE_KEY` is required to run your own witness. An Arkiv access key is optional for the public, rate-limited query endpoint. Never publish private keys.
+
+**Independent witness:** With Rust installed, provide a 32-byte `WITNESS_PRIVATE_KEY` in the environment and run from `witness/`:
+
+```bash
+cargo run --release
+```
+
+The server defaults to port 7047. Configure a reachable endpoint and witness trust as appropriate; see [witness/README.md](witness/README.md) for configuration, deployment, and security gates.
 
 ## Project structure
 
-| Path | What it is |
-|---|---|
-| `extension/` | Fork of [tlsn-extension](https://github.com/tlsnotary/tlsn-extension): capture popup, stamp key, Swarm upload |
-| `witness/` | TLSNotary verifier server plus Recall's checks and EIP-712 signing |
-| `packages/evidence/` | Evidence format, transcript parsing and checks A to D |
-| `packages/net/` | Arkiv entities and queries, Swarm stamping and download, Gnosis postage batches |
-| `apps/web/` | The web app: library, verify, publish, storage, keep-alive. Static, no backend |
-| `arkiv/` | Arkiv and Swarm prize docs |
-| `docs/` | Design, plan and the log of every live value we measured |
+| Path | Responsibility |
+| --- | --- |
+| [extension/](extension/) | TLSNotary extension fork, capture workflow, local stamp key, and uploads |
+| [witness/](witness/) | TLSNotary verifier, capture gates, and EIP-712 signing |
+| [packages/evidence/](packages/evidence/) | Evidence format, HTTP parsing, cryptographic checks, and Git tree verification |
+| [packages/net/](packages/net/) | Arkiv schemas and queries, Swarm access, and postage batches |
+| [apps/web/](apps/web/) | Static reader, library, publication, storage, and keep-alive UI |
+| [devnet/](devnet/) and [e2e/](e2e/) | Local services and browser tests |
+| [arkiv/](arkiv/) and [docs/](docs/) | Integration details, design, plans, and live evidence log |
 
 ## Limitations
 
-- **One witness by default.** New captures need a witness (ours, or one you run). Verification never does.
-- **Unaudited.** TLSNotary `v0.1.0-alpha.15` and our signing patch have not been audited.
-- **TLS 1.2 only, about 64 KB per page, static HTML only.** Pages built by JavaScript capture nearly empty.
-- **Repos:** archives over 25 MB, submodules and `.gitattributes` export rules are refused.
-- **About 77 MB of upload per capture** for the MPC setup; slow connections time out.
-- **Testnet.** The Arkiv index is on Rabdi, a testnet. Swarm and Gnosis are mainnet.
-- **Storage lasts while someone pays.** Batches and records expire unless someone uses Keep alive.
-- **A record's batch ID is not cryptographically bound to its evidence.** Keep alive checks the batch
-  exists and has Recall's shape, and the library prefers the record written first.
-- **Read-only, not undeletable.** Nobody can change a record, but its owner can still delete it.
-- **Developer-mode install.** The extension is not in the Chrome Web Store yet.
-- Not legal-grade proof. Public pages only (no logins, no cookies).
+- **Witness and audit:** New captures require a witness; the default is operated by the team. Readers choose trusted witness keys. TLSNotary `v0.1.0-alpha.15` and Recall's signing patch are unaudited. Verification of a saved file does not contact the witness.
+- **Capture scope:** TLS 1.2 only; roughly 64 KB received per page; static response content only. JavaScript-rendered pages may capture nearly empty HTML. Only public requests without login or cookies are supported.
+- **Repositories:** Archives over 25 MB, submodules, and `.gitattributes` export rules are refused. A snapshot is not a complete Git history.
+- **Bandwidth:** MPC setup uploads about 77 MB per capture; slow connections can time out.
+- **Availability:** Swarm batches and Arkiv records expire unless extended. Free gateway uploads cannot be kept alive through Recall. Owners can delete their records; older records may be mutable.
+- **Batch binding:** The record's batch ID is not cryptographically bound to its evidence. Keep alive checks batch existence and shape; the library prefers the record written first.
+- **Networks:** Arkiv Rabdi is a testnet; live Swarm and Gnosis use mainnet. Endpoints and records may become unavailable.
+- **Installation:** The extension requires a developer-mode unpacked installation; it is not in the Chrome Web Store.
+- **Evidence scope:** This is not legal-grade proof. A signed response establishes what a trusted witness attests the server returned, not whether the content was true or complete beyond the captured response.
 
-## AI use
+## Network details and example records
 
-We used AI coding assistants to help write code and tests. All product and design decisions were the
-team's, and are recorded in the spec and plan in [docs/superpowers/](docs/superpowers/).
+The documented live writers on Arkiv Rabdi (chain ID 7794095) are capturer `0xd46480d1Ec02B8ce92aE383914026efD5F73f835` and witness `0xC9319e18e86cd7EB653c0Ed0693c0cf5B63db37D`. Users publish from their own wallets. After `pnpm install`, run `pnpm arkiv:query` to query the configured example and verify retrieved evidence; the endpoint and records must still be available. The [example capture in Arkiv's explorer](https://rabdi.explorer.arkiv.network/entity/0xf1abb5b79f48ed9fcb54c1981ac9e81f87e26b09f93f65516ad8609e5cce5caf) and its [Swarm evidence file](https://download.gateway.ethswarm.org/bytes/2bdf1df434d449aa4c35bf84709467dab0c1057a229564e5bb2b6cf2b67f0fcc) are also available when their backing services retain them.
+
+Integration and judging details: [Arkiv reach](arkiv/reach.md), [why Arkiv](arkiv/why-arkiv.md), [how Recall uses Arkiv](arkiv/how-you-use-arkiv.md), [schema](arkiv/schema.md), [friction](arkiv/friction.md), and [Swarm bonus](arkiv/swarm.md).
 
 ## Licence and credits
 
-MIT, see [LICENSE](LICENSE).
+Recall is MIT licensed; see [LICENSE](LICENSE). It builds on [TLSNotary](https://tlsnotary.org): the extension forks [tlsn-extension](https://github.com/tlsnotary/tlsn-extension), and the witness is based on its verifier server. Upstream MIT / Apache-2.0 notices and Recall's changes are documented in [extension/NOTICE](extension/NOTICE) and [witness/NOTICE](witness/NOTICE). Storage uses [Swarm](https://www.ethswarm.org), and indexing uses [Arkiv](https://arkiv.network).
 
-Recall builds on [TLSNotary](https://tlsnotary.org): the extension is a fork of
-[tlsn-extension](https://github.com/tlsnotary/tlsn-extension) and the witness is its verifier server,
-both MIT / Apache-2.0. Their notices and our changes are in [extension/NOTICE](extension/NOTICE) and
-[witness/NOTICE](witness/NOTICE). Storage on [Swarm](https://www.ethswarm.org), index on
-[Arkiv](https://arkiv.network).
+## AI use
+
+AI coding assistants helped write code and tests. Product and design decisions were the team's and are recorded in the specifications and plans in [docs/superpowers/](docs/superpowers/).
