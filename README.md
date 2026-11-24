@@ -197,3 +197,5 @@ Recall is MIT licensed; see [LICENSE](LICENSE). It builds on [TLSNotary](https:/
 ## AI use
 
 AI coding assistants helped write code and tests. Product and design decisions were the team's and are recorded in the specifications and plans in [docs/superpowers/](docs/superpowers/).
+
+D7XVU8
